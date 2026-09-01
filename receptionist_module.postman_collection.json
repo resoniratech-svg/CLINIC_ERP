@@ -1,0 +1,376 @@
+{
+  "info": {
+    "_postman_id": "c1f2e3d4-5678-90ab-cdef-1234567890ab",
+    "name": "Receptionist Module — Hospital ERP API",
+    "description": "Complete Postman collection for the Receptionist Module including authentication, dashboard, patient search, registration, enquiries, referrals, doctor assignment, appointments, consultation billing, check-in, renewals, due payments, CRM calls, and callback tasks.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Auth",
+      "item": [
+        {
+          "name": "Receptionist Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.success && jsonData.data.token) {",
+                  "    pm.collectionVariables.set('token', jsonData.data.token);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"rita_rec\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Dashboard",
+      "item": [
+        {
+          "name": "Get Receptionist Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "dashboard"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Patient Search & Overview",
+      "item": [
+        {
+          "name": "Search Patient by Mobile",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/patients/search?mobile=9876543210",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "patients", "search"],
+              "query": [
+                { "key": "mobile", "value": "9876543210" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Patient Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/patients/1/overview",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "patients", "1", "overview"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Registration & Enquiries",
+      "item": [
+        {
+          "name": "Register Walk-in Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Ramesh Kumar\",\n  \"mobile_number\": \"9876543210\",\n  \"age\": 35,\n  \"gender\": \"male\",\n  \"village_mandal\": \"Kukatpally\",\n  \"address\": \"Flat 201, HMT Hills\",\n  \"ailment_reason\": \"Severe Fever & Cough\",\n  \"assigned_doctor_id\": 1,\n  \"appointment_date\": \"2026-09-01\",\n  \"appointment_time\": \"10:30\",\n  \"appointment_type\": \"new\",\n  \"discount_amount\": 50,\n  \"payment_method\": \"cash\",\n  \"payment_amount\": 450\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/patients/register",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "patients", "register"]
+            }
+          }
+        },
+        {
+          "name": "Create Enquiry",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Suresh Patel\",\n  \"mobile\": \"9123456789\",\n  \"reason_requirement\": \"Enquiry for Cardiology Consultation Fee\",\n  \"remarks\": \"Inquired on behalf of father\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/enquiries",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "enquiries"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Referrals",
+      "item": [
+        {
+          "name": "Create Employee Referral",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_name\": \"Anil Verma\",\n  \"mobile_number\": \"9988776655\",\n  \"age\": 42,\n  \"gender\": \"male\",\n  \"village_mandal\": \"Ameerpet\",\n  \"reason\": \"General Health Checkup\",\n  \"referring_employee_id\": 1,\n  \"remarks\": \"Employee relative discount applied\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/referrals/employee",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "referrals", "employee"]
+            }
+          }
+        },
+        {
+          "name": "Create Patient Referral",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_name\": \"Kavita Rao\",\n  \"mobile_number\": \"9871122334\",\n  \"age\": 31,\n  \"gender\": \"female\",\n  \"village_mandal\": \"Madhapur\",\n  \"reason\": \"Dental Checkup\",\n  \"referring_patient_id\": 1,\n  \"remarks\": \"Referred by existing patient Ramesh\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/referrals/patient",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "referrals", "patient"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Doctor Assignment & Appointments",
+      "item": [
+        {
+          "name": "Get Active Doctors",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/doctors/active",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "doctors", "active"]
+            }
+          }
+        },
+        {
+          "name": "Create Appointment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"doctor_id\": 1,\n  \"appointment_date\": \"2026-09-02\",\n  \"appointment_time\": \"11:00\",\n  \"appointment_type\": \"new\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/appointments",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "appointments"]
+            }
+          }
+        },
+        {
+          "name": "Check-in Patient",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"checked-in\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/appointments/1/checkin",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "appointments", "1", "checkin"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Billing & Renewals",
+      "item": [
+        {
+          "name": "Create Consultation Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"appointment_id\": 1,\n  \"bill_type\": \"consultation\",\n  \"discount_amount\": 0,\n  \"payment_method\": \"cash\",\n  \"payment_amount\": 500\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/billing/bills",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "billing", "bills"]
+            }
+          }
+        },
+        {
+          "name": "Renew Registration",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"doctor_id\": 1,\n  \"appointment_date\": \"2026-09-01\",\n  \"appointment_time\": \"14:00\",\n  \"payment_method\": \"cash\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/renewals",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "renewals"]
+            }
+          }
+        },
+        {
+          "name": "Collect Due Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"payment_amount\": 200,\n  \"payment_method\": \"cash\",\n  \"remarks\": \"Cleared partial due\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/due-patients/1/collect",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "due-patients", "1", "collect"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. CRM & My Tasks",
+      "item": [
+        {
+          "name": "Log CRM Call Record",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"interaction_type\": \"outbound\",\n  \"call_purpose\": \"Followup confirmation\",\n  \"call_status\": \"callback_requested\",\n  \"callback_date\": \"2026-09-03\",\n  \"callback_time\": \"15:00\",\n  \"remarks\": \"Patient asked to call back\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/crm/calls",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "crm", "calls"]
+            }
+          }
+        },
+        {
+          "name": "Get My Tasks",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/my-tasks",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "my-tasks"]
+            }
+          }
+        },
+        {
+          "name": "Complete Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"remarks\": \"Callback completed successfully\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/receptionist/my-tasks/1/complete",
+              "host": ["{{baseUrl}}"],
+              "path": ["receptionist", "my-tasks", "1", "complete"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

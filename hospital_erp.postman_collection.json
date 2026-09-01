@@ -1,0 +1,335 @@
+{
+  "info": {
+    "_postman_id": "c1f2e3d4-5678-90ab-cdef-1234567890ab",
+    "name": "Hospital ERP - Super Admin Module",
+    "description": "Complete Postman collection for Hospital ERP Super Admin Backend",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login Super Admin",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"SuperAdmin@123\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/auth/logout", "host": ["{{base_url}}"], "path": ["auth", "logout"] }
+          }
+        },
+        {
+          "name": "Forgot Password Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username_or_employee_id\": \"rita_rec\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/forgot-password", "host": ["{{base_url}}"], "path": ["auth", "forgot-password"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Get Dashboard Overview",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/dashboard", "host": ["{{base_url}}"], "path": ["dashboard"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "User Management",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] }
+          }
+        },
+        {
+          "name": "Create Doctor User",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": \"DOC101\",\n  \"full_name\": \"Dr. Suresh Kumar\",\n  \"mobile_number\": \"9876500001\",\n  \"email\": \"suresh@hospital.com\",\n  \"gender\": \"male\",\n  \"username\": \"dr_suresh\",\n  \"password\": \"DoctorPass@123\",\n  \"department\": \"Cardiology\",\n  \"role\": \"doctor\",\n  \"doctor_details\": {\n    \"specialization\": \"Cardiologist\",\n    \"qualification\": \"MD Cardiology\",\n    \"new_consultation_fee\": 600,\n    \"renewal_consultation_fee\": 400,\n    \"followup_consultation_fee\": 250\n  }\n}"
+            },
+            "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] }
+          }
+        },
+        {
+          "name": "Update User Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"inactive\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/users/2/status", "host": ["{{base_url}}"], "path": ["users", "2", "status"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Password Reset Requests",
+      "item": [
+        {
+          "name": "List Pending Reset Requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/password-resets?status=pending", "host": ["{{base_url}}"], "path": ["password-resets"], "query": [{ "key": "status", "value": "pending" }] }
+          }
+        },
+        {
+          "name": "Approve Password Reset",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/password-resets/1/approve", "host": ["{{base_url}}"], "path": ["password-resets", "1", "approve"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Doctors & Resignation Transfer",
+      "item": [
+        {
+          "name": "List Doctors",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/doctors", "host": ["{{base_url}}"], "path": ["doctors"] }
+          }
+        },
+        {
+          "name": "Get Doctor Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/doctors/1/summary", "host": ["{{base_url}}"], "path": ["doctors", "1", "summary"] }
+          }
+        },
+        {
+          "name": "Transfer Doctor Responsibilities",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_doctor_id\": 2\n}"
+            },
+            "url": { "raw": "{{base_url}}/doctors/1/transfer", "host": ["{{base_url}}"], "path": ["doctors", "1", "transfer"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Target Management",
+      "item": [
+        {
+          "name": "Get Monthly Target Stats",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/targets?month=9&year=2026", "host": ["{{base_url}}"], "path": ["targets"], "query": [{ "key": "month", "value": "9" }, { "key": "year", "value": "2026" }] }
+          }
+        },
+        {
+          "name": "Set Monthly Target",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"month\": 9,\n  \"year\": 2026,\n  \"overall_target\": 500000,\n  \"enquiry_target\": 200000,\n  \"unit_target\": 300000,\n  \"allow_unallocated\": false\n}"
+            },
+            "url": { "raw": "{{base_url}}/targets", "host": ["{{base_url}}"], "path": ["targets"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing & Finance",
+      "item": [
+        {
+          "name": "Create Bill",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"doctor_id\": 1,\n  \"bill_type\": \"consultation\",\n  \"amount\": 500,\n  \"discount_amount\": 0\n}"
+            },
+            "url": { "raw": "{{base_url}}/billing/bills", "host": ["{{base_url}}"], "path": ["billing", "bills"] }
+          }
+        },
+        {
+          "name": "Record Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": 1,\n  \"payment_method\": \"cash\",\n  \"amount\": 500\n}"
+            },
+            "url": { "raw": "{{base_url}}/billing/payments", "host": ["{{base_url}}"], "path": ["billing", "payments"] }
+          }
+        },
+        {
+          "name": "Get Revenue Breakdown",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/billing/revenue", "host": ["{{base_url}}"], "path": ["billing", "revenue"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Cash Management",
+      "item": [
+        {
+          "name": "Get Cash Ledger",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/cash/ledger", "host": ["{{base_url}}"], "path": ["cash", "ledger"] }
+          }
+        },
+        {
+          "name": "Record Cash Expenditure",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"expense_category\": \"Utilities\",\n  \"description\": \"Electricity bill payment\",\n  \"amount\": 1500\n}"
+            },
+            "url": { "raw": "{{base_url}}/cash/expenditure", "host": ["{{base_url}}"], "path": ["cash", "expenditure"] }
+          }
+        },
+        {
+          "name": "Record Cash Deposit",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deposited_amount\": 10000,\n  \"deposit_reference\": \"DEP-BANK-1001\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/cash/deposit", "host": ["{{base_url}}"], "path": ["cash", "deposit"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Audit & Login Logs",
+      "item": [
+        {
+          "name": "Get Audit Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/logs/audit", "host": ["{{base_url}}"], "path": ["logs", "audit"] }
+          }
+        },
+        {
+          "name": "Get Login Logs",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/logs/login", "host": ["{{base_url}}"], "path": ["logs", "login"] }
+          }
+        }
+      ]
+    }
+  ]
+}
