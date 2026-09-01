@@ -1009,9 +1009,11 @@ async function renewRegistration(req, res) {
     const paidAmt = payment_amount !== undefined ? parseFloat(payment_amount) : finalFee;
     const dueAmt = Math.max(0, finalFee - paidAmt);
 
-    // Update patient registration expiry (extend 30 days)
+    // Update patient registration expiry (supports custom validity_days e.g. 45, 180 days / 6 months)
+    const { validity_days } = req.body;
+    const daysToAdd = validity_days ? parseInt(validity_days) : 30;
     const newExpiry = new Date();
-    newExpiry.setDate(newExpiry.getDate() + 30);
+    newExpiry.setDate(newExpiry.getDate() + daysToAdd);
 
     await client.query(`
       UPDATE patients SET registration_expiry = $1, updated_at = now() WHERE patient_id = $2
