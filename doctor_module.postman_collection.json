@@ -1,0 +1,385 @@
+{
+  "info": {
+    "_postman_id": "doctor-module-collection-001",
+    "name": "Doctor Module — Hospital ERP Backend",
+    "description": "Complete ready-to-import Postman Collection for the Doctor Module backend.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Doctor Login",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "var jsonData = pm.response.json();",
+              "if (jsonData.success && jsonData.data && jsonData.data.token) {",
+              "    pm.collectionVariables.set(\"token\", jsonData.data.token);",
+              "    console.log('Doctor Token Auto-Populated');",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"username\": \"dr_smith\",\n  \"password\": \"Password@123\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/auth/login",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "auth", "login"]
+        }
+      }
+    },
+    {
+      "name": "2. Doctor Dashboard",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/dashboard",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "dashboard"]
+        }
+      }
+    },
+    {
+      "name": "3. Today's Appointments",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/appointments/today",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "appointments", "today"]
+        }
+      }
+    },
+    {
+      "name": "4. Patient Queue",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/queue",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "queue"]
+        }
+      }
+    },
+    {
+      "name": "5. Search Patients",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/patients?search=Ravi",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "patients"],
+          "query": [{ "key": "search", "value": "Ravi" }]
+        }
+      }
+    },
+    {
+      "name": "6. Patient Overview",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/patients/1/overview",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "patients", "1", "overview"]
+        }
+      }
+    },
+    {
+      "name": "7. Start Consultation",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"appointment_id\": 1\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/consultations/start",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "consultations", "start"]
+        }
+      }
+    },
+    {
+      "name": "8. Search Master Diagnoses",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/diagnoses/search?q=Osteo",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "diagnoses", "search"],
+          "query": [{ "key": "q", "value": "Osteo" }]
+        }
+      }
+    },
+    {
+      "name": "9. Update Clinical Consultation Data",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"present_illness\": \"Severe knee pain since 2 weeks\",\n  \"previous_medical_history\": \"Hypertension\",\n  \"current_medications\": \"Amlodipine 5mg\",\n  \"allergy_status\": \"known\",\n  \"allergies\": [\n    { \"name\": \"Penicillin\", \"reaction\": \"Skin Rash\", \"severity\": \"Moderate\" }\n  ],\n  \"height_cm\": 170,\n  \"weight_kg\": 75,\n  \"temperature\": 98.6,\n  \"pulse_rate\": 72,\n  \"bp_systolic\": 120,\n  \"bp_diastolic\": 80,\n  \"respiratory_rate\": 18,\n  \"spo2\": 99,\n  \"chief_complaint\": \"Knee Pain\",\n  \"complaint_duration\": \"2 Weeks\",\n  \"complaint_severity\": \"Moderate\",\n  \"complaint_onset\": \"Gradual\",\n  \"primary_diagnosis_id\": 1,\n  \"primary_diagnosis_text\": \"Osteoarthritis\",\n  \"investigations\": [\n    { \"test\": \"X-Ray Knee Joint\", \"priority\": \"Routine\", \"reason\": \"Evaluate joint condition\" }\n  ],\n  \"followup_recommended\": true,\n  \"followup_recommended_date\": \"2026-09-16\",\n  \"followup_instructions\": \"Review after 15 days treatment course\",\n  \"pro_required\": true,\n  \"pro_reason\": \"Treatment Counselling\",\n  \"pro_priority\": \"Normal\",\n  \"pro_instructions\": \"Explain 15-day treatment procedure\",\n  \"doctor_notes\": \"Patient conscious and stable. Mild tenderness around knee.\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/consultations/1",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "consultations", "1"]
+        }
+      }
+    },
+    {
+      "name": "10. Create Prescription",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"consultation_id\": 1,\n  \"medicines\": [\n    {\n      \"medicine_id\": 1,\n      \"dosage\": \"500 mg\",\n      \"quantity\": 10\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/prescriptions",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "prescriptions"]
+        }
+      }
+    },
+    {
+      "name": "11. Create Treatment Plan",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"consultation_id\": 1,\n  \"treatment_name\": \"15-Day Knee Physiotherapy\",\n  \"treatment_type\": \"Procedure\",\n  \"start_date\": \"2026-09-01\",\n  \"duration\": 15,\n  \"duration_unit\": \"days\",\n  \"instructions\": \"Daily morning session\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/treatment-plans",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "treatment-plans"]
+        }
+      }
+    },
+    {
+      "name": "12. Consultation Summary",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/consultations/1/summary",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "consultations", "1", "summary"]
+        }
+      }
+    },
+    {
+      "name": "13. Save Consultation Draft",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/consultations/1/save-draft",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "consultations", "1", "save-draft"]
+        }
+      }
+    },
+    {
+      "name": "14. Complete Consultation (Handoff to PRO Queue)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/consultations/1/complete",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "consultations", "1", "complete"]
+        }
+      }
+    },
+    {
+      "name": "15. My Prescriptions",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/prescriptions/mine",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "prescriptions", "mine"]
+        }
+      }
+    },
+    {
+      "name": "16. My Treatment Plans",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/treatment-plans/mine",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "treatment-plans", "mine"]
+        }
+      }
+    },
+    {
+      "name": "17. Consultation History",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/consultations",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "consultations"]
+        }
+      }
+    },
+    {
+      "name": "18. My Targets (View-Only)",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/targets/mine?month=9&year=2026",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "targets", "mine"],
+          "query": [
+            { "key": "month", "value": "9" },
+            { "key": "year", "value": "2026" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "19. Doctor Profile",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/profile",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "profile"]
+        }
+      }
+    },
+    {
+      "name": "20. Update Profile Contacts",
+      "request": {
+        "method": "PUT",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"mobile_number\": \"9888877779\",\n  \"email\": \"drsmith_updated@hospital.com\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/profile",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "profile"]
+        }
+      }
+    },
+    {
+      "name": "21. Apply Leave",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"from_date\": \"2026-09-20\",\n  \"to_date\": \"2026-09-22\",\n  \"reason\": \"Attending Medical Conference\",\n  \"remarks\": \"Covered by Dr. Connor\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/leaves",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "leaves"]
+        }
+      }
+    },
+    {
+      "name": "22. My Leaves",
+      "request": {
+        "method": "GET",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{token}}" }
+        ],
+        "url": {
+          "raw": "{{base_url}}/api/v1/doctor/leaves/mine",
+          "host": ["{{base_url}}"],
+          "path": ["api", "v1", "doctor", "leaves", "mine"]
+        }
+      }
+    }
+  ]
+}

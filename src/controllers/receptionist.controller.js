@@ -234,11 +234,32 @@ async function registerPatient(req, res) {
   try {
     await client.query('BEGIN');
 
-    const {
-      mobile_number, full_name, age, gender, village_mandal, village, mandal, address, ailment_reason,
-      lead_source, lead_source_id, lead_id, assigned_doctor_id, appointment_date, appointment_time,
-      appointment_type, discount_amount, payment_method, payment_amount, remarks
-    } = req.body;
+    const p = req.body.patient || {};
+    const a = req.body.appointment || {};
+    const b = req.body.billing || {};
+
+    const mobile_number = req.body.mobile_number || p.mobile_number;
+    const full_name = req.body.full_name || p.full_name;
+    const age = req.body.age || p.age;
+    const gender = req.body.gender || p.gender;
+    const village_mandal = req.body.village_mandal || p.village_mandal;
+    const village = req.body.village || p.village;
+    const mandal = req.body.mandal || p.mandal;
+    const address = req.body.address || p.address;
+    const ailment_reason = req.body.ailment_reason || p.ailment_reason;
+    const lead_source = req.body.lead_source || p.lead_source;
+    const lead_source_id = req.body.lead_source_id || p.lead_source_id;
+    const lead_id = req.body.lead_id || p.lead_id;
+
+    const assigned_doctor_id = req.body.assigned_doctor_id || a.doctor_id || a.assigned_doctor_id;
+    const appointment_date = req.body.appointment_date || a.appointment_date;
+    const appointment_time = req.body.appointment_time || a.appointment_time;
+    const appointment_type = req.body.appointment_type || a.appointment_type;
+
+    const discount_amount = req.body.discount_amount !== undefined ? req.body.discount_amount : (b.discount !== undefined ? b.discount : b.discount_amount);
+    const payment_method = req.body.payment_method || b.payment_mode || b.payment_method;
+    const payment_amount = req.body.payment_amount !== undefined ? req.body.payment_amount : (b.amount !== undefined ? b.amount : b.payment_amount);
+    const remarks = req.body.remarks || a.remarks;
 
     if (!mobile_number || !full_name || !assigned_doctor_id || !appointment_date || !appointment_time) {
       await client.query('ROLLBACK');
@@ -392,6 +413,7 @@ async function registerPatient(req, res) {
       classification,
       target_target: classification === 'new' ? 'Enquiry Target' : 'Unit Target',
       patient_id: targetPatientId,
+      patient: { patient_id: targetPatientId, branch_id: branchId, patient_type: classification },
       appointment: newAppt,
       bill: newBill,
       payment: newPayment
@@ -1321,11 +1343,35 @@ async function rescheduleTask(req, res) {
   }
 }
 
+async function getConsultationFee(req, res) {
+  try {
+    const { doctor_id, appointment_type } = req.query;
+    if (!doctor_id) {
+      return res.status(400).json(formatResponse(false, null, 'doctor_id is required'));
+    }
+    const docRes = await db.query('SELECT new_consultation_fee, renewal_consultation_fee, followup_consultation_fee FROM doctors WHERE doctor_id = $1', [doctor_id]);
+    if (docRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Doctor not found'));
+    }
+    const doctor = docRes.rows[0];
+    const apptType = (appointment_type || 'new').toLowerCase();
+    let fee = parseFloat(doctor.new_consultation_fee || 500);
+    if (apptType === 'renewal') fee = parseFloat(doctor.renewal_consultation_fee || 300);
+    if (apptType === 'followup') fee = parseFloat(doctor.followup_consultation_fee || 200);
+
+    return res.json(formatResponse(true, { consultation_fee: fee, appointment_type: apptType }, 'Consultation fee retrieved successfully'));
+  } catch (err) {
+    console.error('getConsultationFee error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 module.exports = {
   getDashboard,
   searchPatients,
   getPatientOverview,
   registerPatient,
+  getConsultationFee,
   createEnquiry,
   getEnquiries,
   createEmployeeReferral,

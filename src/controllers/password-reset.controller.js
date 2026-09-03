@@ -111,8 +111,41 @@ async function rejectPasswordReset(req, res) {
   }
 }
 
+async function requestPasswordReset(req, res) {
+  try {
+    const { username, mobile_number } = req.body;
+    const identifier = username || mobile_number;
+    if (!identifier) {
+      return res.status(400).json(formatResponse(false, null, 'username or mobile_number is required'));
+    }
+
+    const userRes = await db.query(
+      `SELECT user_id, username, role FROM users WHERE username = $1 OR mobile_number = $1`,
+      [identifier]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'User not found'));
+    }
+
+    const user = userRes.rows[0];
+
+    const result = await db.query(`
+      INSERT INTO password_reset_requests (user_id, status, requested_at)
+      VALUES ($1, 'pending', now())
+      RETURNING *
+    `, [user.user_id]);
+
+    return res.status(201).json(formatResponse(true, result.rows[0], 'Password reset request created successfully and forwarded to Super Admin.'));
+  } catch (err) {
+    console.error('requestPasswordReset error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 module.exports = {
   getPasswordResetRequests,
   approvePasswordReset,
-  rejectPasswordReset
+  rejectPasswordReset,
+  requestPasswordReset
 };

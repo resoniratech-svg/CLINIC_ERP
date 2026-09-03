@@ -140,7 +140,7 @@ async function changePassword(req, res) {
 
 async function forgotPassword(req, res) {
   try {
-    const { username_or_employee_id } = req.body;
+    const username_or_employee_id = req.body.username_or_employee_id || req.body.username || req.body.employee_id || req.body.mobile_number;
     if (!username_or_employee_id) {
       return res.status(400).json(formatResponse(false, null, 'Username or Employee ID is required'));
     }

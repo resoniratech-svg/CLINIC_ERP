@@ -11,8 +11,7 @@ const ts = Date.now();
 
 beforeAll(async () => {
   await seed();
-  await db.query('DELETE FROM prescriptions');
-  await db.query('DELETE FROM appointments');
+  await db.query('DELETE FROM medicine_returns; DELETE FROM stock_adjustments; DELETE FROM prescription_clarifications; DELETE FROM prescription_modifications; DELETE FROM prescription_items; DELETE FROM prescriptions; DELETE FROM treatment_plans; DELETE FROM consultations; DELETE FROM due_patients; DELETE FROM payments; DELETE FROM bill_items; DELETE FROM bills; DELETE FROM renewals; DELETE FROM packages; DELETE FROM counselling_records; DELETE FROM feedback_complaints; DELETE FROM appointments;');
 
   // Admin login
   const adminLogin = await request(app).post('/api/v1/auth/login').send({ username: 'admin', password: 'SuperAdmin@123' });
@@ -227,7 +226,7 @@ describe('Receptionist Module Business Rules Verification', () => {
 
   // Rule 12: Registration expiry computation
   test('Rule 12: Registration expiry computes 30 days validity', async () => {
-    const ptRes = await db.query(`SELECT registration_date, registration_expiry FROM patients WHERE registration_id IS NOT NULL LIMIT 1`);
+    const ptRes = await db.query(`SELECT registration_date, registration_expiry FROM patients WHERE registration_expiry IS NOT NULL ORDER BY created_at DESC LIMIT 1`);
     expect(ptRes.rows.length).toBeGreaterThan(0);
     const regDate = new Date(ptRes.rows[0].registration_date);
     const regExp = new Date(ptRes.rows[0].registration_expiry);

@@ -1,0 +1,260 @@
+{
+  "info": {
+    "name": "PRO / Manager Module API Collection",
+    "description": "Complete Postman Collection covering all 16 PRO / Manager sub-modules and business rules.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000/api/v1"
+    },
+    {
+      "key": "pro_token",
+      "value": ""
+    },
+    {
+      "key": "doctor_token",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "PRO Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"pat_pro\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Doctor Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"dr_smith\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "login"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Dashboard & Queue",
+      "item": [
+        {
+          "name": "Get PRO Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pro/dashboard",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "dashboard"]
+            }
+          }
+        },
+        {
+          "name": "Get Patient Queue",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pro/queue?status=pending",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "queue"],
+              "query": [{ "key": "status", "value": "pending" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Patient 360",
+      "item": [
+        {
+          "name": "Get Patient 360 Overview (doctor_notes masked)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pro/patients/1/overview",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "patients", "1", "overview"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Counselling",
+      "item": [
+        {
+          "name": "Create Counselling Record",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"counselling_type\": \"treatment_plan\",\n  \"notes\": \"Counselled patient on package benefits.\",\n  \"patient_understanding\": \"agreed\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/pro/counselling",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "counselling"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Packages & Plans",
+      "item": [
+        {
+          "name": "Create Package",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"package_name\": \"Monthly Care\",\n  \"package_type\": \"monthly\",\n  \"from_date\": \"2026-09-02\",\n  \"package_amount\": 15000,\n  \"discount_amount\": 2000\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/pro/packages",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "packages"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Billing & Payments",
+      "item": [
+        {
+          "name": "Create Bill (Package / Treatment)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"bill_type\": \"package\",\n  \"items\": [{ \"item_name\": \"Treatment Session\", \"quantity\": 1, \"unit_price\": 13000 }],\n  \"discount_amount\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/pro/bills",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "bills"]
+            }
+          }
+        },
+        {
+          "name": "Record Payment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"bill_id\": 1,\n  \"payments\": [{ \"amount\": 8000, \"payment_method\": \"cash\" }]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/pro/payments",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "payments"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Accountant Ledger",
+      "item": [
+        {
+          "name": "Get Daily Cash Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pro/accountant/daily-summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "accountant", "daily-summary"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "PRO Completion",
+      "item": [
+        {
+          "name": "Get PRO Checklist",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pro/patients/1/pro-checklist",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "patients", "1", "pro-checklist"]
+            }
+          }
+        },
+        {
+          "name": "Complete PRO Handoff",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pro_token}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/pro/patients/1/complete-pro",
+              "host": ["{{baseUrl}}"],
+              "path": ["pro", "patients", "1", "complete-pro"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

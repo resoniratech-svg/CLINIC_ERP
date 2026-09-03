@@ -33,6 +33,17 @@ app.use('/api/v1/reports', require('./routes/reports.routes'));
 app.use('/api/v1/logs', require('./routes/logs.routes'));
 app.use('/api/v1/settings', require('./routes/settings.routes'));
 app.use('/api/v1/receptionist', require('./routes/receptionist.routes'));
+app.use('/api/v1/executive', require('./routes/executive.routes'));
+app.use('/api/v1/doctor', require('./routes/doctor_module.routes'));
+app.use('/api/v1/pro', require('./routes/pro_module.routes'));
+
+// Super Admin Aliases
+app.use('/api/v1/super-admin/doctors', require('./routes/doctors.routes'));
+app.use('/api/v1/super-admin/dashboard', require('./routes/dashboard.routes'));
+app.use('/api/v1/super-admin/audit-logs', require('./routes/logs.routes'));
+app.use('/api/v1/super-admin/login-logs', require('./routes/logs.routes'));
+app.use('/api/v1/super-admin/reports', require('./routes/reports.routes'));
+app.use('/api/v1/super-admin', require('./routes/users.routes'));
 
 // 404 Handler
 app.use((req, res) => {

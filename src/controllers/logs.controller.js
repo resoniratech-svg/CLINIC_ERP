@@ -4,7 +4,7 @@ const { formatResponse } = require('../utils/helpers');
 async function getAuditLogs(req, res) {
   try {
     const { user_id, role, module, start_date, end_date, page = 1, limit = 50 } = req.query;
-    const branchId = req.user.branch_id || 1;
+    const branchId = (req.user && req.user.branch_id) ? req.user.branch_id : 1;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let query = `

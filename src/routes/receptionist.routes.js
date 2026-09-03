@@ -17,6 +17,8 @@ router.get('/patients/:id/overview', receptionistController.getPatientOverview);
 
 // 3.5 New Patient Registration
 router.post('/patients/register', receptionistController.registerPatient);
+router.post('/register-walkin', receptionistController.registerPatient);
+router.post('/register', receptionistController.registerPatient);
 
 // 3.6 Enquiries
 router.post('/enquiries', receptionistController.createEnquiry);
@@ -44,9 +46,11 @@ router.post('/appointments/:id/cancel', receptionistController.cancelAppointment
 // 3.11 Consultation Fee Billing
 router.post('/billing/bills', receptionistController.createConsultationBill);
 router.get('/billing/bills', receptionistController.getConsultationBills);
+router.get('/consultation-fee', receptionistController.getConsultationFee);
 
 // 3.13 Check-in & Waiting Queue
 router.post('/appointments/:id/checkin', receptionistController.checkinAppointment);
+router.put('/appointments/:id/checkin', receptionistController.checkinAppointment);
 router.get('/checkin/waiting', receptionistController.getWaitingQueue);
 
 // 3.14 Renewals

@@ -1,0 +1,193 @@
+{
+  "info": {
+    "name": "Clinic ERP - Pharmacy Module API",
+    "description": "Complete Postman collection for the Pharmacy Module of Clinic ERP Backend",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Auth & Profile",
+      "item": [
+        {
+          "name": "Pharmacy Login",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"peter_pharmacy\",\n  \"password\": \"Password@123\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] }
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/profile", "host": ["{{base_url}}"], "path": ["pharmacy", "profile"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Dashboard & Queue",
+      "item": [
+        {
+          "name": "Pharmacy Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/dashboard", "host": ["{{base_url}}"], "path": ["pharmacy", "dashboard"] }
+          }
+        },
+        {
+          "name": "Prescription Queue",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/queue?status=pending", "host": ["{{base_url}}"], "path": ["pharmacy", "queue"], "query": [{ "key": "status", "value": "pending" }] }
+          }
+        },
+        {
+          "name": "Process Prescription",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/prescriptions/1/process", "host": ["{{base_url}}"], "path": ["pharmacy", "prescriptions", "1", "process"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Prescription Modifications & Stock Check",
+      "item": [
+        {
+          "name": "Modify Days & Recalculate Qty",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"modified_days\": 7,\n  \"reason\": \"Patient requested 7-day course\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/pharmacy/prescriptions/items/1/modify-days", "host": ["{{base_url}}"], "path": ["pharmacy", "prescriptions", "items", "1", "modify-days"] }
+          }
+        },
+        {
+          "name": "Stock Check",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/prescriptions/1/stock-check", "host": ["{{base_url}}"], "path": ["pharmacy", "prescriptions", "1", "stock-check"] }
+          }
+        },
+        {
+          "name": "Get FEFO Batches",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/medicines/1/batches", "host": ["{{base_url}}"], "path": ["pharmacy", "medicines", "1", "batches"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Dispensing Workflow",
+      "item": [
+        {
+          "name": "Save Dispense Draft",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    { \"item_id\": 1, \"stock_id\": 1, \"dispense_quantity\": 14 }\n  ]\n}"
+            },
+            "url": { "raw": "{{base_url}}/pharmacy/prescriptions/1/dispense/draft", "host": ["{{base_url}}"], "path": ["pharmacy", "prescriptions", "1", "dispense", "draft"] }
+          }
+        },
+        {
+          "name": "Complete Dispensing",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    { \"item_id\": 1, \"stock_id\": 1, \"dispense_quantity\": 14 }\n  ]\n}"
+            },
+            "url": { "raw": "{{base_url}}/pharmacy/prescriptions/1/dispense/complete", "host": ["{{base_url}}"], "path": ["pharmacy", "prescriptions", "1", "dispense", "complete"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Inventory & Stock Adjustments",
+      "item": [
+        {
+          "name": "Get Low Stock Alerts",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "url": { "raw": "{{base_url}}/pharmacy/stock/low-stock", "host": ["{{base_url}}"], "path": ["pharmacy", "stock", "low-stock"] }
+          }
+        },
+        {
+          "name": "Create Stock Adjustment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"medicine_id\": 1,\n  \"stock_id\": 1,\n  \"physical_quantity\": 95,\n  \"reason\": \"routine_inventory_count\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/pharmacy/stock/adjustments", "host": ["{{base_url}}"], "path": ["pharmacy", "stock", "adjustments"] }
+          }
+        },
+        {
+          "name": "Create Medicine Return",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{pharmacy_token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"patient_id\": 1,\n  \"medicine_id\": 1,\n  \"stock_id\": 1,\n  \"return_quantity\": 2,\n  \"return_reason\": \"Unused medication\",\n  \"condition\": \"good\"\n}"
+            },
+            "url": { "raw": "{{base_url}}/pharmacy/returns", "host": ["{{base_url}}"], "path": ["pharmacy", "returns"] }
+          }
+        }
+      ]
+    }
+  ]
+}
