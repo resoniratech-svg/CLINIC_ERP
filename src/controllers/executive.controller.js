@@ -680,13 +680,203 @@ async function getExecutivePerformanceReport(req, res) {
   }
 }
 
+// 21. Update Lead Record
+async function updateLead(req, res) {
+  try {
+    const { id } = req.params;
+    const {
+      lead_name, mobile_number, age, gender, village, mandal,
+      campaign, source, status, remarks
+    } = req.body;
+
+    const leadId = parseInt(id);
+    if (!leadId) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid lead ID'));
+    }
+
+    const leadCheck = await db.query(`SELECT * FROM leads WHERE lead_id = $1`, [leadId]);
+    if (leadCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Lead record not found'));
+    }
+
+    const current = leadCheck.rows[0];
+    const newName = lead_name !== undefined && lead_name !== null ? lead_name.trim() : current.lead_name;
+    const newMobile = mobile_number !== undefined && mobile_number !== null ? mobile_number.replace(/\D/g, '') : current.mobile_number;
+    const newAge = age !== undefined ? (age ? parseInt(age) : null) : current.age;
+    const newGender = gender !== undefined ? gender : current.gender;
+    const newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
+    const newMandal = mandal !== undefined ? (mandal ? mandal.trim() : null) : current.mandal;
+    const newCampaign = campaign !== undefined ? (campaign ? campaign.trim() : null) : current.campaign;
+    const newSource = source !== undefined ? (source ? source.trim() : null) : current.source;
+    const newStatus = status !== undefined ? status : current.status;
+
+    const updateRes = await db.query(`
+      UPDATE leads
+      SET lead_name = $1,
+          mobile_number = $2,
+          age = $3,
+          gender = $4,
+          village = $5,
+          mandal = $6,
+          campaign = $7,
+          source = $8,
+          status = $9,
+          updated_at = now()
+      WHERE lead_id = $10
+      RETURNING *
+    `, [newName, newMobile, newAge, newGender, newVillage, newMandal, newCampaign, newSource, newStatus, leadId]);
+
+    const updatedLead = updateRes.rows[0];
+
+    if (remarks) {
+      await db.query(`
+        UPDATE call_records
+        SET remarks = $1
+        WHERE lead_id = $2
+      `, [remarks, leadId]);
+    }
+
+    res.locals.auditEntry = { module: 'Executive / Call Center', action: 'Update Lead', recordId: leadId, newValue: updatedLead };
+    return res.json(formatResponse(true, updatedLead, 'Lead record updated successfully'));
+  } catch (err) {
+    console.error('updateLead error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 22. Update Outbound Lead Record
+async function updateOutboundLead(req, res) {
+  try {
+    const { id } = req.params;
+    const {
+      patient_name, mobile_number, age, gender, village, mandal,
+      problem, campaign, status, remarks
+    } = req.body;
+
+    const leadId = parseInt(id);
+    if (!leadId) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid outbound lead ID'));
+    }
+
+    const leadCheck = await db.query(`SELECT * FROM outbound_leads WHERE id = $1`, [leadId]);
+    if (leadCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Outbound lead not found'));
+    }
+
+    const current = leadCheck.rows[0];
+    const newName = patient_name !== undefined && patient_name !== null ? patient_name.trim() : current.patient_name;
+    const newMobile = mobile_number !== undefined && mobile_number !== null ? mobile_number.replace(/\D/g, '') : current.mobile_number;
+    const newAge = age !== undefined ? (age ? parseInt(age) : null) : current.age;
+    const newGender = gender !== undefined ? gender : current.gender;
+    const newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
+    const newMandal = mandal !== undefined ? (mandal ? mandal.trim() : null) : current.mandal;
+    const newProblem = problem !== undefined ? (problem ? problem.trim() : null) : current.problem;
+    const newCampaign = campaign !== undefined ? (campaign ? campaign.trim() : null) : current.campaign;
+    const newStatus = status !== undefined ? status : current.status;
+    const newRemarks = remarks !== undefined ? (remarks ? remarks.trim() : null) : current.remarks;
+
+    const updateRes = await db.query(`
+      UPDATE outbound_leads
+      SET patient_name = $1,
+          mobile_number = $2,
+          age = $3,
+          gender = $4,
+          village = $5,
+          mandal = $6,
+          problem = $7,
+          campaign = $8,
+          status = $9,
+          remarks = $10
+      WHERE id = $11
+      RETURNING *
+    `, [newName, newMobile, newAge, newGender, newVillage, newMandal, newProblem, newCampaign, newStatus, newRemarks, leadId]);
+
+    const updated = updateRes.rows[0];
+    res.locals.auditEntry = { module: 'Executive Outbound', action: 'Update Outbound Lead', recordId: leadId, newValue: updated };
+    return res.json(formatResponse(true, updated, 'Outbound lead updated successfully'));
+  } catch (err) {
+    console.error('updateOutboundLead error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 23. Update Call Outcome Record
+async function updateCallRecord(req, res) {
+  try {
+    const { id } = req.params;
+    const {
+      call_status, call_purpose, callback_date, callback_time, remarks
+    } = req.body;
+
+    const callId = parseInt(id);
+    if (!callId) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid call record ID'));
+    }
+
+    const callCheck = await db.query(`SELECT * FROM call_records WHERE call_id = $1`, [callId]);
+    if (callCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Call record not found'));
+    }
+
+    const currentCall = callCheck.rows[0];
+    let normStatus = call_status ? call_status.toString().toLowerCase().trim().replace('-', '_') : currentCall.call_status;
+    if (normStatus === 'call_back_requested') normStatus = 'callback_requested';
+
+    const newPurpose = call_purpose !== undefined ? call_purpose : currentCall.call_purpose;
+    const newCbDate = callback_date !== undefined ? callback_date : currentCall.callback_date;
+    const newCbTime = callback_time !== undefined ? callback_time : currentCall.callback_time;
+    const newRemarks = remarks !== undefined ? remarks : currentCall.remarks;
+
+    const updateRes = await db.query(`
+      UPDATE call_records
+      SET call_status = $1,
+          call_purpose = $2,
+          callback_date = $3,
+          callback_time = $4,
+          remarks = $5
+      WHERE call_id = $6
+      RETURNING *
+    `, [normStatus, newPurpose, newCbDate, newCbTime, newRemarks, callId]);
+
+    const updatedCall = updateRes.rows[0];
+
+    // Synchronize linked lead if exists
+    if (currentCall.lead_id) {
+      let leadStatus = 'new';
+      if (normStatus === 'interested' || normStatus === 'lead_created') {
+        leadStatus = 'interested';
+      } else if (normStatus === 'not_interested') {
+        leadStatus = 'not_interested';
+      } else if (normStatus === 'callback_requested') {
+        leadStatus = 'new';
+      }
+
+      await db.query(`
+        UPDATE leads
+        SET status = $1,
+            updated_at = now()
+        WHERE lead_id = $2
+      `, [leadStatus, currentCall.lead_id]);
+    }
+
+    res.locals.auditEntry = { module: 'Executive / Call Center', action: 'Update Call Record', recordId: callId, newValue: updatedCall };
+    return res.json(formatResponse(true, updatedCall, 'Call record updated successfully'));
+  } catch (err) {
+    console.error('updateCallRecord error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 module.exports = {
   getDashboard,
   searchPatientInbound,
   createLead,
+  updateLead,
+  updateOutboundLead,
   importOutboundLeads,
   getOutboundQueue,
   recordCallOutcome,
+  updateCallRecord,
   getCallbacks,
   getLeads,
   getLeadDetails,

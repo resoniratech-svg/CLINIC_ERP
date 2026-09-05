@@ -9,5 +9,6 @@ router.get('/:id', authenticateToken, authorizeRoles('super_admin'), usersContro
 router.post('/', authenticateToken, authorizeRoles('super_admin'), usersController.createUser);
 router.put('/:id', authenticateToken, authorizeRoles('super_admin'), usersController.updateUser);
 router.patch('/:id/status', authenticateToken, authorizeRoles('super_admin'), usersController.updateUserStatus);
+router.delete('/:id', authenticateToken, authorizeRoles('super_admin'), usersController.deleteUser);
 
 module.exports = router;

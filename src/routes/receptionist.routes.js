@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const receptionistController = require('../controllers/receptionist.controller');
 const { authenticateToken } = require('../middleware/auth');
-const { authorizeRoles } = require('../middleware/rbac');
+const { authorizeRoles, checkPermission } = require('../middleware/rbac');
 
 // All Receptionist routes require authentication and Receptionist or Super Admin role
 router.use(authenticateToken);
@@ -16,9 +16,9 @@ router.get('/patients/search', receptionistController.searchPatients);
 router.get('/patients/:id/overview', receptionistController.getPatientOverview);
 
 // 3.5 New Patient Registration
-router.post('/patients/register', receptionistController.registerPatient);
-router.post('/register-walkin', receptionistController.registerPatient);
-router.post('/register', receptionistController.registerPatient);
+router.post('/patients/register', checkPermission('Registration'), receptionistController.registerPatient);
+router.post('/register-walkin', checkPermission('Registration'), receptionistController.registerPatient);
+router.post('/register', checkPermission('Registration'), receptionistController.registerPatient);
 
 // 3.6 Enquiries
 router.post('/enquiries', receptionistController.createEnquiry);
@@ -29,10 +29,12 @@ router.post('/referrals/employee', receptionistController.createEmployeeReferral
 router.get('/referrals/employee', receptionistController.getEmployeeReferrals);
 router.post('/referrals/patient', receptionistController.createPatientReferral);
 router.get('/referrals/patient', receptionistController.getPatientReferrals);
+router.get('/employees', receptionistController.getEligibleEmployees);
 
 // 3.8 Executive Lead Queue
 router.get('/leads', receptionistController.getExecutiveLeads);
 router.post('/leads/:id/open', receptionistController.openExecutiveLead);
+router.post('/leads/:id/assign', receptionistController.assignExecutiveLeadDoctor);
 
 // 3.9 Doctor Assignment
 router.get('/doctors', receptionistController.getActiveDoctors);
@@ -43,9 +45,10 @@ router.get('/appointments', receptionistController.getAppointments);
 router.post('/appointments/:id/reschedule', receptionistController.rescheduleAppointment);
 router.post('/appointments/:id/cancel', receptionistController.cancelAppointment);
 
-// 3.11 Consultation Fee Billing
+// 3.11 Consultation Fee Billing & Invoices
 router.post('/billing/bills', receptionistController.createConsultationBill);
 router.get('/billing/bills', receptionistController.getConsultationBills);
+router.get('/patients/:id/invoices', receptionistController.getPatientInvoices);
 router.get('/consultation-fee', receptionistController.getConsultationFee);
 
 // 3.13 Check-in & Waiting Queue

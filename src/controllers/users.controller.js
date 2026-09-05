@@ -290,10 +290,123 @@ async function updateUserStatus(req, res) {
   }
 }
 
+async function deleteUser(req, res) {
+  const client = await db.pool.connect();
+  try {
+    const userId = parseInt(req.params.id);
+
+    if (isNaN(userId)) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid user ID'));
+    }
+
+    // Safety 1: Prevent deleting root admin
+    if (userId === 1) {
+      return res.status(400).json(formatResponse(false, null, 'Primary Root Administrator account cannot be deleted'));
+    }
+
+    // Safety 2: Prevent deleting self
+    if (req.user.user_id === userId) {
+      return res.status(400).json(formatResponse(false, null, 'You cannot delete your own active account'));
+    }
+
+    const userRes = await db.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
+    if (userRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'User not found'));
+    }
+    const targetUser = userRes.rows[0];
+
+    if (targetUser.username === 'admin') {
+      return res.status(400).json(formatResponse(false, null, 'Primary Root Administrator account cannot be deleted'));
+    }
+
+    // Check if user or doctor has permanent historical clinical, appointment, or financial records
+    const checkRecords = await db.query(`
+      SELECT
+        (SELECT COUNT(*) FROM bills WHERE created_by = $1) as bill_count,
+        (SELECT COUNT(*) FROM payments WHERE received_by = $1) as payment_count,
+        (SELECT COUNT(*) FROM appointments WHERE created_by = $1 OR doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as appt_count,
+        (SELECT COUNT(*) FROM consultations WHERE vitals_recorded_by = $1 OR doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as consult_count,
+        (SELECT COUNT(*) FROM prescriptions WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as presc_count,
+        (SELECT COUNT(*) FROM leads WHERE assigned_receptionist_id = $1 OR lead_created_by_user_id = $1) as lead_count,
+        (SELECT COUNT(*) FROM crm_followups WHERE assigned_to = $1) as followup_count,
+        (SELECT COUNT(*) FROM feedback_complaints WHERE assigned_to = $1 OR logged_by = $1) as feedback_count
+    `, [userId]);
+
+    const stats = checkRecords.rows[0];
+    const hasHistory = (
+      parseInt(stats.bill_count || 0) > 0 ||
+      parseInt(stats.payment_count || 0) > 0 ||
+      parseInt(stats.appt_count || 0) > 0 ||
+      parseInt(stats.consult_count || 0) > 0 ||
+      parseInt(stats.presc_count || 0) > 0 ||
+      parseInt(stats.lead_count || 0) > 0 ||
+      parseInt(stats.followup_count || 0) > 0 ||
+      parseInt(stats.feedback_count || 0) > 0
+    );
+
+    if (hasHistory) {
+      return res.status(400).json(formatResponse(
+        false,
+        null,
+        `Cannot delete staff member "${targetUser.full_name}" because they have active linked connections (such as patient appointments, clinical consultations, prescriptions, billing/payments, or assigned leads). Please clear or transfer their connections first before deleting.`
+      ));
+    }
+
+    await client.query('BEGIN');
+
+    // Clean up auxiliary tables depending on role
+    if (targetUser.role === 'receptionist') {
+      await client.query(`DELETE FROM receptionist_permissions WHERE user_id = $1`, [userId]);
+    } else if (targetUser.role === 'pro_manager') {
+      await client.query(`DELETE FROM pro_manager_permissions WHERE user_id = $1`, [userId]);
+    } else if (targetUser.role === 'pharmacy') {
+      await client.query(`DELETE FROM pharmacy_permissions WHERE user_id = $1`, [userId]);
+    } else if (targetUser.role === 'executive') {
+      await client.query(`DELETE FROM executives WHERE user_id = $1`, [userId]);
+    } else if (targetUser.role === 'doctor') {
+      await client.query(`DELETE FROM doctor_leaves WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
+      await client.query(`DELETE FROM doctor_transfers WHERE from_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1) OR to_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
+      await client.query(`DELETE FROM doctors WHERE user_id = $1`, [userId]);
+    }
+
+    await client.query(`DELETE FROM password_reset_requests WHERE user_id = $1`, [userId]);
+    await client.query(`DELETE FROM login_logs WHERE user_id = $1`, [userId]);
+    await client.query(`DELETE FROM audit_logs WHERE user_id = $1`, [userId]);
+
+    // Finally delete user row
+    await client.query(`DELETE FROM users WHERE user_id = $1`, [userId]);
+
+    await client.query('COMMIT');
+
+    res.locals.auditEntry = {
+      module: 'User Management',
+      action: 'Delete User',
+      recordId: userId,
+      oldValue: { username: targetUser.username, employee_id: targetUser.employee_id, full_name: targetUser.full_name, role: targetUser.role }
+    };
+
+    return res.json(formatResponse(true, null, `User ${targetUser.full_name} (@${targetUser.username}) deleted successfully`));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('deleteUser error:', err);
+    if (err.code === '23503') {
+      return res.status(400).json(formatResponse(
+        false,
+        null,
+        'Cannot delete this user because they have active linked connections in the database. Please clear or transfer their records first before deleting.'
+      ));
+    }
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   getUsers,
   getUserById,
   createUser,
   updateUser,
-  updateUserStatus
+  updateUserStatus,
+  deleteUser
 };

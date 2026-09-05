@@ -48,19 +48,41 @@ async function getHospitalSettings(req, res) {
 async function updateHospitalSettings(req, res) {
   try {
     const { setting_key, setting_value } = req.body;
-    if (!setting_key) {
+    if (setting_key) {
+      const result = await db.query(`
+        INSERT INTO hospital_settings (setting_key, setting_value)
+        VALUES ($1, $2)
+        ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2, updated_at = now()
+        RETURNING *
+      `, [setting_key, setting_value || '']);
+
+      res.locals.auditEntry = { module: 'Hospital Settings', action: 'Update Setting', recordId: result.rows[0].id, newValue: result.rows[0] };
+      return res.json(formatResponse(true, result.rows[0], 'Hospital setting updated successfully'));
+    }
+
+    if (setting_value !== undefined && !setting_key) {
       return res.status(400).json(formatResponse(false, null, 'setting_key is required'));
     }
 
-    const result = await db.query(`
-      INSERT INTO hospital_settings (setting_key, setting_value)
-      VALUES ($1, $2)
-      ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2, updated_at = now()
-      RETURNING *
-    `, [setting_key, setting_value || '']);
+    if (typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+      const updatedRows = [];
+      for (const [key, value] of Object.entries(req.body)) {
+        if (key && typeof value !== 'undefined') {
+          const result = await db.query(`
+            INSERT INTO hospital_settings (setting_key, setting_value)
+            VALUES ($1, $2)
+            ON CONFLICT (setting_key) DO UPDATE SET setting_value = $2, updated_at = now()
+            RETURNING *
+          `, [key, String(value)]);
+          updatedRows.push(result.rows[0]);
+        }
+      }
 
-    res.locals.auditEntry = { module: 'Hospital Settings', action: 'Update Setting', recordId: result.rows[0].id, newValue: result.rows[0] };
-    return res.json(formatResponse(true, result.rows[0], 'Hospital setting updated successfully'));
+      res.locals.auditEntry = { module: 'Hospital Settings', action: 'Bulk Update Settings', recordId: 1, newValue: req.body };
+      return res.json(formatResponse(true, updatedRows, 'Hospital settings updated successfully'));
+    }
+
+    return res.status(400).json(formatResponse(false, null, 'setting_key or settings dictionary is required'));
   } catch (err) {
     console.error('updateHospitalSettings error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -71,11 +93,15 @@ const masterTableMap = {
   'villages': 'master_villages',
   'mandals': 'master_mandals',
   'lead-sources': 'master_lead_sources',
+  'lead_sources': 'master_lead_sources',
   'referral-sources': 'master_referral_sources',
+  'referral_sources': 'master_referral_sources',
   'departments': 'master_departments',
   'specializations': 'master_specializations',
   'charge-types': 'master_charge_types',
-  'expense-categories': 'master_expense_categories'
+  'charge_types': 'master_charge_types',
+  'expense-categories': 'master_expense_categories',
+  'expense_categories': 'master_expense_categories'
 };
 
 async function getMasterData(req, res) {
