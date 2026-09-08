@@ -79,6 +79,8 @@ export const ExecutiveLeadsQueuePage = () => {
       // non-blocking status touch
     }
 
+    const patientAilment = lead.requirement || lead.problem || '';
+
     navigate('/receptionist/patients/register', {
       state: {
         initialMobile: lead.mobile_number,
@@ -88,7 +90,10 @@ export const ExecutiveLeadsQueuePage = () => {
         age: lead.age,
         gender: lead.gender,
         village: lead.village || lead.mandal,
-        reason: lead.campaign || lead.source || 'Call Center Outreach',
+        ailment_reason: patientAilment,
+        requirement: patientAilment,
+        reason: patientAilment,
+        source: 'Call Center Executive Lead',
       },
     });
   };
@@ -229,8 +234,13 @@ export const ExecutiveLeadsQueuePage = () => {
                     <td className="py-3.5 px-4">
                       <div className="font-bold text-slate-900">{lead.lead_name}</div>
                       <div className="text-[11px] text-slate-400 font-mono">Lead #{lead.lead_id}</div>
+                      {(lead.requirement || lead.problem) && (
+                        <div className="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-900 border border-amber-200 text-[10px] font-medium max-w-xs">
+                          <span className="font-bold text-amber-700">Ailment:</span> {lead.requirement || lead.problem}
+                        </div>
+                      )}
                       {lead.campaign && (
-                        <span className="text-[10px] text-slate-500 block truncate max-w-xs">{lead.campaign}</span>
+                        <span className="text-[10px] text-slate-500 block truncate max-w-xs mt-0.5">{lead.campaign}</span>
                       )}
                     </td>
 
@@ -320,6 +330,12 @@ export const ExecutiveLeadsQueuePage = () => {
                 <span>•</span>
                 <span>Executive: <strong>{assignModalLead.executive_name || 'Call Center'}</strong></span>
               </div>
+              {(assignModalLead.requirement || assignModalLead.problem) && (
+                <div className="text-slate-700 pt-0.5">
+                  <span className="font-bold text-purple-900">Requirement / Ailment:</span>{' '}
+                  <span className="font-semibold text-purple-800">{assignModalLead.requirement || assignModalLead.problem}</span>
+                </div>
+              )}
             </div>
 
             <div>

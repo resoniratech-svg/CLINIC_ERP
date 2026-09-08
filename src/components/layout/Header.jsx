@@ -29,8 +29,8 @@ export const Header = ({ onToggleSidebar }) => {
       </div>
 
       <div className="flex items-center gap-3 lg:gap-5">
-        {/* Super Admin Badge with Blue/Red Gradient */}
-        <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-blue-600 to-red-600 text-white text-[11px] font-bold shadow-xs">
+        {/* Super Admin Badge */}
+        <div className="hidden sm:flex items-center gap-1.5 px-3.5 py-1 rounded-full bg-blue-600 text-white text-[11px] font-extrabold shadow-xs tracking-wide">
           <ShieldCheck className="w-3.5 h-3.5" />
           <span>SUPER ADMIN</span>
         </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { targetsApi, doctorsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
@@ -19,7 +19,10 @@ import {
   DollarSign,
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  ChevronDown,
+  X,
+  Check
 } from 'lucide-react';
 
 export const DoctorPerformancePage = () => {
@@ -154,6 +157,151 @@ export const DoctorPerformancePage = () => {
   const getCleanDocName = (name) => {
     if (!name) return 'Doctor';
     return name.startsWith('Dr.') ? name : `Dr. ${name}`;
+  };
+
+  const SearchableQuotaDoctorSelect = ({ doctors, value, onChange }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const [search, setSearch] = useState('');
+    const dropdownRef = useRef(null);
+    const searchInputRef = useRef(null);
+
+    useEffect(() => {
+      const handleClickOutside = (e) => {
+        if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+          setIsOpen(false);
+        }
+      };
+      if (isOpen) document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [isOpen]);
+
+    useEffect(() => {
+      if (isOpen && searchInputRef.current) searchInputRef.current.focus();
+    }, [isOpen]);
+
+    const filteredDoctors = doctors.filter((d) => {
+      if (!search.trim()) return true;
+      const q = search.toLowerCase().trim();
+      return (
+        d.full_name?.toLowerCase().includes(q) ||
+        d.specialization?.toLowerCase().includes(q) ||
+        d.doctor_id?.toString().includes(q)
+      );
+    });
+
+    const selectedDoctor = doctors.find((d) => String(d.doctor_id) === String(value));
+
+    return (
+      <div className="relative" ref={dropdownRef}>
+        <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+          Select Active Doctor *
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setIsOpen(!isOpen);
+            setSearch('');
+          }}
+          className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white font-medium text-slate-700 hover:border-slate-400 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-colors cursor-pointer text-left shadow-2xs"
+        >
+          <span className="truncate">
+            {selectedDoctor
+              ? `${getCleanDocName(selectedDoctor.full_name)} (${selectedDoctor.specialization || 'General'})`
+              : '-- Select Active Doctor --'}
+          </span>
+          <div className="flex items-center gap-1 shrink-0 text-slate-400">
+            {value && (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChange('');
+                  setIsOpen(false);
+                }}
+                title="Clear doctor selection"
+                className="hover:text-red-500 p-0.5 rounded cursor-pointer transition-colors"
+              >
+                <X className="w-3.5 h-3.5" />
+              </span>
+            )}
+            <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`} />
+          </div>
+        </button>
+
+        {isOpen && (
+          <div className="absolute left-0 right-0 mt-1 w-full bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden animate-in fade-in duration-100">
+            <div className="p-2 border-b border-slate-100 bg-slate-50/70">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search doctor by name or specialization..."
+                  className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="max-h-60 overflow-y-auto divide-y divide-slate-50 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  onChange('');
+                  setIsOpen(false);
+                }}
+                className={`w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-blue-50/60 transition-colors cursor-pointer ${
+                  !value ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-500'
+                }`}
+              >
+                <span>-- Select Active Doctor --</span>
+                {!value && <Check className="w-3.5 h-3.5 text-blue-600" />}
+              </button>
+
+              {filteredDoctors.length === 0 ? (
+                <div className="p-4 text-center text-xs text-slate-400">
+                  No doctors found matching "{search}"
+                </div>
+              ) : (
+                filteredDoctors.map((d) => {
+                  const isSelected = String(d.doctor_id) === String(value);
+                  return (
+                    <button
+                      key={d.doctor_id}
+                      type="button"
+                      onClick={() => {
+                        onChange(d.doctor_id);
+                        setIsOpen(false);
+                      }}
+                      className={`w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-blue-50/60 transition-colors cursor-pointer ${
+                        isSelected ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-700'
+                      }`}
+                    >
+                      <div className="truncate pr-2">
+                        <div className="truncate font-medium">{getCleanDocName(d.full_name)}</div>
+                        {d.specialization && (
+                          <div className="text-[10px] text-slate-400 truncate">{d.specialization}</div>
+                        )}
+                      </div>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const filteredPerf = performance.filter((p) =>
@@ -305,24 +453,11 @@ export const DoctorPerformancePage = () => {
           </h3>
 
           <form onSubmit={handleDocTargetSubmit} className="space-y-4 text-xs text-slate-700">
-            <div>
-              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
-                Select Active Doctor *
-              </label>
-              <select
-                required
-                value={selectedDocId}
-                onChange={(e) => setSelectedDocId(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              >
-                <option value="">-- Select Active Doctor --</option>
-                {doctors.map((d) => (
-                  <option key={d.doctor_id} value={d.doctor_id}>
-                    {getCleanDocName(d.full_name)} ({d.specialization})
-                  </option>
-                ))}
-              </select>
-            </div>
+            <SearchableQuotaDoctorSelect
+              doctors={doctors}
+              value={selectedDocId}
+              onChange={setSelectedDocId}
+            />
 
             <div>
               <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">

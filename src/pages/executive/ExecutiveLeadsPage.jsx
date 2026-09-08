@@ -117,7 +117,8 @@ export const ExecutiveLeadsPage = () => {
         gender: newLeadForm.gender,
         village: newLeadForm.village.trim() || null,
         mandal: newLeadForm.mandal.trim() || null,
-        requirement: newLeadForm.requirement.trim() || 'General Consultation Request',
+        requirement: newLeadForm.requirement.trim() || null,
+        source: newLeadForm.lead_source === 'outbound' ? 'Outbound Call' : 'Inbound Call',
         lead_source: newLeadForm.lead_source,
         campaign: newLeadForm.campaign.trim() || null,
         remarks: newLeadForm.remarks.trim() || null
@@ -289,6 +290,11 @@ export const ExecutiveLeadsPage = () => {
                       <div className="text-[10px] text-slate-400">
                         {lead.village || lead.mandal ? `${lead.village || ''} ${lead.mandal ? `(${lead.mandal})` : ''}` : '—'}
                       </div>
+                      {(lead.requirement || lead.problem) && (
+                        <div className="mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200 text-[10px] font-medium">
+                          <span className="font-bold">Ailment:</span> {lead.requirement || lead.problem}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4 font-mono font-bold text-slate-800">
                       {lead.mobile_number}

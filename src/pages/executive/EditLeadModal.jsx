@@ -88,9 +88,9 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
           age: formData.age ? parseInt(formData.age) : null,
           gender: formData.gender,
           village: formData.village.trim() || null,
-          mandal: formData.mandal.trim() || null,
           campaign: formData.campaign.trim() || null,
-          source: formData.requirement.trim() || null,
+          requirement: formData.requirement.trim() || null,
+          source: lead.source || 'Inbound Call',
           status: formData.status,
           remarks: formData.remarks.trim() || null
         };

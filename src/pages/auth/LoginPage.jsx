@@ -27,11 +27,21 @@ export const LoginPage = () => {
     } else if (userRole === 'executive') {
       showToast(`Welcome back, ${user.full_name || 'Executive'}!`, 'success');
       navigate('/executive/dashboard');
+    } else if (userRole === 'doctor') {
+      showToast(`Welcome back, Dr. ${user.full_name || 'Doctor'}!`, 'success');
+      navigate('/doctor/dashboard');
+    } else if (userRole === 'pro_manager') {
+      showToast(`Welcome back, ${user.full_name || 'PRO Manager'}!`, 'success');
+      navigate('/pro/dashboard');
+    } else if (userRole === 'pharmacy') {
+      showToast(`Welcome back, ${user.full_name || 'Pharmacist'}!`, 'success');
+      navigate('/pharmacy/dashboard');
     } else {
       showToast(`Authenticated as ${user?.full_name || 'Super Admin'}`, 'success');
       navigate('/dashboard');
     }
   };
+
 
   const handleSubmit = async (e) => {
     e.preventDefault();

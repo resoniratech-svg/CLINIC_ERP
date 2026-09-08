@@ -1,9 +1,11 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ReceptionistSidebar } from './ReceptionistSidebar';
 import { ReceptionistHeader } from './ReceptionistHeader';
 import { LoadingSpinner } from '../common/LoadingSpinner';
+
+import { ReceptionistNotificationToast } from '../notifications/ReceptionistNotificationToast';
 
 export const ReceptionistLayout = () => {
   const { user, token, loading } = useAuth();
@@ -29,6 +31,9 @@ export const ReceptionistLayout = () => {
 
   return (
     <div className="min-h-screen bg-slate-50/70 flex flex-col">
+      {/* Real-time Executive -> Receptionist Notification Toast Stack */}
+      <ReceptionistNotificationToast />
+
       {/* Sidebar */}
       <ReceptionistSidebar
         isMobileOpen={isMobileOpen}

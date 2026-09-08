@@ -27,12 +27,13 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile, isOpen, onClose }) => {
   const mobileVisible = isMobileOpen !== undefined ? isMobileOpen : isOpen;
 
   const [openSections, setOpenSections] = useState({
-    users: true,
-    billing: true,
-    crm: true,
-    pharmacy: false,
-    settings: false,
-    logs: false,
+    users: location.pathname.startsWith('/users'),
+    billing: location.pathname.startsWith('/billing'),
+    crm: location.pathname.startsWith('/crm'),
+    pharmacy: location.pathname.startsWith('/pharmacy-master'),
+    settings: location.pathname.startsWith('/settings'),
+    logs: location.pathname.startsWith('/logs') || true,
+    targets: location.pathname.startsWith('/targets'),
   });
 
   const toggleSection = (sec) => {
@@ -277,10 +278,10 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile, isOpen, onClose }) => {
             </button>
             {openSections.pharmacy && (
               <div className="mt-1 space-y-0.5">
-                <NavLink to="/pharmacy" onClick={handleClose} className={subNavLinkClasses} end>
+                <NavLink to="/pharmacy-master/medicine-formularies" onClick={handleClose} className={subNavLinkClasses}>
                   Medicine Formularies
                 </NavLink>
-                <NavLink to="/pharmacy/stock" onClick={handleClose} className={subNavLinkClasses}>
+                <NavLink to="/pharmacy-master/stock" onClick={handleClose} className={subNavLinkClasses}>
                   Live Stock & Expiry
                 </NavLink>
               </div>

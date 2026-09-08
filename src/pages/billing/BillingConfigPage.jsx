@@ -1,14 +1,185 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { billingApi, doctorsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { Receipt, DollarSign, ShieldAlert, CheckCircle2, Percent, CreditCard, Stethoscope, ArrowUpRight } from 'lucide-react';
+import { Receipt, DollarSign, ShieldAlert, CheckCircle2, Percent, CreditCard, Stethoscope, ArrowUpRight, Search, ChevronDown, X, Check } from 'lucide-react';
+
+// Format doctor name cleanly without duplicate "Dr. Dr." prefix
+const formatDoctorName = (name) => {
+  if (!name) return '';
+  const trimmed = name.trim();
+  if (trimmed.toLowerCase().startsWith('dr.') || trimmed.toLowerCase().startsWith('dr ')) {
+    return trimmed;
+  }
+  return `Dr. ${trimmed}`;
+};
+
+// Searchable Doctor Select / Combobox Component
+const SearchableDoctorSelect = ({ doctors, value, onChange, label = 'Select Doctor *' }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const dropdownRef = useRef(null);
+  const searchInputRef = useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsOpen(false);
+      }
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  // Auto-focus search input when opened
+  useEffect(() => {
+    if (isOpen && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [isOpen]);
+
+  // Filter doctors based on search text
+  const filteredDoctors = doctors.filter((d) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase().trim();
+    const nameMatch = d.full_name?.toLowerCase().includes(q);
+    const specMatch = d.specialization?.toLowerCase().includes(q);
+    const idMatch = d.doctor_id?.toString().includes(q);
+    return nameMatch || specMatch || idMatch;
+  });
+
+  const selectedDoctor = doctors.find((d) => String(d.doctor_id) === String(value));
+
+  return (
+    <div className="relative" ref={dropdownRef}>
+      <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+        {label}
+      </label>
+
+      {/* Trigger Button */}
+      <button
+        type="button"
+        onClick={() => {
+          setIsOpen(!isOpen);
+          setSearch('');
+        }}
+        className="w-full flex items-center justify-between px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white font-medium text-slate-700 hover:border-slate-400 focus:ring-2 focus:ring-blue-500 focus:outline-none transition-colors cursor-pointer text-left shadow-2xs"
+      >
+        <span className="truncate">
+          {selectedDoctor
+            ? `${formatDoctorName(selectedDoctor.full_name)} (${selectedDoctor.specialization || 'General'})`
+            : '-- Select Doctor --'}
+        </span>
+        <div className="flex items-center gap-1 shrink-0 text-slate-400">
+          {value && (
+            <span
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange('');
+                setIsOpen(false);
+              }}
+              title="Clear doctor selection"
+              className="hover:text-red-500 p-0.5 rounded cursor-pointer transition-colors"
+            >
+              <X className="w-3.5 h-3.5" />
+            </span>
+          )}
+          <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-150 ${isOpen ? 'rotate-180' : ''}`} />
+        </div>
+      </button>
+
+      {/* Dropdown Menu with Search Option */}
+      {isOpen && (
+        <div className="absolute left-0 right-0 mt-1 w-full bg-white rounded-2xl border border-slate-200 shadow-xl z-50 overflow-hidden animate-in fade-in duration-100">
+          {/* Search Input inside Dropdown */}
+          <div className="p-2 border-b border-slate-100 bg-slate-50/70">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search doctor by name or specialization..."
+                className="w-full pl-8 pr-7 py-1.5 text-xs rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Doctors List */}
+          <div className="max-h-60 overflow-y-auto divide-y divide-slate-50 text-xs">
+            {/* Reset / Default Option */}
+            <button
+              type="button"
+              onClick={() => {
+                onChange('');
+                setIsOpen(false);
+              }}
+              className={`w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-blue-50/60 transition-colors cursor-pointer ${
+                !value ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-500'
+              }`}
+            >
+              <span>-- Select Doctor --</span>
+              {!value && <Check className="w-3.5 h-3.5 text-blue-600" />}
+            </button>
+
+            {filteredDoctors.length === 0 ? (
+              <div className="p-4 text-center text-xs text-slate-400">
+                No doctors found matching "{search}"
+              </div>
+            ) : (
+              filteredDoctors.map((d) => {
+                const isSelected = String(d.doctor_id) === String(value);
+                return (
+                  <button
+                    key={d.doctor_id}
+                    type="button"
+                    onClick={() => {
+                      onChange(d.doctor_id);
+                      setIsOpen(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-blue-50/60 transition-colors cursor-pointer ${
+                      isSelected ? 'bg-blue-50 font-bold text-blue-700' : 'text-slate-700'
+                    }`}
+                  >
+                    <div className="truncate pr-2">
+                      <div className="truncate font-medium">{formatDoctorName(d.full_name)}</div>
+                      {d.specialization && (
+                        <div className="text-[10px] text-slate-400 truncate">{d.specialization}</div>
+                      )}
+                    </div>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const BillingConfigPage = () => {
   const [fees, setFees] = useState([]);
   const [rules, setRules] = useState(null);
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  // Fee matrix table search
+  const [matrixSearch, setMatrixSearch] = useState('');
 
   // Fee modification form
   const [selectedDoctorId, setSelectedDoctorId] = useState('');
@@ -44,8 +215,7 @@ export const BillingConfigPage = () => {
     fetchData();
   }, []);
 
-  const handleDoctorChange = (e) => {
-    const docId = e.target.value;
+  const handleDoctorSelect = (docId) => {
     setSelectedDoctorId(docId);
     if (docId) {
       const doc = doctors.find((d) => String(d.doctor_id) === String(docId));
@@ -56,6 +226,12 @@ export const BillingConfigPage = () => {
           followup_consultation_fee: parseFloat(doc.followup_consultation_fee) || 200,
         });
       }
+    } else {
+      setFeeForm({
+        new_consultation_fee: 500,
+        renewal_consultation_fee: 300,
+        followup_consultation_fee: 200,
+      });
     }
   };
 
@@ -97,6 +273,16 @@ export const BillingConfigPage = () => {
     }
   };
 
+  // Filtered fee matrix for table
+  const filteredFees = fees.filter((f) => {
+    if (!matrixSearch.trim()) return true;
+    const q = matrixSearch.toLowerCase().trim();
+    const docMatch = f.doctor_name?.toLowerCase().includes(q);
+    const codeMatch = f.doctor_code?.toLowerCase().includes(q);
+    const typeMatch = f.appointment_type?.toLowerCase().includes(q);
+    return docMatch || codeMatch || typeMatch;
+  });
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200 shadow-2xs">
@@ -130,11 +316,25 @@ export const BillingConfigPage = () => {
           {/* Main Fees Table */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-white rounded-3xl border border-slate-200 shadow-2xs overflow-hidden">
-              <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-                <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Configured Consultation Fee Matrix
-                </h3>
-                <span className="text-[11px] text-slate-400 font-mono">{fees.length} active rates</span>
+              <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Configured Consultation Fee Matrix
+                  </h3>
+                  <span className="text-[11px] text-slate-400 font-mono">{filteredFees.length} active rates</span>
+                </div>
+
+                {/* Search option for fee matrix */}
+                <div className="relative min-w-[200px]">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={matrixSearch}
+                    onChange={(e) => setMatrixSearch(e.target.value)}
+                    placeholder="Search doctor or type..."
+                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-800"
+                  />
+                </div>
               </div>
 
               <div className="overflow-x-auto">
@@ -149,10 +349,10 @@ export const BillingConfigPage = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 text-xs">
-                    {fees.map((f) => (
+                    {filteredFees.map((f) => (
                       <tr key={f.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3 px-4 font-bold text-slate-900">
-                          <div>Dr. {f.doctor_name}</div>
+                          <div>{formatDoctorName(f.doctor_name)}</div>
                           {f.doctor_code && (
                             <div className="text-[10px] text-slate-400 font-mono font-normal">
                               {f.doctor_code}
@@ -221,24 +421,13 @@ export const BillingConfigPage = () => {
               </h3>
 
               <form onSubmit={handleFeeSubmit} className="space-y-4 text-xs text-slate-700">
-                <div>
-                  <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
-                    Select Doctor *
-                  </label>
-                  <select
-                    required
-                    value={selectedDoctorId}
-                    onChange={handleDoctorChange}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                  >
-                    <option value="">-- Select Doctor --</option>
-                    {doctors.map((d) => (
-                      <option key={d.doctor_id} value={d.doctor_id}>
-                        Dr. {d.full_name} ({d.specialization})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Searchable Doctor Dropdown */}
+                <SearchableDoctorSelect
+                  doctors={doctors}
+                  value={selectedDoctorId}
+                  onChange={handleDoctorSelect}
+                  label="Select Doctor *"
+                />
 
                 <div>
                   <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
@@ -281,7 +470,7 @@ export const BillingConfigPage = () => {
 
                 <button
                   type="submit"
-                  disabled={savingFee}
+                  disabled={savingFee || !selectedDoctorId}
                   className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md shadow-blue-500/20 text-xs transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {savingFee ? 'Updating...' : 'Save Consultation Fees'}
@@ -310,3 +499,5 @@ export const BillingConfigPage = () => {
     </div>
   );
 };
+
+export default BillingConfigPage;

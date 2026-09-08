@@ -52,8 +52,21 @@ export const NewRegistrationPage = () => {
     age: location.state?.age !== undefined && location.state?.age !== null ? String(location.state.age) : '',
     gender: location.state?.gender || 'male',
     village_mandal: location.state?.village || location.state?.village_mandal || location.state?.mandal || '',
-    ailment_reason: location.state?.reason || location.state?.ailment_reason || '',
-    lead_source: location.state?.leadSource || 'walkin',
+    ailment_reason: (() => {
+      const explicitAilment = location.state?.ailment_reason || location.state?.requirement || '';
+      if (explicitAilment) return explicitAilment;
+      const channelKeywords = [
+        'inbound call', 'outbound call', 'excel import', 'import from excel',
+        'outbound excel', 'call center outreach', 'inbound consultation enquiry',
+        'call center executive lead', 'general consultation request', 'phone inquiry', 'phone enquiry'
+      ];
+      const fallbackReason = location.state?.reason || '';
+      if (fallbackReason && !channelKeywords.includes(fallbackReason.toLowerCase().trim())) {
+        return fallbackReason;
+      }
+      return '';
+    })(),
+    lead_source: (location.state?.leadId || location.state?.leadSource === 'executive_lead') ? 'executive_lead' : (location.state?.leadSource || 'walkin'),
     lead_id: location.state?.leadId || null,
     referring_employee_id: '',
     referring_patient_name: '',
@@ -272,6 +285,7 @@ export const NewRegistrationPage = () => {
         village_mandal: formData.village_mandal.trim() || null,
         ailment_reason: formData.ailment_reason.trim() || null,
         lead_source: formData.lead_source,
+        source: formData.lead_source === 'executive_lead' ? 'Call Center Executive Lead' : (formData.lead_source === 'employee_referral' ? 'Employee Referral' : (formData.lead_source === 'patient_referral' ? 'Patient Referral' : formData.lead_source)),
         lead_id: formData.lead_id || null,
         referring_employee_id: formData.lead_source === 'employee_referral' && selectedEmp ? selectedEmp.user_id : null,
         referring_patient_id: formData.lead_source === 'patient_referral' && selectedReferringPt ? selectedReferringPt.patient_id : null,

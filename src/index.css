@@ -1,8 +1,17 @@
 @import "tailwindcss";
 
+@theme {
+  --color-brand-blue: #1565C0;
+  --color-brand-blue-hover: #0D47A1;
+  --color-brand-blue-light: #E3F2FD;
+  --color-brand-red: #D32F2F;
+  --color-brand-red-hover: #B71C1C;
+  --color-brand-red-light: #FFEBEE;
+}
+
 @layer base {
   body {
-    @apply bg-slate-50 text-slate-900 font-sans antialiased selection:bg-teal-500 selection:text-white min-h-screen;
+    @apply bg-slate-50 text-slate-900 font-sans antialiased selection:bg-[#1565C0] selection:text-white min-h-screen;
     margin: 0;
   }
 }
@@ -25,4 +34,46 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* WeCare Brand Theme Utilities */
+.bg-brand-blue {
+  background-color: #1565C0;
+}
+.bg-brand-red {
+  background-color: #D32F2F;
+}
+.text-brand-blue {
+  color: #1565C0;
+}
+.text-brand-red {
+  color: #D32F2F;
+}
+.border-brand-blue {
+  border-color: #1565C0;
+}
+.border-brand-red {
+  border-color: #D32F2F;
+}
+
+/* Blue-to-Red Brand Gradient for Primary CTAs */
+.btn-brand-gradient {
+  background: linear-gradient(135deg, #1565C0 0%, #D32F2F 100%) !important;
+  color: #ffffff !important;
+  transition: all 0.2s ease-in-out;
+}
+.btn-brand-gradient:hover {
+  background: linear-gradient(135deg, #0D47A1 0%, #B71C1C 100%) !important;
+  box-shadow: 0 4px 14px rgba(211, 47, 47, 0.3) !important;
+}
+
+/* Input Focus States */
+.pro-input:focus,
+input:focus:not([type="checkbox"]):not([type="radio"]),
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #1565C0 !important;
+  box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.15) !important;
+}
+
 

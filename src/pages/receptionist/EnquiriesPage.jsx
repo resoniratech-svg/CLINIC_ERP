@@ -267,8 +267,9 @@ export const EnquiriesPage = () => {
                                 patientName: enq.lead_name,
                                 age: enq.age,
                                 gender: enq.gender,
-                                village: enq.village || enq.mandal,
-                                reason: enq.campaign || enq.remarks,
+                                ailment_reason: enq.requirement || enq.campaign || enq.remarks || '',
+                                requirement: enq.requirement || '',
+                                reason: enq.requirement || enq.campaign || enq.remarks || '',
                               },
                             })
                           }

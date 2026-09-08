@@ -7,6 +7,37 @@ import { ToastProvider } from './context/ToastContext';
 import { SuperAdminLayout } from './components/layout/SuperAdminLayout';
 import { ReceptionistLayout } from './components/layout/ReceptionistLayout';
 import { ExecutiveLayout } from './components/layout/ExecutiveLayout';
+import { DoctorLayout } from './components/layout/DoctorLayout';
+import { PROLayout } from './components/layout/PROLayout';
+import { PharmacyLayout } from './components/layout/PharmacyLayout';
+
+// PRO Pages
+import { PRODashboard } from './pages/pro/PRODashboard';
+import { PROPatientQueuePage } from './pages/pro/PROPatientQueuePage';
+import { PROPatientOverviewPage } from './pages/pro/PROPatientOverviewPage';
+import { PROPackagesPage } from './pages/pro/PROPackagesPage';
+import { PROPrescriptionPage } from './pages/pro/PROPrescriptionPage';
+import { PROBillingPage } from './pages/pro/PROBillingPage';
+import { PROPaymentsPage } from './pages/pro/PROPaymentsPage';
+import { PROAccountantPage } from './pages/pro/PROAccountantPage';
+import { PROCRMPage } from './pages/pro/PROCRMPage';
+import { PROTasksPage } from './pages/pro/PROTasksPage';
+import { PROFeedbackPage } from './pages/pro/PROFeedbackPage';
+import { PROComplaintsPage } from './pages/pro/PROComplaintsPage';
+import { PROProfilePage } from './pages/pro/PROProfilePage';
+
+// Doctor Pages
+import { DoctorDashboard } from './pages/doctor/DoctorDashboard';
+import { PatientQueuePage } from './pages/doctor/PatientQueuePage';
+import { DoctorAppointmentsPage } from './pages/doctor/DoctorAppointmentsPage';
+import { DoctorPatientsPage } from './pages/doctor/DoctorPatientsPage';
+import { ConsultationPage } from './pages/doctor/ConsultationPage';
+import { ConsultationHistoryPage } from './pages/doctor/ConsultationHistoryPage';
+import { DoctorPrescriptionsPage } from './pages/doctor/DoctorPrescriptionsPage';
+import { TreatmentPlansPage } from './pages/doctor/TreatmentPlansPage';
+import { DoctorTargetsPage } from './pages/doctor/DoctorTargetsPage';
+import { DoctorLeavesPage } from './pages/doctor/DoctorLeavesPage';
+import { DoctorProfilePage } from './pages/doctor/DoctorProfilePage';
 
 // Auth Pages
 import { LoginPage } from './pages/auth/LoginPage';
@@ -40,8 +71,22 @@ import { CRMManagementPage } from './pages/crm/CRMManagementPage';
 import { AcqPatientsPage } from './pages/crm/AcqPatientsPage';
 import { OcNrPatientsPage } from './pages/crm/OcNrPatientsPage';
 import { CallCenterPage } from './pages/callcenter/CallCenterPage';
+// Super Admin Pharmacy Pages
 import { MedicineMasterPage } from './pages/pharmacy/MedicineMasterPage';
 import { StockMonitoringPage } from './pages/pharmacy/StockMonitoringPage';
+
+// Dedicated Pharmacy Portal Pages
+import { PharmacyDashboard } from './pages/pharmacy/PharmacyDashboard';
+import { PrescriptionQueuePage } from './pages/pharmacy/PrescriptionQueuePage';
+import { ProcessPrescriptionPage } from './pages/pharmacy/ProcessPrescriptionPage';
+import { PharmacyDispensingHubPage } from './pages/pharmacy/PharmacyDispensingHubPage';
+import { PharmacyInventoryHubPage } from './pages/pharmacy/PharmacyInventoryHubPage';
+import { StockTransactionsPage } from './pages/pharmacy/StockTransactionsPage';
+import { MedicineReturnsPage } from './pages/pharmacy/MedicineReturnsPage';
+import { StockAdjustmentsPage } from './pages/pharmacy/StockAdjustmentsPage';
+import { PrescriptionClarificationsPage } from './pages/pharmacy/PrescriptionClarificationsPage';
+import { PharmacyPatientsPage } from './pages/pharmacy/PharmacyPatientsPage';
+import { PharmacyProfilePage } from './pages/pharmacy/PharmacyProfilePage';
 import { ReportsPage } from './pages/reports/ReportsPage';
 import { RolesPermissionsPage } from './pages/settings/RolesPermissionsPage';
 import { HospitalSettingsPage } from './pages/settings/HospitalSettingsPage';
@@ -111,9 +156,11 @@ export default function App() {
             <Route path="callcenter/import" element={<CallCenterPage />} />
             <Route path="callcenter/incentives" element={<CallCenterPage />} />
 
-            {/* Pharmacy */}
-            <Route path="pharmacy" element={<MedicineMasterPage />} />
-            <Route path="pharmacy/stock" element={<StockMonitoringPage />} />
+            {/* Pharmacy Master (Super Admin) */}
+            <Route path="pharmacy-master" element={<Navigate to="/pharmacy-master/medicine-formularies" replace />} />
+            <Route path="pharmacy-master/medicine-formularies" element={<MedicineMasterPage />} />
+            <Route path="pharmacy-master/medicines" element={<Navigate to="/pharmacy-master/medicine-formularies" replace />} />
+            <Route path="pharmacy-master/stock" element={<StockMonitoringPage />} />
 
             {/* Reports */}
             <Route path="reports" element={<ReportsPage />} />
@@ -196,6 +243,102 @@ export default function App() {
 
             {/* Profile */}
             <Route path="profile" element={<ExecutiveProfilePage />} />
+          </Route>
+
+
+          {/* Protected Doctor Portal Routes */}
+          <Route path="/doctor" element={<DoctorLayout />}>
+            <Route index element={<Navigate to="/doctor/dashboard" replace />} />
+            <Route path="dashboard" element={<DoctorDashboard />} />
+
+            {/* Consultation Workflow */}
+            <Route path="queue" element={<PatientQueuePage />} />
+            <Route path="appointments" element={<DoctorAppointmentsPage />} />
+            <Route path="consultation/:id" element={<ConsultationPage />} />
+
+            {/* Patients */}
+            <Route path="patients" element={<DoctorPatientsPage />} />
+
+            {/* Clinical Records */}
+            <Route path="consultations" element={<ConsultationHistoryPage />} />
+            <Route path="prescriptions" element={<DoctorPrescriptionsPage />} />
+            <Route path="treatment-plans" element={<TreatmentPlansPage />} />
+
+            {/* Targets (view-only) */}
+            <Route path="targets" element={<DoctorTargetsPage />} />
+
+            {/* Leaves */}
+            <Route path="leaves" element={<DoctorLeavesPage />} />
+
+            {/* Profile */}
+            <Route path="profile" element={<DoctorProfilePage />} />
+          </Route>
+
+          {/* Protected PRO / Manager Portal Routes */}
+          <Route path="/pro" element={<PROLayout />}>
+            <Route index element={<Navigate to="/pro/dashboard" replace />} />
+            <Route path="dashboard" element={<PRODashboard />} />
+            <Route path="queue" element={<PROPatientQueuePage />} />
+            <Route path="patients" element={<PROPatientOverviewPage />} />
+            <Route path="patients/:id" element={<PROPatientOverviewPage />} />
+            <Route path="counselling" element={<Navigate to="/pro/queue" replace />} />
+            <Route path="packages" element={<PROPackagesPage />} />
+            <Route path="prescriptions" element={<PROPrescriptionPage />} />
+            <Route path="prescriptions/:id" element={<PROPrescriptionPage />} />
+            <Route path="prescriptions/:id/modify" element={<PROPrescriptionPage defaultEdit={true} />} />
+            <Route path="billing" element={<Navigate to="/pro/billing/new" replace />} />
+            <Route path="billing/new" element={<PROBillingPage />} />
+            <Route path="billing/pending" element={<PROBillingPage />} />
+            <Route path="billing/paid" element={<PROBillingPage />} />
+            <Route path="billing/partial-due" element={<PROBillingPage />} />
+            <Route path="billing/history" element={<PROBillingPage />} />
+            <Route path="payments" element={<Navigate to="/pro/payments/today" replace />} />
+            <Route path="payments/today" element={<PROPaymentsPage />} />
+            <Route path="payments/due-collection" element={<PROPaymentsPage />} />
+            <Route path="payments/history" element={<PROPaymentsPage />} />
+            <Route path="accountant" element={<Navigate to="/pro/accountant/daily-summary" replace />} />
+            <Route path="accountant/daily-summary" element={<PROAccountantPage />} />
+            <Route path="accountant/opening-balance" element={<PROAccountantPage />} />
+            <Route path="accountant/cash-revenue" element={<PROAccountantPage />} />
+            <Route path="accountant/expenditure" element={<PROAccountantPage />} />
+            <Route path="accountant/closing-balance" element={<PROAccountantPage />} />
+            <Route path="accountant/deposit" element={<PROAccountantPage />} />
+            <Route path="accountant/grand-total" element={<PROAccountantPage />} />
+            <Route path="crm" element={<Navigate to="/pro/crm/calls" replace />} />
+            <Route path="crm/calls" element={<PROCRMPage />} />
+            <Route path="crm/followups" element={<PROCRMPage />} />
+            <Route path="crm/renewals" element={<PROCRMPage />} />
+            <Route path="crm/dues" element={<PROCRMPage />} />
+            <Route path="crm/acq" element={<PROCRMPage />} />
+            <Route path="crm/ocnr" element={<PROCRMPage />} />
+            <Route path="tasks" element={<PROTasksPage />} />
+            <Route path="feedback" element={<PROFeedbackPage />} />
+            <Route path="complaints" element={<PROComplaintsPage />} />
+            <Route path="profile" element={<PROProfilePage />} />
+          </Route>
+
+          {/* Protected Pharmacy Portal Routes */}
+          <Route path="/pharmacy" element={<PharmacyLayout />}>
+            <Route index element={<Navigate to="/pharmacy/dashboard" replace />} />
+            <Route path="dashboard" element={<PharmacyDashboard />} />
+            <Route path="queue" element={<PrescriptionQueuePage />} />
+            <Route path="prescriptions/:id/process" element={<ProcessPrescriptionPage />} />
+
+            {/* Dispensing Hub */}
+            <Route path="dispensing" element={<Navigate to="/pharmacy/dispensing/pending" replace />} />
+            <Route path="dispensing/:tab" element={<PharmacyDispensingHubPage />} />
+
+            {/* Inventory Hub */}
+            <Route path="inventory" element={<Navigate to="/pharmacy/inventory/medicines" replace />} />
+            <Route path="inventory/:tab" element={<PharmacyInventoryHubPage />} />
+
+            {/* Auxiliary Operations */}
+            <Route path="transactions" element={<StockTransactionsPage />} />
+            <Route path="returns" element={<MedicineReturnsPage />} />
+            <Route path="adjustments" element={<StockAdjustmentsPage />} />
+            <Route path="clarifications" element={<PrescriptionClarificationsPage />} />
+            <Route path="patients" element={<PharmacyPatientsPage />} />
+            <Route path="profile" element={<PharmacyProfilePage />} />
           </Route>
 
           {/* Catch-all */}

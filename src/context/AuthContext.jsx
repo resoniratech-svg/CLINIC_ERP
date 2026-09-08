@@ -1,4 +1,4 @@
-﻿import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { authApi } from '../api';
 
 const AuthContext = createContext(null);
@@ -43,10 +43,19 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const updateUser = (updatedFields) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, ...updatedFields };
+      localStorage.setItem('clinic_user', JSON.stringify(next));
+      return next;
+    });
+  };
+
   const isSuperAdmin = user?.role === 'super_admin';
 
   return (
-    <AuthContext.Provider value={{ token, user, isSuperAdmin, loading, login, logout }}>
+    <AuthContext.Provider value={{ token, user, isSuperAdmin, loading, login, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

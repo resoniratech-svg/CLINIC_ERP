@@ -159,6 +159,18 @@ export const LeadDetailsModal = ({ isOpen, onClose, leadId, onEditLead }) => {
             </div>
           </div>
 
+          {/* Requirement / Ailment Reason */}
+          {(lead.requirement || lead.problem) && (
+            <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block mb-0.5">
+                Requirement / Medical Ailment
+              </span>
+              <p className="text-xs font-semibold text-amber-950">
+                {lead.requirement || lead.problem}
+              </p>
+            </div>
+          )}
+
           {/* Call History linked with this lead */}
           <div className="space-y-2">
             <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">

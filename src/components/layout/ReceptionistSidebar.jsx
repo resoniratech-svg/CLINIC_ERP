@@ -127,11 +127,8 @@ export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
             </button>
             {openSections.registration && (
               <div className="pl-6 pt-1 space-y-0.5">
-                <NavLink to="/receptionist/patients/register" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>+ New Patient Form</span>
-                </NavLink>
                 <NavLink to="/receptionist/patients" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>🔍 Search & Overview</span>
+                  <span>👤 Patients</span>
                 </NavLink>
                 <NavLink to="/receptionist/renewals" className={subNavLinkClasses} onClick={onCloseMobile}>
                   <span>🔄 Registration Renewals</span>

@@ -97,8 +97,8 @@ export const InboundCallsPage = () => {
         age: leadForm.age ? parseInt(leadForm.age) : null,
         gender: leadForm.gender,
         village: leadForm.village.trim() || null,
-        mandal: leadForm.mandal.trim() || null,
-        requirement: leadForm.requirement.trim() || 'Inbound Consultation Enquiry',
+        requirement: leadForm.requirement.trim() || null,
+        source: 'Inbound Call',
         lead_source: 'inbound',
         remarks: leadForm.remarks.trim() || 'Inbound phone caller lead'
       };
