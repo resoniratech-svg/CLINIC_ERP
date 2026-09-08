@@ -862,7 +862,7 @@ async function getMedicines(req, res) {
     const { search, category, status } = req.query;
     let query = `
       SELECT mm.*,
-             (SELECT SUM(ms.quantity) FROM medicine_stock ms WHERE ms.medicine_id = mm.id) as quantity
+             COALESCE((SELECT SUM(ms.quantity) FROM medicine_stock ms WHERE ms.medicine_id = mm.id), 0)::integer as quantity
       FROM medicine_master mm
       WHERE 1=1
     `;
@@ -1071,8 +1071,13 @@ async function updateMedicine(req, res) {
   const client = await db.pool.connect();
   try {
     const medId = parseInt(req.params.id, 10);
+    if (isNaN(medId)) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid medicine ID'));
+    }
+
     const { 
       medicine_name, 
+      medicineName,
       strength, 
       potency, 
       quantity, 
@@ -1095,8 +1100,11 @@ async function updateMedicine(req, res) {
     }
     const current = currentRes.rows[0];
 
-    const newName = (medicine_name !== undefined && medicine_name !== null ? medicine_name : current.medicine_name).trim();
-    const newStrength = ((strength || potency) !== undefined && (strength || potency) !== null ? (strength || potency) : current.strength).trim();
+    const rawName = medicine_name !== undefined ? medicine_name : (medicineName !== undefined ? medicineName : current.medicine_name);
+    const rawStrength = strength !== undefined ? strength : (potency !== undefined ? potency : current.strength);
+
+    const newName = (rawName !== null && rawName !== undefined ? String(rawName).trim() : '');
+    const newStrength = (rawStrength !== null && rawStrength !== undefined ? String(rawStrength).trim() : '');
 
     if (!newName) {
       await client.query('ROLLBACK');
@@ -1118,12 +1126,16 @@ async function updateMedicine(req, res) {
     }
 
     const branchId = req.user?.branch_id || 1;
+    const userId = req.user?.user_id || 1;
 
-    // 2. Check collision with ANOTHER active medicine in the formulary
+    // 2. Check collision with ANOTHER active medicine in the formulary (case-insensitive, normalized whitespace)
     const collisionCheck = await client.query(
       `SELECT * FROM medicine_master 
-       WHERE LOWER(TRIM(medicine_name)) = LOWER(TRIM($1)) 
-         AND LOWER(TRIM(strength)) = LOWER(TRIM($2)) 
+       WHERE LOWER(REGEXP_REPLACE(TRIM(medicine_name), '\\s+', ' ', 'g')) = LOWER(REGEXP_REPLACE(TRIM($1), '\\s+', ' ', 'g')) 
+         AND (
+           LOWER(REGEXP_REPLACE(TRIM(strength), '\\s+', '', 'g')) = LOWER(REGEXP_REPLACE(TRIM($2), '\\s+', '', 'g'))
+           OR LOWER(REGEXP_REPLACE(TRIM(strength), '\\s+', ' ', 'g')) = LOWER(REGEXP_REPLACE(TRIM($2), '\\s+', ' ', 'g'))
+         )
          AND id != $3 
          AND status != 'deleted'
        ORDER BY id ASC
@@ -1136,6 +1148,53 @@ async function updateMedicine(req, res) {
       const targetMed = collisionCheck.rows[0];
       const sourceId = current.id;
       const targetId = targetMed.id;
+
+      // If user explicitly modified the quantity in the edit form, adjust source's stock before consolidation
+      if (parsedQty !== undefined) {
+        const curSourceStockRes = await client.query(
+          `SELECT COALESCE(SUM(quantity), 0) as total FROM medicine_stock WHERE medicine_id = $1`,
+          [sourceId]
+        );
+        const curSourceStock = parseInt(curSourceStockRes.rows[0].total, 10);
+        const diff = parsedQty - curSourceStock;
+
+        if (diff > 0) {
+          const batchNum = `INIT-${sourceId}`;
+          await client.query(`
+            INSERT INTO medicine_stock (
+              medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+            ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+            ON CONFLICT (medicine_id, batch_number)
+            DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+          `, [sourceId, batchNum, diff, branchId]);
+
+          await client.query(`
+            INSERT INTO stock_transactions (
+              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+            ) VALUES ($1, 'in', $2, $3, 'Quantity adjusted prior to merge', $4, $5)
+          `, [sourceId, diff, batchNum, userId, branchId]);
+        } else if (diff < 0) {
+          let remaining = Math.abs(diff);
+          const sourceBatches = await client.query(
+            `SELECT id, quantity, batch_number FROM medicine_stock WHERE medicine_id = $1 AND quantity > 0 ORDER BY id DESC`,
+            [sourceId]
+          );
+          for (const b of sourceBatches.rows) {
+            if (remaining <= 0) break;
+            const deduct = Math.min(b.quantity, remaining);
+            await client.query(
+              `UPDATE medicine_stock SET quantity = quantity - $1, updated_at = now() WHERE id = $2`,
+              [deduct, b.id]
+            );
+            await client.query(`
+              INSERT INTO stock_transactions (
+                medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+              ) VALUES ($1, 'out', $2, $3, 'Quantity adjusted prior to merge', $4, $5)
+            `, [sourceId, deduct, b.batch_number || `INIT-${sourceId}`, userId, branchId]);
+            remaining -= deduct;
+          }
+        }
+      }
 
       // Handle stock migration from source to target
       const sourceStocks = await client.query(
@@ -1155,11 +1214,14 @@ async function updateMedicine(req, res) {
             `UPDATE medicine_stock SET quantity = quantity + $1, updated_at = now() WHERE id = $2`,
             [sStock.quantity, targetStockCheck.rows[0].id]
           );
+          // Re-link stock_id in dependent tables before deleting duplicate source batch
+          await client.query(`UPDATE stock_adjustments SET stock_id = $1 WHERE stock_id = $2`, [targetStockCheck.rows[0].id, sStock.id]);
+          await client.query(`UPDATE medicine_returns SET stock_id = $1 WHERE stock_id = $2`, [targetStockCheck.rows[0].id, sStock.id]);
           await client.query(`DELETE FROM medicine_stock WHERE id = $1`, [sStock.id]);
         } else {
           // Point batch directly to target medicine
           await client.query(
-            `UPDATE medicine_stock SET medicine_id = $1 WHERE id = $2`,
+            `UPDATE medicine_stock SET medicine_id = $1, updated_at = now() WHERE id = $2`,
             [targetId, sStock.id]
           );
         }
@@ -1170,51 +1232,6 @@ async function updateMedicine(req, res) {
       await client.query(`UPDATE stock_transactions SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
       await client.query(`UPDATE medicine_returns SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
       await client.query(`UPDATE stock_adjustments SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
-
-      // If user provided a specific quantity on the edit form, adjust target stock to match
-      if (parsedQty !== undefined) {
-        const curStockRes = await client.query(
-          `SELECT COALESCE(SUM(quantity), 0) as total FROM medicine_stock WHERE medicine_id = $1`,
-          [targetId]
-        );
-        const curStock = parseInt(curStockRes.rows[0].total, 10);
-        const diff = parsedQty - curStock;
-
-        if (diff !== 0) {
-          const batchNum = `INIT-${targetId}`;
-          if (diff > 0) {
-            await client.query(`
-              INSERT INTO medicine_stock (
-                medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
-              ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
-              ON CONFLICT (medicine_id, batch_number)
-              DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
-            `, [targetId, batchNum, diff, branchId]);
-
-            await client.query(`
-              INSERT INTO stock_transactions (
-                medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
-              ) VALUES ($1, 'in', $2, $3, 'Quantity adjusted during medicine collision merge', $4, $5)
-            `, [targetId, diff, batchNum, req.user?.user_id, branchId]);
-          } else {
-            // Deduct diff (abs) from existing batch
-            const deduct = Math.abs(diff);
-            await client.query(`
-              UPDATE medicine_stock 
-              SET quantity = GREATEST(0, quantity - $1), updated_at = now() 
-              WHERE medicine_id = $2 AND quantity > 0
-              ORDER BY id DESC
-              LIMIT 1
-            `, [deduct, targetId]);
-
-            await client.query(`
-              INSERT INTO stock_transactions (
-                medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
-              ) VALUES ($1, 'out', $2, $3, 'Quantity adjusted during medicine collision merge', $4, $5)
-            `, [targetId, deduct, batchNum, req.user?.user_id, branchId]);
-          }
-        }
-      }
 
       // Soft delete the duplicate source medicine
       await client.query(
@@ -1233,7 +1250,7 @@ async function updateMedicine(req, res) {
         `SELECT SUM(quantity) as quantity FROM medicine_stock WHERE medicine_id = $1`,
         [targetId]
       );
-      const finalTargetQty = targetQtyRes.rows[0]?.quantity !== null ? parseInt(targetQtyRes.rows[0]?.quantity, 10) : null;
+      const finalTargetQty = targetQtyRes.rows[0]?.quantity !== null ? parseInt(targetQtyRes.rows[0]?.quantity, 10) : 0;
 
       const mergedResult = {
         ...targetUpdateRes.rows[0],
@@ -1276,11 +1293,11 @@ async function updateMedicine(req, res) {
     `, [
       newName, 
       newStrength, 
-      generic_name !== undefined ? (generic_name ? generic_name.trim() : null) : current.generic_name, 
+      generic_name !== undefined ? (generic_name ? String(generic_name).trim() : null) : current.generic_name, 
       medicine_type || current.medicine_type, 
       unit || current.unit, 
       category || current.category, 
-      manufacturer !== undefined ? (manufacturer ? manufacturer.trim() : null) : current.manufacturer, 
+      manufacturer !== undefined ? (manufacturer ? String(manufacturer).trim() : null) : current.manufacturer, 
       reorder_level !== undefined ? parseInt(reorder_level, 10) : current.reorder_level, 
       status || current.status, 
       medId
@@ -1312,20 +1329,27 @@ async function updateMedicine(req, res) {
             INSERT INTO stock_transactions (
               medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
             ) VALUES ($1, 'in', $2, $3, 'Quantity updated via formulary edit', $4, $5)
-          `, [medId, diff, batchNum, req.user?.user_id, branchId]);
+          `, [medId, diff, batchNum, userId, branchId]);
         } else {
-          const deduct = Math.abs(diff);
-          await client.query(`
-            UPDATE medicine_stock 
-            SET quantity = GREATEST(0, quantity - $1), updated_at = now() 
-            WHERE medicine_id = $2 AND quantity > 0
-          `, [deduct, medId]);
-
-          await client.query(`
-            INSERT INTO stock_transactions (
-              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
-            ) VALUES ($1, 'out', $2, $3, 'Quantity updated via formulary edit', $4, $5)
-          `, [medId, deduct, batchNum, req.user?.user_id, branchId]);
+          let remaining = Math.abs(diff);
+          const batches = await client.query(
+            `SELECT id, quantity, batch_number FROM medicine_stock WHERE medicine_id = $1 AND quantity > 0 ORDER BY id DESC`,
+            [medId]
+          );
+          for (const b of batches.rows) {
+            if (remaining <= 0) break;
+            const deduct = Math.min(b.quantity, remaining);
+            await client.query(
+              `UPDATE medicine_stock SET quantity = quantity - $1, updated_at = now() WHERE id = $2`,
+              [deduct, b.id]
+            );
+            await client.query(`
+              INSERT INTO stock_transactions (
+                medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+              ) VALUES ($1, 'out', $2, $3, 'Quantity updated via formulary edit', $4, $5)
+            `, [medId, deduct, b.batch_number || batchNum, userId, branchId]);
+            remaining -= deduct;
+          }
         }
       }
     }
@@ -1334,7 +1358,7 @@ async function updateMedicine(req, res) {
       `SELECT SUM(quantity) as quantity FROM medicine_stock WHERE medicine_id = $1`,
       [medId]
     );
-    updatedMed.quantity = finalQtyRes.rows[0]?.quantity !== null ? parseInt(finalQtyRes.rows[0]?.quantity, 10) : null;
+    updatedMed.quantity = finalQtyRes.rows[0]?.quantity !== null ? parseInt(finalQtyRes.rows[0]?.quantity, 10) : 0;
 
     await client.query('COMMIT');
 
