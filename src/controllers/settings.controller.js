@@ -204,6 +204,8 @@ async function updateProfile(req, res) {
       phone,
       branch_id,
       branchId,
+      branch_name,
+      branchName,
       department
     } = req.body;
 
@@ -265,7 +267,43 @@ async function updateProfile(req, res) {
     if (branchCheck.rows.length === 0) {
       return res.status(400).json(formatResponse(false, null, 'Selected branch is invalid or inactive. Please choose a valid active branch.'));
     }
-    const activeBranch = branchCheck.rows[0];
+    let activeBranch = branchCheck.rows[0];
+    const oldBranchName = activeBranch.branch_name;
+    let branchNameUpdated = false;
+
+    // 5b. Update Branch Name if provided
+    const rawBranchName = branch_name !== undefined ? branch_name : branchName;
+    if (rawBranchName !== undefined && rawBranchName !== null) {
+      const cleanBranchName = String(rawBranchName).trim();
+      if (!cleanBranchName) {
+        return res.status(400).json(formatResponse(false, null, 'Branch Name is required'));
+      }
+      if (cleanBranchName.length < 2 || cleanBranchName.length > 150) {
+        return res.status(400).json(formatResponse(false, null, 'Branch Name must be between 2 and 150 characters'));
+      }
+
+      // Check case-insensitive duplicate branch names against other active branches
+      const dupBranchCheck = await db.query(
+        `SELECT branch_id FROM branches WHERE LOWER(TRIM(branch_name)) = LOWER(TRIM($1)) AND branch_id != $2 AND status != 'deleted'`,
+        [cleanBranchName, targetBranchId]
+      );
+      if (dupBranchCheck.rows.length > 0) {
+        return res.status(400).json(formatResponse(false, null, `Branch name "${cleanBranchName}" already exists. Please choose a different branch name.`));
+      }
+
+      if (cleanBranchName !== activeBranch.branch_name) {
+        const updateBranchRes = await db.query(
+          `UPDATE branches
+           SET branch_name = $1,
+               updated_at = now()
+           WHERE branch_id = $2
+           RETURNING branch_id, branch_name, branch_code, address, phone_number, status, updated_at`,
+          [cleanBranchName, targetBranchId]
+        );
+        activeBranch = updateBranchRes.rows[0];
+        branchNameUpdated = true;
+      }
+    }
 
     // 6. Department (optional string)
     const rawDept = department !== undefined ? department : oldUser.department;
@@ -316,28 +354,33 @@ async function updateProfile(req, res) {
     // 9. Audit Logging
     res.locals.auditEntry = {
       module: 'Settings',
-      action: 'Update Super Admin Profile',
+      action: branchNameUpdated ? 'Update Super Admin Profile & Branch Name' : 'Update Super Admin Profile',
       recordId: userId,
       oldValue: {
         full_name: oldUser.full_name,
         username: oldUser.username,
         mobile_number: oldUser.mobile_number,
         department: oldUser.department,
-        branch_id: oldUser.branch_id
+        branch_id: oldUser.branch_id,
+        branch_name: oldBranchName,
+        branch_code: activeBranch.branch_code
       },
       newValue: {
         full_name: updatedUser.full_name,
         username: updatedUser.username,
         mobile_number: updatedUser.mobile_number,
         department: updatedUser.department,
-        branch_id: updatedUser.branch_id
+        branch_id: updatedUser.branch_id,
+        branch_name: activeBranch.branch_name,
+        branch_code: activeBranch.branch_code
       }
     };
 
     return res.json(formatResponse(true, {
       user: updatedUser,
+      branch: activeBranch,
       token
-    }, 'Profile updated successfully'));
+    }, 'Profile and branch details updated successfully'));
   } catch (err) {
     console.error('updateProfile error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -359,6 +402,74 @@ async function getBranches(req, res) {
   }
 }
 
+async function updateBranch(req, res) {
+  try {
+    const branchId = parseInt(req.params.id, 10);
+    if (isNaN(branchId) || branchId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid branch ID'));
+    }
+
+    const { branch_name, branchName } = req.body;
+    const rawBranchName = branch_name !== undefined ? branch_name : branchName;
+    const cleanBranchName = rawBranchName !== undefined && rawBranchName !== null ? String(rawBranchName).trim() : '';
+
+    if (!cleanBranchName) {
+      return res.status(400).json(formatResponse(false, null, 'Branch Name is required'));
+    }
+    if (cleanBranchName.length < 2 || cleanBranchName.length > 150) {
+      return res.status(400).json(formatResponse(false, null, 'Branch Name must be between 2 and 150 characters'));
+    }
+
+    const branchCheck = await db.query(
+      `SELECT branch_id, branch_name, branch_code, status FROM branches WHERE branch_id = $1 AND status != 'deleted'`,
+      [branchId]
+    );
+    if (branchCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Branch not found'));
+    }
+    const existingBranch = branchCheck.rows[0];
+
+    const dupCheck = await db.query(
+      `SELECT branch_id FROM branches WHERE LOWER(TRIM(branch_name)) = LOWER(TRIM($1)) AND branch_id != $2 AND status != 'deleted'`,
+      [cleanBranchName, branchId]
+    );
+    if (dupCheck.rows.length > 0) {
+      return res.status(400).json(formatResponse(false, null, `Branch name "${cleanBranchName}" already exists. Please choose a different branch name.`));
+    }
+
+    const updateRes = await db.query(
+      `UPDATE branches
+       SET branch_name = $1,
+           updated_at = now()
+       WHERE branch_id = $2
+       RETURNING branch_id, branch_name, branch_code, address, phone_number, status, updated_at`,
+      [cleanBranchName, branchId]
+    );
+    const updatedBranch = updateRes.rows[0];
+
+    res.locals.auditEntry = {
+      module: 'Settings',
+      action: 'Update Branch Name',
+      recordId: branchId,
+      oldValue: {
+        branch_id: branchId,
+        branch_name: existingBranch.branch_name,
+        branch_code: existingBranch.branch_code
+      },
+      newValue: {
+        branch_id: branchId,
+        branch_name: updatedBranch.branch_name,
+        branch_code: updatedBranch.branch_code
+      }
+    };
+
+    return res.json(formatResponse(true, updatedBranch, 'Branch updated successfully'));
+  } catch (err) {
+    console.error('updateBranch error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 module.exports = {
   getPermissionsMatrix,
   updatePermissionsMatrix,
@@ -368,5 +479,6 @@ module.exports = {
   addMasterData,
   getProfile,
   updateProfile,
-  getBranches
+  getBranches,
+  updateBranch
 };

@@ -15,5 +15,6 @@ router.post('/masters/:type', authenticateToken, authorizeRoles('super_admin'), 
 router.get('/profile', authenticateToken, settingsController.getProfile);
 router.put('/profile', authenticateToken, settingsController.updateProfile);
 router.get('/branches', authenticateToken, settingsController.getBranches);
+router.put('/branches/:id', authenticateToken, authorizeRoles('super_admin'), settingsController.updateBranch);
 
 module.exports = router;
