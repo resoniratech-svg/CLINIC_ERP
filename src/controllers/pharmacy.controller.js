@@ -26,14 +26,14 @@ async function getDashboard(req, res) {
     const alertDays = settingRes.rows.length > 0 ? parseInt(settingRes.rows[0].setting_value) : 30;
 
     const pendingRxRes = await db.query(`
-      SELECT COUNT(*) FROM prescriptions p
+      SELECT COUNT(DISTINCT a.appointment_id) FROM prescriptions p
       JOIN appointments a ON p.appointment_id = a.appointment_id
       WHERE a.status = 'pro_completed' AND (p.pharmacy_status = 'pending' OR p.pharmacy_status IS NULL)
     `);
     const pendingRx = parseInt(pendingRxRes.rows[0].count);
 
     const processingRes = await db.query(`
-      SELECT COUNT(*) FROM prescriptions p
+      SELECT COUNT(DISTINCT a.appointment_id) FROM prescriptions p
       JOIN appointments a ON p.appointment_id = a.appointment_id
       WHERE a.status = 'pro_completed' AND p.pharmacy_status = 'processing'
     `);
@@ -117,8 +117,25 @@ async function getDashboard(req, res) {
 // -------------------------------------------------------------
 async function getPrescriptionQueue(req, res) {
   try {
-    const { status } = req.query;
+    const { status, search, date } = req.query;
     let query = `
+      WITH ranked_rx AS (
+        SELECT p.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY p.appointment_id
+                 ORDER BY
+                   CASE
+                     WHEN p.pharmacy_status = 'dispensed' THEN 1
+                     WHEN p.pharmacy_status = 'partially_dispensed' THEN 2
+                     WHEN p.pharmacy_status = 'processing' THEN 3
+                     WHEN p.pharmacy_status = 'on_hold' THEN 4
+                     ELSE 5
+                   END ASC,
+                   p.id DESC
+               ) as rn
+        FROM prescriptions p
+        WHERE p.appointment_id IS NOT NULL
+      )
       SELECT p.id as prescription_id, p.patient_id, p.doctor_id, p.created_at as prescription_date,
              COALESCE(p.pharmacy_status, 'pending'::pharmacy_status_enum) as pharmacy_status,
              pt.full_name as patient_name, pt.mobile_number,
@@ -126,24 +143,57 @@ async function getPrescriptionQueue(req, res) {
              u.full_name as doctor_name,
              a.appointment_id as token_no,
              a.status as appointment_status,
-             'pro_completed' as pro_status,
-             b.status as payment_status
-      FROM prescriptions p
+             a.status as pro_status,
+             CASE
+               WHEN b.status = 'refunded' THEN 'refunded'
+               WHEN b.status = 'cancelled' THEN 'cancelled'
+               WHEN b.bill_id IS NULL THEN 'unbilled'
+               WHEN b.paid_amount >= b.final_amount AND b.final_amount > 0 THEN 'paid'
+               WHEN b.paid_amount > 0 THEN 'partially_paid'
+               WHEN b.status = 'created' THEN 'paid'
+               ELSE 'pending'
+             END as payment_status,
+             (SELECT COUNT(*) FROM prescription_items pi WHERE pi.prescription_id = p.id) as items_count,
+             (SELECT COUNT(*) FROM prescription_clarifications pc WHERE pc.prescription_id = p.id AND pc.status = 'open') as open_clarifications_count
+      FROM ranked_rx p
       JOIN appointments a ON p.appointment_id = a.appointment_id
       JOIN patients pt ON p.patient_id = pt.patient_id
       JOIN doctors d ON p.doctor_id = d.doctor_id
       JOIN users u ON d.user_id = u.user_id
-      LEFT JOIN bills b ON p.patient_id = b.patient_id AND b.bill_type = 'treatment'
-      WHERE a.status = 'pro_completed'
+      LEFT JOIN LATERAL (
+        SELECT b_sub.bill_id, b_sub.status, b_sub.final_amount,
+               COALESCE(SUM(py_sub.amount) FILTER (WHERE py_sub.status = 'success'), 0) as paid_amount
+        FROM bills b_sub
+        LEFT JOIN payments py_sub ON b_sub.bill_id = py_sub.bill_id
+        WHERE b_sub.patient_id = p.patient_id AND b_sub.bill_type = 'treatment'
+        GROUP BY b_sub.bill_id, b_sub.status, b_sub.final_amount
+        ORDER BY b_sub.bill_id DESC
+        LIMIT 1
+      ) b ON true
+      WHERE a.status = 'pro_completed' AND p.rn = 1
     `;
     const params = [];
 
     if (status) {
-      params.push(status);
-      query += ` AND p.pharmacy_status = $${params.length}`;
+      if (status === 'processing') {
+        query += ` AND p.pharmacy_status IN ('processing', 'partially_dispensed', 'on_hold')`;
+      } else {
+        params.push(status);
+        query += ` AND p.pharmacy_status = $${params.length}`;
+      }
     }
 
-    query += ` ORDER BY p.id DESC`;
+    if (date) {
+      params.push(date);
+      query += ` AND DATE(p.created_at) = $${params.length}`;
+    }
+
+    if (search && search.trim() !== '') {
+      params.push(`%${search.trim()}%`);
+      query += ` AND (pt.full_name ILIKE $${params.length} OR pt.mobile_number ILIKE $${params.length} OR CAST(p.id AS TEXT) ILIKE $${params.length} OR u.full_name ILIKE $${params.length} OR CAST(a.appointment_id AS TEXT) ILIKE $${params.length})`;
+    }
+
+    query += ` GROUP BY p.id, p.patient_id, p.doctor_id, p.created_at, p.pharmacy_status, pt.patient_id, pt.full_name, pt.mobile_number, u.full_name, a.appointment_id, b.bill_id, b.status, b.final_amount, b.paid_amount ORDER BY p.id DESC`;
     const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Pharmacy prescription queue retrieved successfully'));
   } catch (err) {
@@ -580,13 +630,41 @@ async function createClarification(req, res) {
   const client = await db.pool.connect();
   try {
     const { prescription_id, prescription_item_id, issue_type, description, priority, remarks } = req.body;
-    if (!prescription_id || !issue_type || !description) {
+    if (!prescription_id || !issue_type || !description || !description.trim()) {
       return res.status(400).json(formatResponse(false, null, 'prescription_id, issue_type, and description are required'));
     }
 
+    const validIssueTypes = [
+      'medicine_unavailable', 'dosage_clarification', 'quantity_clarification',
+      'prescription_error', 'duration_clarification', 'substitution_request', 'other'
+    ];
+    let mappedIssueType = issue_type;
+    if (issue_type === 'dosage' || issue_type === 'potency') mappedIssueType = 'dosage_clarification';
+    else if (issue_type === 'stock_unavailable') mappedIssueType = 'medicine_unavailable';
+    else if (issue_type === 'interaction') mappedIssueType = 'other';
+    else if (issue_type === 'substitution') mappedIssueType = 'substitution_request';
+
+    if (!validIssueTypes.includes(mappedIssueType)) {
+      return res.status(400).json(formatResponse(false, null, `Invalid issue_type. Must be one of: ${validIssueTypes.join(', ')}`));
+    }
+
+    const validPriorities = ['low', 'normal', 'high', 'urgent'];
+    let mappedPriority = (priority || 'normal').toLowerCase();
+    if (mappedPriority === 'medium') mappedPriority = 'normal';
+    if (!validPriorities.includes(mappedPriority)) {
+      return res.status(400).json(formatResponse(false, null, `Invalid priority. Must be one of: ${validPriorities.join(', ')}`));
+    }
+
+    const branchId = req.user.branch_id || 1;
+
     await client.query('BEGIN');
 
-    const rxRes = await client.query(`SELECT patient_id FROM prescriptions WHERE id = $1`, [prescription_id]);
+    const rxRes = await client.query(`
+      SELECT p.id, p.patient_id 
+      FROM prescriptions p 
+      WHERE p.id = $1
+    `, [prescription_id]);
+
     if (rxRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json(formatResponse(false, null, 'Prescription not found'));
@@ -594,13 +672,25 @@ async function createClarification(req, res) {
 
     const patientId = rxRes.rows[0].patient_id;
 
+    if (prescription_item_id) {
+      const itemCheck = await client.query(`
+        SELECT id, medicine_id FROM prescription_items 
+        WHERE id = $1 AND prescription_id = $2
+      `, [prescription_item_id, prescription_id]);
+
+      if (itemCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json(formatResponse(false, null, 'Prescription item not found on this prescription'));
+      }
+    }
+
     const result = await client.query(`
       INSERT INTO prescription_clarifications (
         prescription_id, prescription_item_id, patient_id, raised_by,
         issue_type, description, priority, remarks, status, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'open', 1)
+      ) VALUES ($1, $2, $3, $4, $5::clarification_issue_type, $6, $7::clarification_priority, $8, 'open', $9)
       RETURNING *
-    `, [prescription_id, prescription_item_id || null, patientId, req.user.user_id, issue_type, description, priority || 'normal', remarks || null]);
+    `, [prescription_id, prescription_item_id || null, patientId, req.user.user_id, mappedIssueType, description.trim(), mappedPriority, remarks ? remarks.trim() : null, branchId]);
 
     if (prescription_item_id) {
       await client.query(`
@@ -622,24 +712,62 @@ async function createClarification(req, res) {
 
 async function getClarifications(req, res) {
   try {
-    const { status, priority } = req.query;
+    const { status, priority, search } = req.query;
+    const branchId = req.user.branch_id || 1;
+
     let query = `
-      SELECT pc.*, p.full_name as patient_name, u.full_name as raised_by_name, du.full_name as responded_by_name
+      SELECT 
+        pc.*, 
+        pc.doctor_response as response,
+        p.full_name as patient_name, 
+        p.mobile_number,
+        u.full_name as raised_by_name, 
+        du.full_name as responded_by_name,
+        doc_u.full_name as doctor_name,
+        pr.appointment_id,
+        pi.dosage as item_dosage,
+        pi.quantity as item_quantity,
+        pi.dispense_status as item_dispense_status,
+        mm.medicine_name,
+        mm.strength as medicine_strength
       FROM prescription_clarifications pc
       JOIN patients p ON pc.patient_id = p.patient_id
       JOIN users u ON pc.raised_by = u.user_id
       LEFT JOIN users du ON pc.responded_by = du.user_id
-      WHERE 1=1
+      LEFT JOIN prescriptions pr ON pc.prescription_id = pr.id
+      LEFT JOIN doctors d ON pr.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+      LEFT JOIN prescription_items pi ON pc.prescription_item_id = pi.id
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE pc.branch_id = $1
     `;
-    const params = [];
+    const params = [branchId];
 
     if (status) {
-      params.push(status);
-      query += ` AND pc.status = $${params.length}`;
+      let mappedStatus = status.toLowerCase();
+      if (mappedStatus === 'pending') mappedStatus = 'open';
+      params.push(mappedStatus);
+      query += ` AND pc.status = $${params.length}::clarification_status`;
     }
+
     if (priority) {
-      params.push(priority);
-      query += ` AND pc.priority = $${params.length}`;
+      let mappedPriority = priority.toLowerCase();
+      if (mappedPriority === 'medium') mappedPriority = 'normal';
+      params.push(mappedPriority);
+      query += ` AND pc.priority = $${params.length}::clarification_priority`;
+    }
+
+    if (search && search.trim()) {
+      const s = search.trim();
+      params.push(`%${s}%`);
+      const sIndex = params.length;
+      if (!isNaN(s) && Number.isInteger(Number(s))) {
+        params.push(parseInt(s));
+        const numIndex = params.length;
+        query += ` AND (p.full_name ILIKE $${sIndex} OR p.mobile_number ILIKE $${sIndex} OR doc_u.full_name ILIKE $${sIndex} OR mm.medicine_name ILIKE $${sIndex} OR pc.prescription_id = $${numIndex} OR pc.id = $${numIndex})`;
+      } else {
+        query += ` AND (p.full_name ILIKE $${sIndex} OR p.mobile_number ILIKE $${sIndex} OR doc_u.full_name ILIKE $${sIndex} OR mm.medicine_name ILIKE $${sIndex})`;
+      }
     }
 
     query += ` ORDER BY pc.id DESC`;
@@ -652,24 +780,50 @@ async function getClarifications(req, res) {
 }
 
 async function closeClarification(req, res) {
+  const client = await db.pool.connect();
   try {
     const cId = parseInt(req.params.id || req.body.clarification_id);
-    const { remarks } = req.body;
+    const { remarks, resolution_notes } = req.body;
+    const finalRemarks = remarks || resolution_notes || null;
 
-    const result = await db.query(`
-      UPDATE prescription_clarifications
-      SET status = 'closed', remarks = COALESCE($1, remarks)
-      WHERE id = $2 RETURNING *
-    `, [remarks || null, cId]);
+    if (isNaN(cId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid clarification ID is required'));
+    }
 
-    if (result.rows.length === 0) {
+    await client.query('BEGIN');
+
+    const cCheck = await client.query(`SELECT * FROM prescription_clarifications WHERE id = $1`, [cId]);
+    if (cCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json(formatResponse(false, null, 'Clarification request not found'));
     }
 
+    const clar = cCheck.rows[0];
+
+    const result = await client.query(`
+      UPDATE prescription_clarifications
+      SET status = 'closed', remarks = COALESCE($1, remarks)
+      WHERE id = $2 RETURNING *
+    `, [finalRemarks ? finalRemarks.trim() : null, cId]);
+
+    // If linked to an item that was clarification_requested, unblock it for dispensing
+    if (clar.prescription_item_id) {
+      await client.query(`
+        UPDATE prescription_items
+        SET dispense_status = 'pending'
+        WHERE id = $1 AND dispense_status = 'clarification_requested'
+      `, [clar.prescription_item_id]);
+    }
+
+    await client.query('COMMIT');
+    res.locals.auditEntry = { module: 'Pharmacy Clarification', action: 'Close Clarification', recordId: cId, newValue: result.rows[0] };
     return res.json(formatResponse(true, result.rows[0], 'Clarification request closed successfully'));
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('closeClarification error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
@@ -789,11 +943,11 @@ async function getMedicineStockDetail(req, res) {
 // -------------------------------------------------------------
 async function getStock(req, res) {
   try {
-    const { low_stock, expiring } = req.query;
+    const { low_stock, expiring, search } = req.query;
     const branchId = req.user.branch_id || 1;
 
     let query = `
-      SELECT ms.*, mm.medicine_name, mm.generic_name, mm.unit, mm.reorder_level, mm.category
+      SELECT ms.*, mm.medicine_name, mm.generic_name, mm.strength, mm.unit, mm.reorder_level, mm.category
       FROM medicine_stock ms
       JOIN medicine_master mm ON ms.medicine_id = mm.id
       WHERE ms.branch_id = $1
@@ -806,6 +960,11 @@ async function getStock(req, res) {
 
     if (expiring === 'true') {
       query += ` AND ms.expiry_date <= (CURRENT_DATE + INTERVAL '30 days') AND ms.quantity > 0`;
+    }
+
+    if (search && search.trim() !== '') {
+      params.push(`%${search.trim()}%`);
+      query += ` AND (mm.medicine_name ILIKE $${params.length} OR mm.generic_name ILIKE $${params.length} OR ms.batch_number ILIKE $${params.length})`;
     }
 
     query += ` ORDER BY ms.expiry_date ASC`;
@@ -1054,17 +1213,30 @@ async function confirmStockImport(req, res) {
         SELECT id FROM medicine_stock WHERE medicine_id = $1 AND batch_number = $2 AND branch_id = $3
       `, [medId, batchNo, branchId]);
 
+      const purchaseRate = parseFloat(r['Purchase Price'] || r['Purchase Rate'] || r['purchase_rate'] || r['purchase_price'] || 0) || null;
+      const mrp = parseFloat(r['MRP'] || r['mrp'] || 0) || null;
+      const supplier = r['Supplier'] || r['supplier'] || null;
+      const invoiceNumber = r['Invoice Number'] || r['invoice_number'] || null;
+
       if (stockRes.rows.length > 0) {
         await client.query(`
-          UPDATE medicine_stock SET quantity = quantity + $1, updated_at = now() WHERE id = $2
-        `, [qty, stockRes.rows[0].id]);
+          UPDATE medicine_stock
+          SET quantity = quantity + $1,
+              purchase_rate = COALESCE($2, purchase_rate),
+              mrp = COALESCE($3, mrp),
+              supplier = COALESCE($4, supplier),
+              invoice_number = COALESCE($5, invoice_number),
+              updated_at = now()
+          WHERE id = $6
+        `, [qty, purchaseRate, mrp, supplier, invoiceNumber, stockRes.rows[0].id]);
         existingStock++;
       } else {
         await client.query(`
           INSERT INTO medicine_stock (
-            medicine_id, batch_number, manufacture_date, expiry_date, quantity, branch_id
-          ) VALUES ($1, $2, $3, $4, $5, $6)
-        `, [medId, batchNo, mDateStr || null, eDateStr, qty, branchId]);
+            medicine_id, batch_number, manufacture_date, expiry_date, quantity,
+            purchase_rate, mrp, supplier, invoice_number, branch_id
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `, [medId, batchNo, mDateStr || null, eDateStr, qty, purchaseRate, mrp, supplier, invoiceNumber, branchId]);
       }
 
       // Record transaction
@@ -1160,7 +1332,7 @@ async function getExpiringStock(req, res) {
     const daysParam = req.query.days ? parseInt(req.query.days) : 30;
 
     const result = await db.query(`
-      SELECT ms.*, mm.medicine_name, mm.generic_name, mm.strength as potency
+      SELECT ms.*, mm.medicine_name, mm.generic_name, mm.strength as potency, mm.reorder_level
       FROM medicine_stock ms
       JOIN medicine_master mm ON ms.medicine_id = mm.id
       WHERE ms.branch_id = $1 AND ms.quantity > 0
@@ -1179,7 +1351,7 @@ async function getExpiredStock(req, res) {
   try {
     const branchId = req.user.branch_id || 1;
     const result = await db.query(`
-      SELECT ms.*, mm.medicine_name, mm.generic_name, mm.strength as potency
+      SELECT ms.*, mm.medicine_name, mm.generic_name, mm.strength as potency, mm.reorder_level
       FROM medicine_stock ms
       JOIN medicine_master mm ON ms.medicine_id = mm.id
       WHERE ms.branch_id = $1 AND ms.quantity > 0 AND ms.expiry_date < CURRENT_DATE
@@ -1216,14 +1388,20 @@ async function getOutOfStock(req, res) {
 // -------------------------------------------------------------
 async function getStockTransactions(req, res) {
   try {
-    const { medicine_id, batch_number, type, date } = req.query;
+    const { medicine_id, batch_number, type, date, search } = req.query;
     const branchId = req.user.branch_id || 1;
+
+    // Validate type parameter against known enum values to avoid PostgreSQL cast exception
+    const validTypes = ['in', 'out', 'adjustment', 'return'];
+    if (type && !validTypes.includes(type.toLowerCase())) {
+      return res.json(formatResponse(true, [], 'Stock transactions log retrieved successfully'));
+    }
 
     let query = `
       SELECT st.*, mm.medicine_name, mm.strength as potency, u.full_name as performed_by_name
       FROM stock_transactions st
-      JOIN medicine_master mm ON st.medicine_id = mm.id
-      JOIN users u ON st.performed_by = u.user_id
+      LEFT JOIN medicine_master mm ON st.medicine_id = mm.id
+      LEFT JOIN users u ON st.performed_by = u.user_id
       WHERE st.branch_id = $1
     `;
     const params = [branchId];
@@ -1232,14 +1410,18 @@ async function getStockTransactions(req, res) {
       params.push(medicine_id);
       query += ` AND st.medicine_id = $${params.length}`;
     }
-    if (batch_number) {
-      params.push(batch_number);
-      query += ` AND st.batch_number = $${params.length}`;
+
+    const searchTerm = search || batch_number;
+    if (searchTerm && searchTerm.trim() !== '') {
+      params.push(`%${searchTerm.trim()}%`);
+      query += ` AND (st.batch_number ILIKE $${params.length} OR mm.medicine_name ILIKE $${params.length} OR st.reference ILIKE $${params.length})`;
     }
+
     if (type) {
-      params.push(type);
+      params.push(type.toLowerCase());
       query += ` AND st.transaction_type = $${params.length}::stock_txn_type`;
     }
+
     if (date) {
       params.push(date);
       query += ` AND DATE(st.created_at) = $${params.length}`;
@@ -1261,8 +1443,13 @@ async function createStockAdjustment(req, res) {
   const client = await db.pool.connect();
   try {
     const { medicine_id, stock_id, physical_quantity, reason, remarks } = req.body;
-    if (!medicine_id || !stock_id || physical_quantity === undefined || !reason) {
+    if (!medicine_id || !stock_id || physical_quantity === undefined || physical_quantity === null || !reason) {
       return res.status(400).json(formatResponse(false, null, 'medicine_id, stock_id, physical_quantity, and reason are required'));
+    }
+
+    const physQty = parseInt(physical_quantity, 10);
+    if (isNaN(physQty) || physQty < 0) {
+      return res.status(400).json(formatResponse(false, null, 'physical_quantity must be a non-negative integer'));
     }
 
     await client.query('BEGIN');
@@ -1275,13 +1462,17 @@ async function createStockAdjustment(req, res) {
     }
 
     const stock = stockRes.rows[0];
+    if (Number(stock.medicine_id) !== Number(medicine_id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Stock batch does not match selected medicine'));
+    }
+
     const sysQty = stock.quantity;
-    const physQty = parseInt(physical_quantity);
     const diff = physQty - sysQty;
 
     // Read threshold setting (default 10)
     const thresholdRes = await client.query(`SELECT setting_value FROM hospital_settings WHERE setting_key = 'pharmacy_adjustment_approval_threshold'`);
-    const threshold = thresholdRes.rows.length > 0 ? parseInt(thresholdRes.rows[0].setting_value) : 10;
+    const threshold = thresholdRes.rows.length > 0 ? parseInt(thresholdRes.rows[0].setting_value, 10) : 10;
 
     const requiresApproval = Math.abs(diff) > threshold;
     const approvalStatus = requiresApproval ? 'pending' : 'approved';
@@ -1326,20 +1517,58 @@ async function createStockAdjustment(req, res) {
 
 async function getStockAdjustments(req, res) {
   try {
-    const { status } = req.query;
+    const { status, search, date } = req.query;
+    const branchId = req.user?.branch_id || 1;
     let query = `
-      SELECT sa.*, mm.medicine_name, mm.strength as potency, ms.batch_number, u.full_name as performed_by_name
+      SELECT sa.*, 
+             mm.medicine_name, 
+             mm.strength as potency, 
+             ms.batch_number, 
+             u.full_name as performed_by_name,
+             u2.full_name as approved_by_name
       FROM stock_adjustments sa
-      JOIN medicine_master mm ON sa.medicine_id = mm.id
-      JOIN medicine_stock ms ON sa.stock_id = ms.id
-      JOIN users u ON sa.performed_by = u.user_id
-      WHERE 1=1
+      LEFT JOIN medicine_master mm ON sa.medicine_id = mm.id
+      LEFT JOIN medicine_stock ms ON sa.stock_id = ms.id
+      LEFT JOIN users u ON sa.performed_by = u.user_id
+      LEFT JOIN users u2 ON sa.approved_by = u2.user_id
+      WHERE sa.branch_id = $1
     `;
-    const params = [];
+    const params = [branchId];
 
     if (status) {
       params.push(status);
       query += ` AND sa.approval_status = $${params.length}::reset_status`;
+    }
+
+    if (date) {
+      params.push(date);
+      query += ` AND DATE(sa.created_at) = $${params.length}`;
+    }
+
+    if (search && search.trim()) {
+      const term = `%${search.trim()}%`;
+      const isNum = !isNaN(Number(search.trim()));
+      params.push(term);
+      const termIdx = params.length;
+
+      if (isNum) {
+        params.push(Number(search.trim()));
+        const numIdx = params.length;
+        query += ` AND (
+          mm.medicine_name ILIKE $${termIdx} OR
+          ms.batch_number ILIKE $${termIdx} OR
+          sa.reason ILIKE $${termIdx} OR
+          u.full_name ILIKE $${termIdx} OR
+          sa.id = $${numIdx}
+        )`;
+      } else {
+        query += ` AND (
+          mm.medicine_name ILIKE $${termIdx} OR
+          ms.batch_number ILIKE $${termIdx} OR
+          sa.reason ILIKE $${termIdx} OR
+          u.full_name ILIKE $${termIdx}
+        )`;
+      }
     }
 
     query += ` ORDER BY sa.id DESC`;
@@ -1354,7 +1583,7 @@ async function getStockAdjustments(req, res) {
 async function approveStockAdjustment(req, res) {
   const client = await db.pool.connect();
   try {
-    const adjId = parseInt(req.params.id);
+    const adjId = parseInt(req.params.id, 10);
     await client.query('BEGIN');
 
     const adjRes = await client.query(`SELECT * FROM stock_adjustments WHERE id = $1 FOR UPDATE`, [adjId]);
@@ -1405,6 +1634,44 @@ async function approveStockAdjustment(req, res) {
   }
 }
 
+async function rejectStockAdjustment(req, res) {
+  const client = await db.pool.connect();
+  try {
+    const adjId = parseInt(req.params.id, 10);
+    await client.query('BEGIN');
+
+    const adjRes = await client.query(`SELECT * FROM stock_adjustments WHERE id = $1 FOR UPDATE`, [adjId]);
+    if (adjRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(formatResponse(false, null, 'Stock adjustment request not found'));
+    }
+
+    const adj = adjRes.rows[0];
+    if (adj.approval_status !== 'pending') {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Adjustment is already ${adj.approval_status}`));
+    }
+
+    // Update adjustment status to rejected without modifying stock
+    const updatedRes = await client.query(`
+      UPDATE stock_adjustments
+      SET approval_status = 'rejected', approved_by = $1
+      WHERE id = $2 RETURNING *
+    `, [req.user.user_id, adjId]);
+
+    await client.query('COMMIT');
+
+    res.locals.auditEntry = { module: 'Pharmacy Adjustment', action: 'Reject Stock Adjustment', recordId: adjId, newValue: updatedRes.rows[0] };
+    return res.json(formatResponse(true, updatedRes.rows[0], 'Stock adjustment rejected'));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('rejectStockAdjustment error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
+  }
+}
+
 // -------------------------------------------------------------
 // 12. Medicine Returns
 // -------------------------------------------------------------
@@ -1412,19 +1679,45 @@ async function createMedicineReturn(req, res) {
   const client = await db.pool.connect();
   try {
     const { patient_id, prescription_id, medicine_id, stock_id, return_quantity, return_reason, condition, remarks } = req.body;
-    if (!patient_id || !medicine_id || !stock_id || !return_quantity || !return_reason || !condition) {
+    if (!patient_id || !medicine_id || !stock_id || return_quantity === undefined || return_quantity === null || !return_reason || !condition) {
       return res.status(400).json(formatResponse(false, null, 'patient_id, medicine_id, stock_id, return_quantity, return_reason, and condition are required'));
+    }
+
+    const rQty = parseInt(return_quantity, 10);
+    if (isNaN(rQty) || rQty <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'return_quantity must be a positive integer'));
+    }
+
+    const validConditions = ['good', 'damaged', 'expired', 'opened'];
+    if (!validConditions.includes(condition)) {
+      return res.status(400).json(formatResponse(false, null, `condition must be one of: ${validConditions.join(', ')}`));
     }
 
     await client.query('BEGIN');
     const branchId = req.user.branch_id || 1;
-    const rQty = parseInt(return_quantity);
+
+    // Validate patient
+    const patientCheck = await client.query(`SELECT patient_id FROM patients WHERE patient_id = $1`, [patient_id]);
+    if (patientCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(formatResponse(false, null, 'Patient not found'));
+    }
+
+    // Validate stock and medicine association
+    const stockRes = await client.query(`SELECT id, medicine_id, batch_number FROM medicine_stock WHERE id = $1`, [stock_id]);
+    if (stockRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(formatResponse(false, null, 'Stock batch not found'));
+    }
+
+    if (Number(stockRes.rows[0].medicine_id) !== Number(medicine_id)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Stock batch does not match selected medicine'));
+    }
+    const batchNo = stockRes.rows[0].batch_number;
 
     // Policy check: restocked true ONLY if condition === 'good'
     const isRestocked = condition === 'good';
-
-    const stockRes = await client.query(`SELECT batch_number FROM medicine_stock WHERE id = $1`, [stock_id]);
-    const batchNo = stockRes.rows.length > 0 ? stockRes.rows[0].batch_number : null;
 
     const returnRes = await client.query(`
       INSERT INTO medicine_returns (
@@ -1464,21 +1757,64 @@ async function createMedicineReturn(req, res) {
 
 async function getMedicineReturns(req, res) {
   try {
-    const { patient_id } = req.query;
+    const { patient_id, search, date, condition } = req.query;
+    const branchId = req.user?.branch_id || 1;
     let query = `
-      SELECT mr.*, p.full_name as patient_name, mm.medicine_name, ms.batch_number, u.full_name as processed_by_name
+      SELECT mr.*, 
+             p.full_name as patient_name, 
+             mm.medicine_name, 
+             mm.strength as medicine_strength,
+             ms.batch_number, 
+             u.full_name as processed_by_name
       FROM medicine_returns mr
-      JOIN patients p ON mr.patient_id = p.patient_id
-      JOIN medicine_master mm ON mr.medicine_id = mm.id
-      JOIN medicine_stock ms ON mr.stock_id = ms.id
-      JOIN users u ON mr.processed_by = u.user_id
-      WHERE 1=1
+      LEFT JOIN patients p ON mr.patient_id = p.patient_id
+      LEFT JOIN medicine_master mm ON mr.medicine_id = mm.id
+      LEFT JOIN medicine_stock ms ON mr.stock_id = ms.id
+      LEFT JOIN users u ON mr.processed_by = u.user_id
+      WHERE mr.branch_id = $1
     `;
-    const params = [];
+    const params = [branchId];
 
     if (patient_id) {
       params.push(patient_id);
       query += ` AND mr.patient_id = $${params.length}`;
+    }
+
+    if (condition) {
+      params.push(condition);
+      query += ` AND mr.condition = $${params.length}`;
+    }
+
+    if (date) {
+      params.push(date);
+      query += ` AND DATE(mr.created_at) = $${params.length}`;
+    }
+
+    if (search && search.trim()) {
+      const term = `%${search.trim()}%`;
+      const isNum = !isNaN(Number(search.trim()));
+      params.push(term);
+      const termIdx = params.length;
+
+      if (isNum) {
+        params.push(Number(search.trim()));
+        const numIdx = params.length;
+        query += ` AND (
+          p.full_name ILIKE $${termIdx} OR
+          mm.medicine_name ILIKE $${termIdx} OR
+          ms.batch_number ILIKE $${termIdx} OR
+          mr.return_reason ILIKE $${termIdx} OR
+          mr.id = $${numIdx} OR
+          mr.patient_id = $${numIdx}
+        )`;
+      } else {
+        query += ` AND (
+          p.full_name ILIKE $${termIdx} OR
+          mm.medicine_name ILIKE $${termIdx} OR
+          ms.batch_number ILIKE $${termIdx} OR
+          mr.return_reason ILIKE $${termIdx}
+        )`;
+      }
     }
 
     query += ` ORDER BY mr.id DESC`;
@@ -1495,13 +1831,33 @@ async function getMedicineReturns(req, res) {
 // -------------------------------------------------------------
 async function getDispensingHistory(req, res) {
   try {
-    const { prescription_id, patient_id, registration_id, patient_name, mobile, doctor_id, date, status } = req.query;
+    const { prescription_id, patient_id, registration_id, patient_name, mobile, doctor_id, date, status, search } = req.query;
 
     let query = `
       SELECT p.id as prescription_id, p.patient_id, p.doctor_id, p.created_at as prescription_date,
              COALESCE(p.pharmacy_status, 'pending'::pharmacy_status_enum) as status,
              pt.full_name as patient_name, pt.mobile_number, pt.patient_id as registration_id,
-             u.full_name as doctor_name
+             u.full_name as doctor_name,
+             COALESCE(
+               (
+                 SELECT json_agg(json_build_object(
+                   'item_id', pi.id,
+                   'medicine_name', mm.medicine_name,
+                   'potency', mm.strength,
+                   'dosage', pi.dosage,
+                   'quantity', pi.quantity,
+                   'dispensed', pi.dispensed,
+                   'dispensed_quantity', pi.dispensed_quantity,
+                   'dispense_status', pi.dispense_status,
+                   'batch_number', ms.batch_number
+                 ))
+                 FROM prescription_items pi
+                 JOIN medicine_master mm ON pi.medicine_id = mm.id
+                 LEFT JOIN medicine_stock ms ON pi.selected_batch_id = ms.id
+                 WHERE pi.prescription_id = p.id
+               ),
+               '[]'::json
+             ) as items
       FROM prescriptions p
       JOIN patients pt ON p.patient_id = pt.patient_id
       JOIN doctors d ON p.doctor_id = d.doctor_id
@@ -1542,6 +1898,10 @@ async function getDispensingHistory(req, res) {
       params.push(status);
       query += ` AND p.pharmacy_status = $${params.length}::pharmacy_status_enum`;
     }
+    if (search && search.trim() !== '') {
+      params.push(`%${search.trim()}%`);
+      query += ` AND (pt.full_name ILIKE $${params.length} OR pt.mobile_number ILIKE $${params.length} OR CAST(p.id AS TEXT) ILIKE $${params.length} OR u.full_name ILIKE $${params.length})`;
+    }
 
     query += ` ORDER BY p.id DESC`;
     const result = await db.query(query, params);
@@ -1554,10 +1914,11 @@ async function getDispensingHistory(req, res) {
 
 async function searchPatients(req, res) {
   try {
-    const { patient_id, registration_id, name, mobile, prescription_id } = req.query;
+    const { patient_id, registration_id, name, mobile, prescription_id, search, q } = req.query;
 
     let query = `
-      SELECT DISTINCT pt.patient_id, pt.patient_id as registration_id, pt.full_name, pt.mobile_number, pt.age, pt.gender
+      SELECT DISTINCT pt.patient_id, COALESCE(pt.registration_id, CAST(pt.patient_id AS TEXT)) as registration_id,
+             pt.full_name, pt.mobile_number, pt.age, pt.gender, pt.address, pt.village, pt.mandal, pt.patient_type
       FROM patients pt
       LEFT JOIN prescriptions p ON pt.patient_id = p.patient_id
       WHERE 1=1
@@ -1584,6 +1945,11 @@ async function searchPatients(req, res) {
       params.push(prescription_id);
       query += ` AND p.id = $${params.length}`;
     }
+    const generalSearch = search || q;
+    if (generalSearch && generalSearch.trim() !== '') {
+      params.push(`%${generalSearch.trim()}%`);
+      query += ` AND (pt.full_name ILIKE $${params.length} OR pt.mobile_number ILIKE $${params.length} OR CAST(pt.patient_id AS TEXT) ILIKE $${params.length})`;
+    }
 
     query += ` LIMIT 50`;
     const result = await db.query(query, params);
@@ -1601,8 +1967,9 @@ async function getProfile(req, res) {
   try {
     const userId = req.user.user_id;
     const result = await db.query(`
-      SELECT u.user_id, u.employee_id, u.full_name, u.mobile_number, u.email,
-             u.role, u.status, u.branch_id, b.branch_name
+      SELECT u.user_id, u.employee_id, u.full_name, u.username, u.mobile_number, u.email,
+             u.role, u.status, u.branch_id, b.branch_name, b.branch_code,
+             u.department, u.designation, u.created_at, u.last_login_at
       FROM users u
       LEFT JOIN branches b ON u.branch_id = b.branch_id
       WHERE u.user_id = $1
@@ -1622,7 +1989,28 @@ async function getProfile(req, res) {
 async function updateProfile(req, res) {
   try {
     const userId = req.user.user_id;
-    const { full_name, mobile_number, email } = req.body;
+    let { full_name, mobile_number, email } = req.body;
+
+    if (full_name !== undefined) {
+      full_name = String(full_name).trim();
+      if (!full_name) {
+        return res.status(400).json(formatResponse(false, null, 'Full name cannot be empty'));
+      }
+    }
+
+    if (mobile_number !== undefined && mobile_number !== null) {
+      mobile_number = String(mobile_number).trim();
+      if (mobile_number && !/^\d{10,15}$/.test(mobile_number)) {
+        return res.status(400).json(formatResponse(false, null, 'Invalid mobile number format. Must be 10 to 15 digits'));
+      }
+    }
+
+    if (email !== undefined && email !== null) {
+      email = String(email).trim().toLowerCase();
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json(formatResponse(false, null, 'Invalid email format'));
+      }
+    }
 
     const result = await db.query(`
       UPDATE users
@@ -1631,11 +2019,25 @@ async function updateProfile(req, res) {
           email = COALESCE($3, email),
           updated_at = now()
       WHERE user_id = $4
-      RETURNING user_id, employee_id, full_name, mobile_number, email, role, status
-    `, [full_name, mobile_number, email, userId]);
+      RETURNING user_id, employee_id, full_name, username, mobile_number, email, role, status, branch_id, department, designation
+    `, [full_name !== undefined ? full_name : null, mobile_number !== undefined ? mobile_number : null, email !== undefined ? email : null, userId]);
 
-    res.locals.auditEntry = { module: 'Pharmacy Profile', action: 'Update Profile', recordId: userId, newValue: result.rows[0] };
-    return res.json(formatResponse(true, result.rows[0], 'Pharmacy profile updated successfully'));
+    if (result.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'User profile not found'));
+    }
+
+    const branchRes = await db.query(`
+      SELECT branch_name, branch_code FROM branches WHERE branch_id = $1
+    `, [result.rows[0].branch_id]);
+
+    const enriched = {
+      ...result.rows[0],
+      branch_name: branchRes.rows[0]?.branch_name || null,
+      branch_code: branchRes.rows[0]?.branch_code || null,
+    };
+
+    res.locals.auditEntry = { module: 'Pharmacy Profile', action: 'Update Profile', recordId: userId, newValue: enriched };
+    return res.json(formatResponse(true, enriched, 'Pharmacy profile updated successfully'));
   } catch (err) {
     console.error('updateProfile error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -1723,6 +2125,7 @@ module.exports = {
   createStockAdjustment,
   getStockAdjustments,
   approveStockAdjustment,
+  rejectStockAdjustment,
   createMedicineReturn,
   getMedicineReturns,
   getDispensingHistory,

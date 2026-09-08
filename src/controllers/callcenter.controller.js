@@ -36,7 +36,8 @@ async function createLead(req, res) {
   try {
     const {
       lead_name, mobile_number, age, gender, village, mandal,
-      source, campaign, lead_source, executive_id, assigned_receptionist_id
+      source, campaign, lead_source, executive_id, assigned_receptionist_id,
+      requirement, problem, ailment_reason, remarks
     } = req.body;
 
     if (!lead_name || !mobile_number || !lead_source) {
@@ -44,6 +45,8 @@ async function createLead(req, res) {
     }
 
     const branchId = req.user.branch_id || 1;
+    const finalRequirement = requirement ? requirement.trim() : (problem ? problem.trim() : (ailment_reason ? ailment_reason.trim() : null));
+    const finalRemarks = remarks ? remarks.trim() : null;
 
     // Automatic check: does patient exist in patients table?
     const existingPatientRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [mobile_number]);
@@ -60,13 +63,13 @@ async function createLead(req, res) {
       INSERT INTO leads (
         patient_id, lead_name, mobile_number, age, gender, village, mandal,
         source, campaign, lead_created_by_user_id, executive_id, lead_source,
-        status, assigned_receptionist_id, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14)
+        status, assigned_receptionist_id, branch_id, requirement, remarks
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14, $15, $16)
       RETURNING *
     `, [
       patientId, lead_name, mobile_number, age || null, gender || null, village || null, mandal || null,
       source || 'Call Center', campaign || null, req.user.user_id, execId, lead_source,
-      assigned_receptionist_id || null, branchId
+      assigned_receptionist_id || null, branchId, finalRequirement, finalRemarks
     ]);
 
     const newLead = result.rows[0];

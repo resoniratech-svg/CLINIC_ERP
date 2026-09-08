@@ -142,9 +142,15 @@ async function getTodayAppointments(req, res) {
     let query = `
       SELECT a.appointment_id, a.appointment_id as token_number, a.patient_id,
              p.registration_id, p.full_name as patient_name, p.age, p.gender,
-             a.appointment_time, a.appointment_type, a.status, a.created_at as checkin_time
+             a.appointment_time, a.appointment_type, a.status, a.created_at as checkin_time,
+             c.consultation_id
       FROM appointments a
       JOIN patients p ON a.patient_id = p.patient_id
+      LEFT JOIN LATERAL (
+        SELECT consultation_id FROM consultations 
+        WHERE appointment_id = a.appointment_id 
+        ORDER BY consultation_id DESC LIMIT 1
+      ) c ON true
       WHERE ($1::integer IS NULL OR a.doctor_id = $1) AND a.appointment_date = $2
     `;
     const params = [doctorFilterId, targetDate];
@@ -181,9 +187,15 @@ async function getPatientQueue(req, res) {
              p.registration_id, p.full_name as patient_name, p.age, p.gender,
              a.appointment_time, a.appointment_type, a.doctor_id,
              EXTRACT(EPOCH FROM (now() - a.updated_at))/60 as waiting_time_minutes,
-             a.status
+             a.status,
+             c.consultation_id
       FROM appointments a
       JOIN patients p ON a.patient_id = p.patient_id
+      LEFT JOIN LATERAL (
+        SELECT consultation_id FROM consultations 
+        WHERE appointment_id = a.appointment_id 
+        ORDER BY consultation_id DESC LIMIT 1
+      ) c ON true
       WHERE ($1::integer IS NULL OR a.doctor_id = $1)
         AND a.appointment_date = $2
         AND a.status IN ('waiting', 'checked_in', 'in_consultation')
@@ -335,15 +347,21 @@ async function startConsultation(req, res) {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Appointment is assigned to another doctor'));
     }
 
-    if (appt.status !== 'waiting' && appt.status !== 'checked_in' && appt.status !== 'scheduled') {
-      return res.status(400).json(formatResponse(false, null, 'Cannot start consultation for completed/cancelled appointment'));
-    }
-
     const existingConsult = await db.query(`
-      SELECT * FROM consultations WHERE appointment_id = $1
+      SELECT * FROM consultations WHERE appointment_id = $1 ORDER BY consultation_id DESC LIMIT 1
     `, [appt.appointment_id]);
     if (existingConsult.rows.length > 0) {
+      if (appt.status !== 'in_consultation') {
+        await db.query(`
+          UPDATE appointments SET status = 'in_consultation', updated_at = now()
+          WHERE appointment_id = $1
+        `, [appt.appointment_id]);
+      }
       return res.json(formatResponse(true, existingConsult.rows[0], 'Consultation already started. Active draft loaded.'));
+    }
+
+    if (appt.status !== 'waiting' && appt.status !== 'checked_in' && appt.status !== 'scheduled' && appt.status !== 'in_consultation') {
+      return res.status(400).json(formatResponse(false, null, 'Cannot start consultation for completed/cancelled appointment'));
     }
 
     // Insert new consultation row
@@ -385,9 +403,8 @@ async function updateConsultation(req, res) {
     if (docId && consult.doctor_id !== docId && req.user.role !== 'super_admin') {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot edit another doctor consultation'));
     }
-
     if (consult.status === 'completed') {
-      return res.status(422).json(formatResponse(false, null, 'Unprocessable Entity: Completed consultations are immutable and cannot be updated'));
+      return res.status(422).json(formatResponse(false, null, 'Cannot modify a completed consultation'));
     }
 
     const {
@@ -527,33 +544,71 @@ async function createPrescription(req, res) {
       await client.query('ROLLBACK');
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot create prescription for another doctor consultation'));
     }
-
     if (consult.status === 'completed') {
       await client.query('ROLLBACK');
-      return res.status(422).json(formatResponse(false, null, 'Unprocessable Entity: Cannot add prescription to completed consultation'));
+      return res.status(422).json(formatResponse(false, null, 'Cannot add prescription to a completed consultation'));
     }
 
-    // Insert prescription record
-    const prescRes = await client.query(`
-      INSERT INTO prescriptions (
-        consultation_id, patient_id, doctor_id, appointment_id
-      ) VALUES ($1, $2, $3, $4)
-      RETURNING *
-    `, [consult.consultation_id, consult.patient_id, consult.doctor_id, consult.appointment_id]);
+    // Check if prescription already exists for this consultation / appointment
+    const existingRxRes = await client.query(
+      `SELECT * FROM prescriptions WHERE consultation_id = $1 OR (appointment_id = $2 AND appointment_id IS NOT NULL) ORDER BY id ASC`,
+      [consult.consultation_id, consult.appointment_id]
+    );
 
-    const prescription = prescRes.rows[0];
-    prescription.prescription_id = prescription.id;
+    let prescription;
+    if (existingRxRes.rows.length > 0) {
+      prescription = existingRxRes.rows[0];
+      prescription.prescription_id = prescription.id;
+
+      // Update consultation_id and appointment_id if missing
+      await client.query(`
+        UPDATE prescriptions 
+        SET consultation_id = $1, appointment_id = $2, patient_id = $3, doctor_id = $4
+        WHERE id = $5
+      `, [consult.consultation_id, consult.appointment_id, consult.patient_id, consult.doctor_id, prescription.id]);
+
+      // Delete previous items so they are cleanly replaced by the current medicines list
+      await client.query(`DELETE FROM prescription_items WHERE prescription_id = $1`, [prescription.id]);
+
+      // If any extraneous duplicate prescriptions exist for this consultation/appointment, remove them
+      if (existingRxRes.rows.length > 1) {
+        const extraRxIds = existingRxRes.rows.slice(1).map(r => r.id);
+        await client.query(`DELETE FROM prescription_items WHERE prescription_id = ANY($1::int[])`, [extraRxIds]);
+        await client.query(`DELETE FROM prescriptions WHERE id = ANY($1::int[])`, [extraRxIds]);
+      }
+    } else {
+      // Insert new prescription record
+      const prescRes = await client.query(`
+        INSERT INTO prescriptions (
+          consultation_id, patient_id, doctor_id, appointment_id
+        ) VALUES ($1, $2, $3, $4)
+        RETURNING *
+      `, [consult.consultation_id, consult.patient_id, consult.doctor_id, consult.appointment_id]);
+
+      prescription = prescRes.rows[0];
+      prescription.prescription_id = prescription.id;
+    }
+
     const insertedItems = [];
 
     for (const item of medicines) {
       const medId = item.medicine_id || item.id;
       const itemRes = await client.query(`
         INSERT INTO prescription_items (
-          prescription_id, medicine_id, dosage, quantity
-        ) VALUES ($1, $2, $3, $4)
+          prescription_id, medicine_id, dosage, quantity, frequency, route, duration_days, timing, food_instruction, special_instructions
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
       `, [
-        prescription.id, medId, item.dosage || '1 tab', item.quantity || 5
+        prescription.id,
+        medId,
+        item.dosage || '1 tab',
+        parseInt(item.quantity) || 1,
+        item.frequency || null,
+        item.route || 'oral',
+        item.duration_days ? parseInt(item.duration_days) : null,
+        item.timing || null,
+        item.food_instruction || null,
+        item.special_instructions || null
       ]);
       insertedItems.push(itemRes.rows[0]);
     }
@@ -581,20 +636,41 @@ async function getMyPrescriptions(req, res) {
     const docId = await resolveDoctorId(userId);
     const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
 
-    const { patient_id, date } = req.query;
+    const { patient_id, date, search, prescription_id, status } = req.query;
 
     let query = `
-      SELECT pr.id as prescription_id, pr.created_at, pr.patient_id, pr.doctor_id, p.full_name as patient_name, p.registration_id,
-             json_agg(json_build_object(
-               'item_id', pi.id,
-               'medicine_name', mm.medicine_name,
-               'dosage', pi.dosage,
-               'quantity', pi.quantity
-             )) as medicines
+      SELECT pr.id as prescription_id, pr.consultation_id, pr.created_at, pr.patient_id, pr.doctor_id, pr.appointment_id,
+             COALESCE(pr.pharmacy_status::text, 'pending') as pharmacy_status,
+             p.full_name as patient_name, p.registration_id, p.mobile_number as patient_phone,
+             p.age as patient_age, p.gender as patient_gender,
+             doc_u.full_name as doctor_name,
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'item_id', pi.id,
+                   'medicine_id', pi.medicine_id,
+                   'medicine_name', COALESCE(mm.medicine_name, 'Medicine #' || pi.medicine_id),
+                   'generic_name', mm.generic_name,
+                   'category', mm.category,
+                   'dosage', pi.dosage,
+                   'frequency', pi.frequency,
+                   'duration_days', pi.duration_days,
+                   'quantity', pi.quantity,
+                   'route', pi.route,
+                   'timing', pi.timing,
+                   'food_instruction', pi.food_instruction,
+                   'special_instructions', pi.special_instructions,
+                   'dispense_status', pi.dispense_status
+                 )
+               ) FILTER (WHERE pi.id IS NOT NULL),
+               '[]'::json
+             ) as medicines
       FROM prescriptions pr
       JOIN patients p ON pr.patient_id = p.patient_id
-      JOIN prescription_items pi ON pr.id = pi.prescription_id
-      JOIN medicine_master mm ON pi.medicine_id = mm.id
+      LEFT JOIN doctors d ON pr.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+      LEFT JOIN prescription_items pi ON pr.id = pi.prescription_id
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
       WHERE ($1::integer IS NULL OR pr.doctor_id = $1)
     `;
     const params = [doctorFilterId];
@@ -603,17 +679,83 @@ async function getMyPrescriptions(req, res) {
       params.push(parseInt(patient_id));
       query += ` AND pr.patient_id = $${params.length}`;
     }
+    if (prescription_id) {
+      params.push(parseInt(prescription_id));
+      query += ` AND pr.id = $${params.length}`;
+    }
     if (date) {
       params.push(date);
       query += ` AND DATE(pr.created_at) = $${params.length}`;
     }
+    if (status) {
+      params.push(status);
+      query += ` AND pr.pharmacy_status::text = $${params.length}`;
+    }
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      const sIdx = params.length;
+      query += ` AND (
+        p.full_name ILIKE $${sIdx} OR
+        p.registration_id ILIKE $${sIdx} OR
+        p.mobile_number ILIKE $${sIdx} OR
+        CAST(pr.id AS TEXT) ILIKE $${sIdx} OR
+        CAST(pr.patient_id AS TEXT) ILIKE $${sIdx}
+      )`;
+    }
 
-    query += ` GROUP BY pr.id, p.full_name, p.registration_id ORDER BY pr.id DESC LIMIT 50`;
+    query += ` GROUP BY pr.id, pr.consultation_id, pr.created_at, pr.patient_id, pr.doctor_id, pr.appointment_id, pr.pharmacy_status, p.full_name, p.registration_id, p.mobile_number, p.age, p.gender, doc_u.full_name ORDER BY pr.id DESC LIMIT 50`;
     const result = await db.query(query, params);
 
     return res.json(formatResponse(true, result.rows, 'Doctor prescriptions retrieved successfully'));
   } catch (err) {
     console.error('getMyPrescriptions error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function getPrescriptionDetails(req, res) {
+  try {
+    const prescId = parseInt(req.params.id);
+    const userId = req.user.user_id;
+    const docId = await resolveDoctorId(userId);
+
+    const prescRes = await db.query(`
+      SELECT pr.id as prescription_id, pr.consultation_id, pr.created_at, pr.patient_id, pr.doctor_id, pr.appointment_id,
+             COALESCE(pr.pharmacy_status::text, 'pending') as pharmacy_status,
+             p.full_name as patient_name, p.registration_id, p.mobile_number as patient_phone,
+             p.age as patient_age, p.gender as patient_gender,
+             doc_u.full_name as doctor_name
+      FROM prescriptions pr
+      JOIN patients p ON pr.patient_id = p.patient_id
+      LEFT JOIN doctors d ON pr.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+      WHERE pr.id = $1
+    `, [prescId]);
+
+    if (prescRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Prescription not found'));
+    }
+
+    const prescription = prescRes.rows[0];
+
+    // Tenancy / Isolation: Doctor can only view their own prescription (unless super_admin)
+    if (docId && prescription.doctor_id !== docId && req.user.role !== 'super_admin') {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot access another doctor prescription'));
+    }
+
+    const itemsRes = await db.query(`
+      SELECT pi.*, mm.medicine_name, mm.generic_name, mm.category, mm.strength, mm.unit
+      FROM prescription_items pi
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE pi.prescription_id = $1
+      ORDER BY pi.id ASC
+    `, [prescId]);
+
+    prescription.medicines = itemsRes.rows;
+
+    return res.json(formatResponse(true, prescription, 'Prescription details retrieved successfully'));
+  } catch (err) {
+    console.error('getPrescriptionDetails error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -629,6 +771,16 @@ async function createTreatmentPlan(req, res) {
       return res.status(400).json(formatResponse(false, null, 'consultation_id, treatment_name, treatment_type, start_date, duration, duration_unit are required'));
     }
 
+    const durNum = parseInt(duration);
+    if (isNaN(durNum) || durNum <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Duration must be a positive integer'));
+    }
+
+    const startDateStr = start_date.toString().split('T')[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid start_date format. Expected YYYY-MM-DD'));
+    }
+
     const userId = req.user.user_id;
     const docId = await resolveDoctorId(userId);
 
@@ -642,17 +794,17 @@ async function createTreatmentPlan(req, res) {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot create treatment plan for another doctor consultation'));
     }
 
+    // Rule 7 & Rule 16: Completed consultation immutability
     if (consult.status === 'completed') {
-      return res.status(422).json(formatResponse(false, null, 'Unprocessable Entity: Cannot add treatment plan to completed consultation'));
+      return res.status(422).json(formatResponse(false, null, 'Cannot add treatment plan to a completed consultation'));
     }
 
     // Server-side End Date Calculation
-    const parts = start_date.toString().split('T')[0].split('-');
+    const parts = startDateStr.split('-');
     const yr = parseInt(parts[0]);
     const mo = parseInt(parts[1]) - 1;
     const dy = parseInt(parts[2]);
     const endDateObj = new Date(yr, mo, dy);
-    const durNum = parseInt(duration);
     const unitStr = duration_unit.toLowerCase();
 
     if (unitStr.startsWith('day')) {
@@ -676,22 +828,19 @@ async function createTreatmentPlan(req, res) {
         start_date, duration, duration_unit, end_date, frequency, instructions, treatment_notes,
         status, branch_id
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', $13)
-      RETURNING *
+      RETURNING *,
+        to_char(start_date, 'YYYY-MM-DD') as start_date,
+        to_char(end_date, 'YYYY-MM-DD') as end_date
     `, [
       consult.consultation_id, consult.patient_id, consult.doctor_id, treatment_name, treatment_type,
-      start_date, durNum, duration_unit, calculatedEndDate, frequency || null, instructions || null, treatment_notes || null,
+      startDateStr, durNum, duration_unit, calculatedEndDate, frequency || null, instructions || null, treatment_notes || null,
       consult.branch_id || 1
     ]);
 
     const plan = planRes.rows[0];
-    const formattedPlan = {
-      ...plan,
-      start_date: plan.start_date ? new Date(plan.start_date).toISOString().split('T')[0] : start_date,
-      end_date: calculatedEndDate
-    };
 
-    res.locals.auditEntry = { module: 'Doctor Treatment', action: 'Create Treatment Plan', recordId: plan.treatment_id, newValue: formattedPlan };
-    return res.status(201).json(formatResponse(true, formattedPlan, 'Treatment plan created successfully'));
+    res.locals.auditEntry = { module: 'Doctor Treatment', action: 'Create Treatment Plan', recordId: plan.treatment_id, newValue: plan };
+    return res.status(201).json(formatResponse(true, plan, 'Treatment plan created successfully'));
 
   } catch (err) {
     console.error('createTreatmentPlan error:', err);
@@ -705,19 +854,48 @@ async function getMyTreatmentPlans(req, res) {
     const docId = await resolveDoctorId(userId);
     const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
 
-    const { status } = req.query;
+    const { status, search, patient_id } = req.query;
 
     let query = `
-      SELECT tp.*, p.full_name as patient_name, p.registration_id
+      SELECT tp.treatment_id, tp.consultation_id, tp.patient_id, tp.doctor_id,
+             tp.treatment_name, tp.treatment_type,
+             to_char(tp.start_date, 'YYYY-MM-DD') as start_date,
+             tp.duration, tp.duration_unit,
+             to_char(tp.end_date, 'YYYY-MM-DD') as end_date,
+             tp.frequency, tp.instructions, tp.treatment_notes,
+             tp.status, tp.branch_id, tp.created_at, tp.updated_at,
+             p.full_name as patient_name, p.registration_id, p.mobile_number, p.gender, p.age,
+             doc_u.full_name as doctor_name, d.doctor_code
       FROM treatment_plans tp
       JOIN patients p ON tp.patient_id = p.patient_id
+      LEFT JOIN doctors d ON tp.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
       WHERE ($1::integer IS NULL OR tp.doctor_id = $1)
     `;
     const params = [doctorFilterId];
 
+    if (patient_id) {
+      params.push(parseInt(patient_id));
+      query += ` AND tp.patient_id = $${params.length}`;
+    }
+
     if (status) {
-      params.push(status);
+      params.push(status.toLowerCase());
       query += ` AND tp.status = $${params.length}`;
+    }
+
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      const sIdx = params.length;
+      query += ` AND (
+        tp.treatment_name ILIKE $${sIdx} OR
+        tp.treatment_type ILIKE $${sIdx} OR
+        p.full_name ILIKE $${sIdx} OR
+        p.registration_id ILIKE $${sIdx} OR
+        p.mobile_number ILIKE $${sIdx} OR
+        CAST(tp.treatment_id AS TEXT) ILIKE $${sIdx} OR
+        CAST(tp.patient_id AS TEXT) ILIKE $${sIdx}
+      )`;
     }
 
     query += ` ORDER BY tp.treatment_id DESC LIMIT 50`;
@@ -726,6 +904,167 @@ async function getMyTreatmentPlans(req, res) {
     return res.json(formatResponse(true, result.rows, 'Doctor treatment plans retrieved successfully'));
   } catch (err) {
     console.error('getMyTreatmentPlans error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function getTreatmentPlanDetails(req, res) {
+  try {
+    const planId = parseInt(req.params.id);
+    if (isNaN(planId)) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid treatment plan ID'));
+    }
+
+    const userId = req.user.user_id;
+    const docId = await resolveDoctorId(userId);
+
+    const planRes = await db.query(`
+      SELECT tp.treatment_id, tp.consultation_id, tp.patient_id, tp.doctor_id,
+             tp.treatment_name, tp.treatment_type,
+             to_char(tp.start_date, 'YYYY-MM-DD') as start_date,
+             tp.duration, tp.duration_unit,
+             to_char(tp.end_date, 'YYYY-MM-DD') as end_date,
+             tp.frequency, tp.instructions, tp.treatment_notes,
+             tp.status, tp.branch_id, tp.created_at, tp.updated_at,
+             p.full_name as patient_name, p.registration_id, p.mobile_number as patient_phone,
+             p.age as patient_age, p.gender as patient_gender,
+             doc_u.full_name as doctor_name, d.doctor_code,
+             c.status as consultation_status, c.created_at as consultation_date
+      FROM treatment_plans tp
+      JOIN patients p ON tp.patient_id = p.patient_id
+      LEFT JOIN consultations c ON tp.consultation_id = c.consultation_id
+      LEFT JOIN doctors d ON tp.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+      WHERE tp.treatment_id = $1
+    `, [planId]);
+
+    if (planRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Treatment plan not found'));
+    }
+
+    const plan = planRes.rows[0];
+
+    // Tenancy / Doctor Isolation Check
+    if (docId && plan.doctor_id !== docId && req.user.role !== 'super_admin') {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot access another doctor treatment plan'));
+    }
+
+    return res.json(formatResponse(true, plan, 'Treatment plan details retrieved successfully'));
+  } catch (err) {
+    console.error('getTreatmentPlanDetails error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function updateTreatmentPlan(req, res) {
+  try {
+    const planId = parseInt(req.params.id);
+    if (isNaN(planId)) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid treatment plan ID'));
+    }
+
+    const userId = req.user.user_id;
+    const docId = await resolveDoctorId(userId);
+
+    const planRes = await db.query(`SELECT * FROM treatment_plans WHERE treatment_id = $1`, [planId]);
+    if (planRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Treatment plan not found'));
+    }
+
+    const plan = planRes.rows[0];
+
+    // Tenancy / Doctor Isolation Check
+    if (docId && plan.doctor_id !== docId && req.user.role !== 'super_admin') {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot edit another doctor treatment plan'));
+    }
+
+    const { status, instructions, treatment_notes, frequency, treatment_name, treatment_type, start_date, duration, duration_unit } = req.body;
+
+    // Status lifecycle validation
+    const validStatuses = ['active', 'completed', 'cancelled'];
+    if (status && !validStatuses.includes(status.toLowerCase())) {
+      return res.status(422).json(formatResponse(false, null, `Invalid status: ${status}. Valid statuses are: active, completed, cancelled`));
+    }
+
+    // Lifecycle transition rules:
+    // Once completed or cancelled, treatment plan status cannot be altered
+    if (status && plan.status !== 'active' && plan.status !== status.toLowerCase()) {
+      return res.status(422).json(formatResponse(false, null, `Cannot change status of a ${plan.status} treatment plan`));
+    }
+
+    let calculatedEndDate = plan.end_date ? new Date(plan.end_date).toISOString().split('T')[0] : null;
+    const newStartDate = start_date ? start_date.toString().split('T')[0] : (plan.start_date ? new Date(plan.start_date).toISOString().split('T')[0] : null);
+    const newDuration = duration !== undefined ? parseInt(duration) : plan.duration;
+    const newDurationUnit = duration_unit || plan.duration_unit;
+
+    if (duration !== undefined && (isNaN(newDuration) || newDuration <= 0)) {
+      return res.status(400).json(formatResponse(false, null, 'Duration must be a positive integer'));
+    }
+
+    if (start_date || duration !== undefined || duration_unit) {
+      if (newStartDate && newDuration && newDurationUnit) {
+        const parts = newStartDate.split('-');
+        const yr = parseInt(parts[0]);
+        const mo = parseInt(parts[1]) - 1;
+        const dy = parseInt(parts[2]);
+        const endDateObj = new Date(yr, mo, dy);
+        const unitStr = newDurationUnit.toLowerCase();
+
+        if (unitStr.startsWith('day')) {
+          endDateObj.setDate(endDateObj.getDate() + newDuration);
+        } else if (unitStr.startsWith('week')) {
+          endDateObj.setDate(endDateObj.getDate() + (newDuration * 7));
+        } else if (unitStr.startsWith('month')) {
+          endDateObj.setMonth(endDateObj.getMonth() + newDuration);
+        } else {
+          endDateObj.setDate(endDateObj.getDate() + newDuration);
+        }
+
+        const yearStr = endDateObj.getFullYear();
+        const monthStr = String(endDateObj.getMonth() + 1).padStart(2, '0');
+        const dayStr = String(endDateObj.getDate()).padStart(2, '0');
+        calculatedEndDate = `${yearStr}-${monthStr}-${dayStr}`;
+      }
+    }
+
+    const newStatus = status ? status.toLowerCase() : plan.status;
+
+    const updatedRes = await db.query(`
+      UPDATE treatment_plans SET
+        status = $1,
+        instructions = COALESCE($2, instructions),
+        treatment_notes = COALESCE($3, treatment_notes),
+        frequency = COALESCE($4, frequency),
+        treatment_name = COALESCE($5, treatment_name),
+        treatment_type = COALESCE($6, treatment_type),
+        start_date = COALESCE($7, start_date),
+        duration = COALESCE($8, duration),
+        duration_unit = COALESCE($9, duration_unit),
+        end_date = COALESCE($10, end_date),
+        updated_at = now()
+      WHERE treatment_id = $11
+      RETURNING *,
+        to_char(start_date, 'YYYY-MM-DD') as start_date,
+        to_char(end_date, 'YYYY-MM-DD') as end_date
+    `, [
+      newStatus,
+      instructions !== undefined ? instructions : null,
+      treatment_notes !== undefined ? treatment_notes : null,
+      frequency !== undefined ? frequency : null,
+      treatment_name || null,
+      treatment_type || null,
+      newStartDate || null,
+      newDuration || null,
+      newDurationUnit || null,
+      calculatedEndDate || null,
+      planId
+    ]);
+
+    const updatedPlan = updatedRes.rows[0];
+    res.locals.auditEntry = { module: 'Doctor Treatment', action: 'Update Treatment Plan', recordId: planId, newValue: updatedPlan };
+    return res.json(formatResponse(true, updatedPlan, 'Treatment plan updated successfully'));
+  } catch (err) {
+    console.error('updateTreatmentPlan error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -797,11 +1136,12 @@ async function saveDraft(req, res) {
     }
 
     const consult = consultRes.rows[0];
-    if (consult.status === 'completed') {
-      return res.status(400).json(formatResponse(false, null, 'Consultation is already completed and locked from editing'));
-    }
     if (docId && consult.doctor_id !== docId && req.user.role !== 'super_admin') {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot save draft for another doctor consultation'));
+    }
+
+    if (consult.status === 'completed') {
+      return res.json(formatResponse(true, { consultation_id: consultId, status: 'completed' }, 'Consultation is already completed. Clinical changes preserved.'));
     }
 
     // Persist draft status and ensure appointment stays in_consultation
@@ -861,6 +1201,7 @@ async function completeConsultation(req, res) {
         rxId = newRx.rows[0].id;
       } else {
         rxId = rxRes.rows[0].id;
+        await db.query(`DELETE FROM prescription_items WHERE prescription_id = $1`, [rxId]);
       }
 
       for (const item of prescription_items) {
@@ -991,6 +1332,35 @@ async function getConsultationDetails(req, res) {
       delete consult.doctor_notes;
     }
 
+    // Fetch prescriptions for this consultation
+    const prescRes = await db.query(`
+      SELECT pr.id as prescription_id, pr.created_at,
+             json_agg(json_build_object(
+               'item_id', pi.id,
+               'medicine_id', pi.medicine_id,
+               'medicine_name', mm.medicine_name,
+               'dosage', pi.dosage,
+               'quantity', pi.quantity,
+               'frequency', pi.frequency,
+               'route', pi.route,
+               'duration_days', pi.duration_days
+             )) as medicines
+      FROM prescriptions pr
+      JOIN prescription_items pi ON pr.id = pi.prescription_id
+      JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE pr.consultation_id = $1
+      GROUP BY pr.id, pr.created_at
+      ORDER BY pr.id ASC
+    `, [consultId]);
+
+    // Fetch treatment plans for this consultation
+    const treatRes = await db.query(`
+      SELECT * FROM treatment_plans WHERE consultation_id = $1 ORDER BY treatment_id ASC
+    `, [consultId]);
+
+    consult.prescriptions = prescRes.rows;
+    consult.treatment_plans = treatRes.rows;
+
     return res.json(formatResponse(true, consult, 'Consultation details retrieved successfully'));
   } catch (err) {
     console.error('getConsultationDetails error:', err);
@@ -1003,7 +1373,19 @@ async function getMyTargets(req, res) {
   try {
     const userId = req.user.user_id;
     const docId = await resolveDoctorId(userId);
-    const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
+
+    // Strict role scoping
+    let doctorFilterId = docId;
+    if (req.user.role === 'doctor') {
+      if (!docId) {
+        return res.status(404).json(formatResponse(false, null, 'Doctor profile not found for current user'));
+      }
+      doctorFilterId = docId;
+    } else if (req.user.role === 'super_admin') {
+      doctorFilterId = req.query.doctor_id ? parseInt(req.query.doctor_id) : docId;
+    } else {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Unauthorized role'));
+    }
 
     const { month, year } = req.query;
     const now = new Date();
@@ -1015,14 +1397,16 @@ async function getMyTargets(req, res) {
       WHERE ($1::integer IS NULL OR doctor_id = $1) AND month = $2 AND year = $3
     `, [doctorFilterId, targetMonth, targetYear]);
 
-    let revTarget = 200000;
-    let unitTarget = 300000;
-    let refTarget = 30;
+    let revTarget = 0;
+    let unitTarget = 0;
+    let refTarget = 0;
+    let hasTargets = false;
 
     if (targetRes.rows.length > 0) {
-      revTarget = parseFloat(targetRes.rows[0].revenue_target || 200000);
-      unitTarget = parseFloat(targetRes.rows[0].unit_target || 300000);
-      refTarget = parseInt(targetRes.rows[0].referral_target || 30);
+      hasTargets = true;
+      revTarget = parseFloat(targetRes.rows[0].revenue_target || 0);
+      unitTarget = parseFloat(targetRes.rows[0].unit_target || 0);
+      refTarget = parseInt(targetRes.rows[0].referral_target || 0);
     }
 
     const revAchievedRes = await db.query(`
@@ -1031,11 +1415,12 @@ async function getMyTargets(req, res) {
       JOIN bills b ON p.bill_id = b.bill_id
       WHERE ($1::integer IS NULL OR b.doctor_id = $1)
         AND b.status != 'refunded'
+        AND p.status = 'success'
         AND EXTRACT(MONTH FROM p.payment_date) = $2 AND EXTRACT(YEAR FROM p.payment_date) = $3
     `, [doctorFilterId, targetMonth, targetYear]);
 
     const revAchieved = parseFloat(revAchievedRes.rows[0].total_revenue || 0);
-    const unitAchieved = parseInt(revAchievedRes.rows[0].completed_units || 0) * 500;
+    const unitAchieved = revAchieved;
     const refAchievedRes = await db.query(`
       SELECT COUNT(*) as referrals FROM appointments
       WHERE ($1::integer IS NULL OR doctor_id = $1) AND appointment_type = 'new'
@@ -1044,25 +1429,26 @@ async function getMyTargets(req, res) {
     const refAchieved = parseInt(refAchievedRes.rows[0].referrals || 0);
 
     return res.json(formatResponse(true, {
+      has_targets: hasTargets,
       month: targetMonth,
       year: targetYear,
       revenue_target: {
         target: revTarget,
         achieved: revAchieved,
         remaining: Math.max(0, revTarget - revAchieved),
-        achievement_pct: revTarget > 0 ? Math.min(100, parseFloat(((revAchieved / revTarget) * 100).toFixed(1))) : 0
+        achievement_pct: revTarget > 0 ? parseFloat(((revAchieved / revTarget) * 100).toFixed(1)) : 0
       },
       unit_target: {
         target: unitTarget,
         achieved: unitAchieved,
         remaining: Math.max(0, unitTarget - unitAchieved),
-        achievement_pct: unitTarget > 0 ? Math.min(100, parseFloat(((unitAchieved / unitTarget) * 100).toFixed(1))) : 0
+        achievement_pct: unitTarget > 0 ? parseFloat(((unitAchieved / unitTarget) * 100).toFixed(1)) : 0
       },
       referral_target: {
         target: refTarget,
         achieved: refAchieved,
         remaining: Math.max(0, refTarget - refAchieved),
-        achievement_pct: refTarget > 0 ? Math.min(100, parseFloat(((refAchieved / refTarget) * 100).toFixed(1))) : 0
+        achievement_pct: refTarget > 0 ? parseFloat(((refAchieved / refTarget) * 100).toFixed(1)) : 0
       }
     }, 'Doctor target performance retrieved successfully'));
   } catch (err) {
@@ -1146,29 +1532,73 @@ async function getSchedule(req, res) {
 async function applyLeave(req, res) {
   try {
     const { from_date, to_date, reason, remarks } = req.body;
-    if (!from_date || !to_date || !reason) {
+    if (!from_date || !to_date || !reason || !String(reason).trim()) {
       return res.status(400).json(formatResponse(false, null, 'from_date, to_date, and reason are required'));
+    }
+
+    // Validate date format YYYY-MM-DD
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(from_date) || !dateRegex.test(to_date)) {
+      return res.status(400).json(formatResponse(false, null, 'from_date and to_date must be in YYYY-MM-DD format'));
+    }
+
+    const fromTime = new Date(from_date).getTime();
+    const toTime = new Date(to_date).getTime();
+    if (isNaN(fromTime) || isNaN(toTime)) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid calendar date provided'));
+    }
+
+    if (to_date < from_date) {
+      return res.status(400).json(formatResponse(false, null, 'to_date cannot be earlier than from_date'));
     }
 
     const userId = req.user.user_id;
     const docId = await resolveDoctorId(userId);
-    const targetDoctorId = docId || (req.body.doctor_id ? parseInt(req.body.doctor_id) : 1);
+
+    // Strict role scoping
+    let targetDoctorId = docId;
+    if (req.user.role === 'doctor') {
+      if (!docId) {
+        return res.status(404).json(formatResponse(false, null, 'Doctor profile not found for current user'));
+      }
+      targetDoctorId = docId;
+    } else if (req.user.role === 'super_admin') {
+      targetDoctorId = req.body.doctor_id ? parseInt(req.body.doctor_id) : docId;
+      if (!targetDoctorId) {
+        return res.status(400).json(formatResponse(false, null, 'doctor_id is required for super_admin'));
+      }
+    } else {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Unauthorized role'));
+    }
+
+    // Check for duplicate / overlapping active leaves (pending or approved)
+    const overlapCheck = await db.query(`
+      SELECT id, from_date, to_date, status
+      FROM doctor_leaves
+      WHERE doctor_id = $1
+        AND status IN ('pending', 'approved')
+        AND from_date <= $3::date AND to_date >= $2::date
+      LIMIT 1
+    `, [targetDoctorId, from_date, to_date]);
+
+    if (overlapCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'You already have an active or pending leave request overlapping this date range'));
+    }
+
+    const branchId = req.user.branch_id || 1;
+    const trimmedReason = String(reason).trim();
+    const trimmedRemarks = remarks ? String(remarks).trim() : null;
 
     const leaveRes = await db.query(`
       INSERT INTO doctor_leaves (
         doctor_id, from_date, to_date, reason, remarks, status, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, 'pending'::reset_status, 1)
-      RETURNING *
-    `, [targetDoctorId, from_date, to_date, reason, remarks || null]);
+      ) VALUES ($1, $2, $3, $4, $5, 'pending'::reset_status, $6)
+      RETURNING id, doctor_id, to_char(from_date, 'YYYY-MM-DD') as from_date, to_char(to_date, 'YYYY-MM-DD') as to_date, reason, remarks, status, approved_by, branch_id, created_at, updated_at
+    `, [targetDoctorId, from_date, to_date, trimmedReason, trimmedRemarks, branchId]);
 
-    const leave = leaveRes.rows[0];
-    const formattedLeave = {
-      ...leave,
-      from_date: leave.from_date ? new Date(leave.from_date).toISOString().split('T')[0] : from_date,
-      to_date: leave.to_date ? new Date(leave.to_date).toISOString().split('T')[0] : to_date
-    };
+    const formattedLeave = leaveRes.rows[0];
 
-    res.locals.auditEntry = { module: 'Doctor Leaves', action: 'Apply Leave', recordId: leave.id, newValue: formattedLeave };
+    res.locals.auditEntry = { module: 'Doctor Leaves', action: 'Apply Leave', recordId: formattedLeave.id, newValue: formattedLeave };
     return res.status(201).json(formatResponse(true, formattedLeave, 'Leave request submitted successfully. Awaiting Super Admin approval.'));
   } catch (err) {
     console.error('applyLeave error:', err);
@@ -1180,19 +1610,41 @@ async function getMyLeaves(req, res) {
   try {
     const userId = req.user.user_id;
     const docId = await resolveDoctorId(userId);
-    const targetDoctorId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
+
+    // Strict role scoping
+    let targetDoctorId = docId;
+    if (req.user.role === 'doctor') {
+      if (!docId) {
+        return res.status(404).json(formatResponse(false, null, 'Doctor profile not found for current user'));
+      }
+      targetDoctorId = docId;
+    } else if (req.user.role === 'super_admin') {
+      targetDoctorId = req.query.doctor_id ? parseInt(req.query.doctor_id) : docId;
+    } else {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Unauthorized role'));
+    }
 
     const result = await db.query(`
-      SELECT * FROM doctor_leaves WHERE ($1::integer IS NULL OR doctor_id = $1) ORDER BY id DESC
+      SELECT 
+        dl.id,
+        dl.doctor_id,
+        to_char(dl.from_date, 'YYYY-MM-DD') as from_date,
+        to_char(dl.to_date, 'YYYY-MM-DD') as to_date,
+        dl.reason,
+        dl.remarks,
+        dl.status,
+        dl.approved_by,
+        u_app.full_name as approved_by_name,
+        dl.branch_id,
+        dl.created_at,
+        dl.updated_at
+      FROM doctor_leaves dl
+      LEFT JOIN users u_app ON dl.approved_by = u_app.user_id
+      WHERE ($1::integer IS NULL OR dl.doctor_id = $1)
+      ORDER BY dl.id DESC
     `, [targetDoctorId]);
 
-    const formattedLeaves = result.rows.map(r => ({
-      ...r,
-      from_date: r.from_date ? new Date(r.from_date).toISOString().split('T')[0] : r.from_date,
-      to_date: r.to_date ? new Date(r.to_date).toISOString().split('T')[0] : r.to_date
-    }));
-
-    return res.json(formatResponse(true, formattedLeaves, 'Doctor leave requests retrieved successfully'));
+    return res.json(formatResponse(true, result.rows, 'Doctor leave requests retrieved successfully'));
   } catch (err) {
     console.error('getMyLeaves error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -1306,6 +1758,75 @@ async function respondToClarification(req, res) {
   }
 }
 
+async function getDoctorClarifications(req, res) {
+  try {
+    const { status, priority } = req.query;
+    const branchId = req.user.branch_id || 1;
+
+    let doctorId = null;
+    if (req.user.role === 'doctor') {
+      const dRes = await db.query('SELECT doctor_id FROM doctors WHERE user_id = $1', [req.user.user_id]);
+      if (dRes.rows.length > 0) {
+        doctorId = dRes.rows[0].doctor_id;
+      }
+    }
+
+    let query = `
+      SELECT 
+        pc.*, 
+        pc.doctor_response as response,
+        p.full_name as patient_name, 
+        p.mobile_number,
+        u.full_name as raised_by_name, 
+        du.full_name as responded_by_name,
+        doc_u.full_name as doctor_name,
+        pr.appointment_id,
+        pi.dosage as item_dosage,
+        pi.quantity as item_quantity,
+        pi.dispense_status as item_dispense_status,
+        mm.medicine_name,
+        mm.strength as medicine_strength
+      FROM prescription_clarifications pc
+      JOIN patients p ON pc.patient_id = p.patient_id
+      JOIN users u ON pc.raised_by = u.user_id
+      LEFT JOIN users du ON pc.responded_by = du.user_id
+      JOIN prescriptions pr ON pc.prescription_id = pr.id
+      JOIN doctors d ON pr.doctor_id = d.doctor_id
+      JOIN users doc_u ON d.user_id = doc_u.user_id
+      LEFT JOIN prescription_items pi ON pc.prescription_item_id = pi.id
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE pc.branch_id = $1
+    `;
+    const params = [branchId];
+
+    if (doctorId) {
+      params.push(doctorId);
+      query += ` AND pr.doctor_id = $${params.length}`;
+    }
+
+    if (status) {
+      let mappedStatus = status.toLowerCase();
+      if (mappedStatus === 'pending') mappedStatus = 'open';
+      params.push(mappedStatus);
+      query += ` AND pc.status = $${params.length}::clarification_status`;
+    }
+
+    if (priority) {
+      let mappedPriority = priority.toLowerCase();
+      if (mappedPriority === 'medium') mappedPriority = 'normal';
+      params.push(mappedPriority);
+      query += ` AND pc.priority = $${params.length}::clarification_priority`;
+    }
+
+    query += ` ORDER BY pc.id DESC`;
+    const result = await db.query(query, params);
+    return res.json(formatResponse(true, result.rows, 'Doctor clarifications retrieved successfully'));
+  } catch (err) {
+    console.error('getDoctorClarifications error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 module.exports = {
   getDashboard,
   getTodayAppointments,
@@ -1317,8 +1838,11 @@ module.exports = {
   searchDiagnoses,
   createPrescription,
   getMyPrescriptions,
+  getPrescriptionDetails,
   createTreatmentPlan,
   getMyTreatmentPlans,
+  getTreatmentPlanDetails,
+  updateTreatmentPlan,
   getConsultationSummary,
   saveDraft,
   completeConsultation,
@@ -1332,5 +1856,6 @@ module.exports = {
   applyLeave,
   getMyLeaves,
   doctorPrescriptionModificationDecision,
-  respondToClarification
+  respondToClarification,
+  getDoctorClarifications
 };

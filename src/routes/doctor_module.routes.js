@@ -36,10 +36,13 @@ router.get('/consultations/:id', authorizeRoles('doctor', 'super_admin'), doctor
 // Prescriptions
 router.post('/prescriptions', authorizeRoles('doctor', 'super_admin'), doctorController.createPrescription);
 router.get('/prescriptions/mine', authorizeRoles('doctor', 'super_admin'), doctorController.getMyPrescriptions);
+router.get('/prescriptions/:id', authorizeRoles('doctor', 'super_admin'), doctorController.getPrescriptionDetails);
 
 // Treatment Plans
 router.post('/treatment-plans', authorizeRoles('doctor', 'super_admin'), doctorController.createTreatmentPlan);
 router.get('/treatment-plans/mine', authorizeRoles('doctor', 'super_admin'), doctorController.getMyTreatmentPlans);
+router.get('/treatment-plans/:id', authorizeRoles('doctor', 'super_admin'), doctorController.getTreatmentPlanDetails);
+router.put('/treatment-plans/:id', authorizeRoles('doctor', 'super_admin'), doctorController.updateTreatmentPlan);
 
 // Targets (View-only for Doctor role)
 router.get('/targets/mine', authorizeRoles('doctor', 'super_admin'), doctorController.getMyTargets);
@@ -61,7 +64,8 @@ router.get('/leaves/mine', authorizeRoles('doctor', 'super_admin'), doctorContro
 // Prescription Modification Decision (Doctor Only)
 router.post('/prescription-modifications/:id/decision', authorizeRoles('doctor'), doctorController.doctorPrescriptionModificationDecision);
 
-// Prescription Clarification Response (Doctor Only)
+// Prescription Clarification Workflow (Doctor)
+router.get('/clarifications', authorizeRoles('doctor', 'super_admin'), doctorController.getDoctorClarifications);
 router.post('/clarifications/:id/respond', authorizeRoles('doctor'), doctorController.respondToClarification);
 
 module.exports = router;

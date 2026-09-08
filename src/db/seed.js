@@ -8,7 +8,7 @@ async function seed() {
   await db.query(`
     INSERT INTO branches (branch_id, branch_name, branch_code, address, phone_number, status)
     VALUES (1, 'Hyderabad Main Branch', 'HYD001', 'Hyderabad, Telangana', '9876543210', 'active')
-    ON CONFLICT (branch_code) DO NOTHING;
+    ON CONFLICT (branch_id) DO NOTHING;
   `);
 
   // Seed Super Admin
@@ -375,6 +375,19 @@ async function seed() {
   await db.query(`
     INSERT INTO stock_adjustments (id, stock_id, medicine_id, system_quantity, physical_quantity, difference, reason, requires_approval, approval_status, performed_by, branch_id)
     VALUES (1, 1, 1, 100, 80, -20, 'Physical audit count discrepancy', true, 'pending', 1345, 1)
+    ON CONFLICT (id) DO NOTHING;
+  `);
+
+  // Seed Prescription 516 & Item 601 (Paracetamol 500mg) for PRO Review & Modification
+  await db.query(`
+    INSERT INTO prescriptions (id, consultation_id, patient_id, doctor_id, appointment_id, pharmacy_status)
+    VALUES (516, 1, 1, $1, 1, 'pending')
+    ON CONFLICT (id) DO NOTHING;
+  `, [docId]);
+
+  await db.query(`
+    INSERT INTO prescription_items (id, prescription_id, medicine_id, dosage, frequency, route, duration_days, quantity, timing, food_instruction, dispense_status)
+    VALUES (601, 516, 1, '1 tab', '1 time/day', 'oral', 5, 5, 'morning', 'after food', 'pending')
     ON CONFLICT (id) DO NOTHING;
   `);
 

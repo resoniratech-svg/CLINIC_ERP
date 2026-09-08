@@ -163,7 +163,8 @@ async function createLead(req, res) {
   try {
     const {
       lead_name, mobile_number, age, gender, village, mandal,
-      source, campaign, lead_source, preferred_doctor_id, preferred_date, preferred_time, remarks
+      source, campaign, lead_source, preferred_doctor_id, preferred_date, preferred_time, remarks,
+      requirement, problem, ailment_reason
     } = req.body;
 
     if (!lead_name || !mobile_number) {
@@ -174,6 +175,8 @@ async function createLead(req, res) {
     const execInfo = await resolveExecutiveId(req.user.user_id, branchId);
     const execId = execInfo ? execInfo.executive_id : null;
     const sourceTag = (lead_source || 'inbound').toLowerCase() === 'outbound' ? 'outbound' : 'inbound';
+    const finalRequirement = requirement ? requirement.trim() : (problem ? problem.trim() : (ailment_reason ? ailment_reason.trim() : null));
+    const finalRemarks = remarks ? remarks.trim() : null;
 
     // Link to patient if existing
     const patRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [mobile_number]);
@@ -183,13 +186,13 @@ async function createLead(req, res) {
       INSERT INTO leads (
         patient_id, lead_name, mobile_number, age, gender, village, mandal,
         source, campaign, lead_created_by_user_id, executive_id, lead_source,
-        status, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13)
+        status, branch_id, requirement, remarks
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14, $15)
       RETURNING *
     `, [
       patientId, lead_name, mobile_number, age || null, gender || null, village || null, mandal || null,
       source || (sourceTag === 'outbound' ? 'Outbound Excel' : 'Inbound Call'), campaign || null,
-      req.user.user_id, execId, sourceTag, branchId
+      req.user.user_id, execId, sourceTag, branchId, finalRequirement, finalRemarks
     ]);
 
     const newLead = result.rows[0];
@@ -374,16 +377,26 @@ async function recordCallOutcome(req, res) {
       const mob = mobile_number || '9000000000';
       const name = patient_name || 'Interested Patient';
 
+      let callLeadRequirement = req.body.requirement || req.body.problem || req.body.ailment_reason || null;
+      if (!callLeadRequirement && outbound_lead_id) {
+        const olRes = await db.query(`SELECT problem FROM outbound_leads WHERE id = $1`, [parseInt(outbound_lead_id)]);
+        if (olRes.rows.length > 0 && olRes.rows[0].problem) {
+          callLeadRequirement = olRes.rows[0].problem;
+        }
+      }
+
       const leadRes = await db.query(`
         INSERT INTO leads (
           patient_id, lead_name, mobile_number, age, gender, source, campaign,
-          lead_created_by_user_id, executive_id, lead_source, status, branch_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', $11)
+          lead_created_by_user_id, executive_id, lead_source, status, branch_id,
+          requirement, remarks
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', $11, $12, $13)
         RETURNING *
       `, [
         patient_id ? parseInt(patient_id) : null, name, mob, age || null, gender || null,
-        callType === 'inbound' ? 'Inbound Call' : 'Outbound Campaign', campaign || 'Call Campaign',
-        req.user.user_id, execId, callType, branchId
+        callType === 'inbound' ? 'Inbound Call' : 'Outbound Call', campaign || 'Call Campaign',
+        req.user.user_id, execId, callType, branchId,
+        callLeadRequirement, remarks || null
       ]);
 
       createdLead = leadRes.rows[0];
@@ -424,10 +437,16 @@ async function recordCallOutcome(req, res) {
       }
 
       if (!targetPatientId && !targetLeadId) {
+        let autoRequirement = req.body.requirement || req.body.problem || null;
+        if (!autoRequirement && outbound_lead_id) {
+          const olCheck = await db.query(`SELECT problem FROM outbound_leads WHERE id = $1`, [parseInt(outbound_lead_id)]);
+          if (olCheck.rows.length > 0) autoRequirement = olCheck.rows[0].problem;
+        }
+
         const autoLead = await db.query(`
-          INSERT INTO leads (lead_name, mobile_number, source, lead_created_by_user_id, executive_id, lead_source, status, branch_id)
-          VALUES ($1, $2, $3, $4, $5, $6, 'contacted', $7) RETURNING lead_id
-        `, [patient_name || 'Call Lead', mobile_number || '9000000000', callType === 'inbound' ? 'Inbound Call' : 'Outbound Call', req.user.user_id, execId, callType, branchId]);
+          INSERT INTO leads (lead_name, mobile_number, source, lead_created_by_user_id, executive_id, lead_source, status, branch_id, requirement, remarks)
+          VALUES ($1, $2, $3, $4, $5, $6, 'contacted', $7, $8, $9) RETURNING lead_id
+        `, [patient_name || 'Call Lead', mobile_number || '9000000000', callType === 'inbound' ? 'Inbound Call' : 'Outbound Call', req.user.user_id, execId, callType, branchId, autoRequirement, remarks || null]);
         targetLeadId = autoLead.rows[0].lead_id;
       }
     }
@@ -686,7 +705,7 @@ async function updateLead(req, res) {
     const { id } = req.params;
     const {
       lead_name, mobile_number, age, gender, village, mandal,
-      campaign, source, status, remarks
+      campaign, source, status, remarks, requirement, problem, ailment_reason
     } = req.body;
 
     const leadId = parseInt(id);
@@ -709,6 +728,9 @@ async function updateLead(req, res) {
     const newCampaign = campaign !== undefined ? (campaign ? campaign.trim() : null) : current.campaign;
     const newSource = source !== undefined ? (source ? source.trim() : null) : current.source;
     const newStatus = status !== undefined ? status : current.status;
+    const reqVal = requirement !== undefined ? requirement : (problem !== undefined ? problem : ailment_reason);
+    const newRequirement = reqVal !== undefined ? (reqVal ? reqVal.trim() : null) : current.requirement;
+    const newRemarks = remarks !== undefined ? (remarks ? remarks.trim() : null) : current.remarks;
 
     const updateRes = await db.query(`
       UPDATE leads
@@ -721,10 +743,12 @@ async function updateLead(req, res) {
           campaign = $7,
           source = $8,
           status = $9,
+          requirement = $10,
+          remarks = $11,
           updated_at = now()
-      WHERE lead_id = $10
+      WHERE lead_id = $12
       RETURNING *
-    `, [newName, newMobile, newAge, newGender, newVillage, newMandal, newCampaign, newSource, newStatus, leadId]);
+    `, [newName, newMobile, newAge, newGender, newVillage, newMandal, newCampaign, newSource, newStatus, newRequirement, newRemarks, leadId]);
 
     const updatedLead = updateRes.rows[0];
 

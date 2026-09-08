@@ -355,6 +355,31 @@ async function registerPatient(req, res) {
 
     const branchId = req.user.branch_id || 1;
 
+    // Distinguish patient acquisition channel vs medical ailment/reason
+    const channelNames = [
+      'inbound call', 'outbound call', 'excel import', 'import from excel',
+      'outbound excel', 'call center outreach', 'inbound consultation enquiry',
+      'call center executive lead', 'general consultation request', 'phone inquiry', 'phone enquiry'
+    ];
+
+    let resolvedAilment = ailment_reason ? ailment_reason.toString().trim() : '';
+    const isChannelName = resolvedAilment && channelNames.includes(resolvedAilment.toLowerCase());
+
+    if ((!resolvedAilment || isChannelName) && lead_id) {
+      const leadCheck = await client.query(`SELECT requirement, remarks FROM leads WHERE lead_id = $1`, [parseInt(lead_id)]);
+      if (leadCheck.rows.length > 0) {
+        resolvedAilment = leadCheck.rows[0].requirement || '';
+      }
+    } else if (isChannelName) {
+      resolvedAilment = '';
+    }
+
+    const resolvedSource = req.body.source || req.body.patient_source || p.source || (
+      lead_id || lead_source === 'executive_lead'
+        ? 'Call Center Executive Lead'
+        : (lead_source === 'employee_referral' ? 'Employee Referral' : (lead_source === 'patient_referral' ? 'Patient Referral' : (lead_source || 'Walk-in')))
+    );
+
     // Check if patient exists -> Auto classification
     let targetPatient = null;
     let targetPatientId = null;
@@ -365,6 +390,10 @@ async function registerPatient(req, res) {
       targetPatient = existingPt.rows[0];
       targetPatientId = targetPatient.patient_id;
       classification = 'existing';
+      if (resolvedAilment) {
+        await client.query(`UPDATE patients SET ailment_reason = $1, updated_at = now() WHERE patient_id = $2`, [resolvedAilment, targetPatientId]);
+        targetPatient.ailment_reason = resolvedAilment;
+      }
     } else {
       // Calculate registration expiry (default 30 days)
       const settingRes = await client.query(`SELECT setting_value FROM hospital_settings WHERE setting_key = 'registration_validity_days'`);
@@ -378,13 +407,14 @@ async function registerPatient(req, res) {
       const newPtRes = await client.query(`
         INSERT INTO patients (
           full_name, mobile_number, age, gender, village, mandal, address, ailment_reason,
-          registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'new', $12, $13)
+          registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by, source
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'new', $12, $13, $14)
         RETURNING *
       `, [
         full_name.trim(), numericMobile, parsedAge, cleanGender,
         village || village_mandal || null, mandal || null, address || village_mandal || null,
-        ailment_reason || null, regId, regDate, regExpiry, branchId, req.user.user_id
+        resolvedAilment || null, regId, regDate, regExpiry, branchId, req.user.user_id,
+        resolvedSource
       ]);
       targetPatient = newPtRes.rows[0];
       targetPatientId = targetPatient.patient_id;
@@ -609,13 +639,16 @@ async function createEnquiry(req, res) {
     const validLeadSources = ['inbound', 'outbound'];
     const pLeadSource = lead_source && validLeadSources.includes(lead_source.toLowerCase()) ? lead_source.toLowerCase() : 'inbound';
     const sourceLabel = source ? source.toString().trim() : 'Phone Inquiry';
+    const reqText = reason_requirement ? reason_requirement.toString().trim() : null;
+    const remText = remarks ? remarks.toString().trim() : null;
 
     const leadRes = await db.query(`
       INSERT INTO leads (
         lead_name, mobile_number, age, gender, village, mandal, source,
-        campaign, lead_source, lead_created_by_user_id, status, branch_id
+        campaign, lead_source, lead_created_by_user_id, status, branch_id,
+        requirement, remarks
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', $11)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', $11, $12, $13)
       RETURNING *
     `, [
       trimmedName,
@@ -625,10 +658,12 @@ async function createEnquiry(req, res) {
       village_mandal ? village_mandal.toString().trim() : null,
       village_mandal ? village_mandal.toString().trim() : null,
       sourceLabel,
-      reason_requirement ? reason_requirement.toString().trim() : (remarks || null),
+      null,
       pLeadSource,
       req.user.user_id,
-      branchId
+      branchId,
+      reqText,
+      remText
     ]);
 
     res.locals.auditEntry = {

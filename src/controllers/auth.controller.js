@@ -117,6 +117,14 @@ async function changePassword(req, res) {
       return res.status(400).json(formatResponse(false, null, 'Old password and new password are required'));
     }
 
+    if (String(new_password).length < 6) {
+      return res.status(400).json(formatResponse(false, null, 'New password must be at least 6 characters'));
+    }
+
+    if (old_password === new_password) {
+      return res.status(400).json(formatResponse(false, null, 'New password must be different from current password'));
+    }
+
     const userId = req.user.user_id;
     const userRes = await db.query(`SELECT password_hash FROM users WHERE user_id = $1`, [userId]);
     const user = userRes.rows[0];

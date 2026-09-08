@@ -87,6 +87,16 @@ describe('Doctor Module Business Rules & Integration Verification', () => {
     expect(apptCheck.rows[0].status).toBe('in_consultation');
   });
 
+  test('Rule 1b: Resuming consultation for appointment already in_consultation returns existing draft', async () => {
+    const resumeRes = await request(app).post('/api/v1/doctor/consultations/start').set('Authorization', `Bearer ${doctor1Token}`).send({
+      appointment_id: appointmentId
+    });
+
+    expect(resumeRes.status).toBe(200);
+    expect(resumeRes.body.success).toBe(true);
+    expect(resumeRes.body.data.consultation_id).toBe(consultationId);
+  });
+
   // Rule 2: Appointment Scoping
   test('Rule 2: Starting consultation for another doctor appointment is rejected with 403', async () => {
     const res = await request(app).post('/api/v1/doctor/consultations/start').set('Authorization', `Bearer ${doctor2Token}`).send({

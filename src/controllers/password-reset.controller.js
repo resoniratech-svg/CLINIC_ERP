@@ -4,18 +4,44 @@ const { formatResponse, generateTempPassword } = require('../utils/helpers');
 
 async function getPasswordResetRequests(req, res) {
   try {
-    const { status } = req.query;
+    const { status, role, search, date } = req.query;
     let query = `
       SELECT pr.id, pr.user_id, pr.requested_at, pr.status, pr.approved_at,
              u.full_name, u.employee_id, u.username, u.role
       FROM password_reset_requests pr
       JOIN users u ON pr.user_id = u.user_id
+      WHERE 1=1
     `;
     const params = [];
-    if (status) {
-      params.push(status);
-      query += ` WHERE pr.status = $1`;
+
+    if (status && status.trim()) {
+      params.push(status.trim().toLowerCase());
+      query += ` AND LOWER(pr.status::text) = $${params.length}`;
     }
+
+    if (role && role.trim()) {
+      params.push(role.trim().toLowerCase());
+      query += ` AND LOWER(u.role::text) = $${params.length}`;
+    }
+
+    if (search && search.trim()) {
+      params.push(`%${search.trim()}%`);
+      query += ` AND (u.full_name ILIKE $${params.length} OR u.username ILIKE $${params.length} OR u.employee_id ILIKE $${params.length})`;
+    }
+
+    if (date && date.trim()) {
+      let normalizedDate = date.trim();
+      if (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{4}$/.test(normalizedDate)) {
+        const parts = normalizedDate.split(/[\/-]/);
+        const day = parts[0].padStart(2, '0');
+        const month = parts[1].padStart(2, '0');
+        const year = parts[2];
+        normalizedDate = `${year}-${month}-${day}`;
+      }
+      params.push(normalizedDate);
+      query += ` AND TO_CHAR(pr.requested_at, 'YYYY-MM-DD') = $${params.length}`;
+    }
+
     query += ` ORDER BY pr.id DESC`;
 
     const result = await db.query(query, params);

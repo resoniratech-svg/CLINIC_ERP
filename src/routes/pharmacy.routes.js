@@ -77,6 +77,7 @@ router.get('/stock/transactions', authorizeRoles('pharmacy', 'super_admin'), pha
 router.post('/stock/adjustments', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.createStockAdjustment);
 router.get('/stock/adjustments', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getStockAdjustments);
 router.post('/stock/adjustments/:id/approve', authorizeRoles('super_admin'), pharmacyController.approveStockAdjustment);
+router.post('/stock/adjustments/:id/reject', authorizeRoles('super_admin'), pharmacyController.rejectStockAdjustment);
 
 // 12. Medicine Returns
 router.post('/returns', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.createMedicineReturn);

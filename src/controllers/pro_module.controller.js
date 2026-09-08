@@ -123,6 +123,52 @@ async function getPatientQueue(req, res) {
   }
 }
 
+// 2b. Search Patients for PRO (Branch isolated, doctor_notes masked)
+async function searchPatients(req, res) {
+  try {
+    const { search, q, name, patient_id, mobile, limit } = req.query;
+    const branchId = req.user.branch_id || 1;
+
+    const searchTerm = (search || q || name || '').trim();
+    const specificPatientId = patient_id ? parseInt(patient_id) : null;
+
+    let query = `
+      SELECT p.patient_id, p.registration_id, p.full_name as patient_name, p.full_name,
+             p.mobile_number, p.age, p.gender, p.village, p.patient_type
+      FROM patients p
+      WHERE p.branch_id = $1
+    `;
+    const params = [branchId];
+
+    if (specificPatientId && !isNaN(specificPatientId)) {
+      params.push(specificPatientId);
+      query += ` AND p.patient_id = $${params.length}`;
+    } else if (mobile && mobile.trim()) {
+      params.push(`%${mobile.trim()}%`);
+      query += ` AND p.mobile_number ILIKE $${params.length}`;
+    } else if (searchTerm) {
+      const num = parseInt(searchTerm);
+      if (!isNaN(num) && String(num) === searchTerm) {
+        params.push(num);
+        params.push(`%${searchTerm}%`);
+        query += ` AND (p.patient_id = $${params.length - 1} OR p.mobile_number ILIKE $${params.length} OR p.full_name ILIKE $${params.length})`;
+      } else {
+        params.push(`%${searchTerm}%`);
+        query += ` AND (p.full_name ILIKE $${params.length} OR p.mobile_number ILIKE $${params.length} OR p.registration_id ILIKE $${params.length})`;
+      }
+    }
+
+    query += ` ORDER BY p.patient_id DESC LIMIT $${params.length + 1}`;
+    params.push(limit ? parseInt(limit) : 50);
+
+    const result = await db.query(query, params);
+    return res.json(formatResponse(true, result.rows, 'Patients retrieved successfully'));
+  } catch (err) {
+    console.error('searchPatients error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 // 3. Patient 360° Overview (Crucial Rule: doctor_notes MASKED from PRO)
 async function getPatientOverview(req, res) {
   try {
@@ -134,9 +180,32 @@ async function getPatientOverview(req, res) {
     }
     const patient = ptRes.rows[0];
 
-    // Latest Consultation Data (STRIP doctor_notes!)
+    // Active or Most Relevant Appointment for Workflow Stage Tracking
+    const apptRes = await db.query(`
+      SELECT a.appointment_id, a.patient_id, a.doctor_id, a.appointment_date, a.appointment_time,
+             a.appointment_type, a.status as appointment_status, a.created_at,
+             u.full_name as doctor_name, d.specialization as doctor_specialization
+      FROM appointments a
+      LEFT JOIN doctors d ON a.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE a.patient_id = $1
+      ORDER BY 
+        CASE 
+          WHEN a.status IN ('doctor_completed', 'pro_pending') THEN 1
+          WHEN a.status = 'pro_completed' THEN 2
+          WHEN a.status = 'completed' THEN 3
+          ELSE 4
+        END ASC,
+        a.appointment_id DESC LIMIT 1
+    `, [patientId]);
+
+    const activeAppt = apptRes.rows[0] || null;
+    const activeApptId = activeAppt ? activeAppt.appointment_id : null;
+
+    // Relevant Consultation Data (STRIP doctor_notes!)
     const consultRes = await db.query(`
       SELECT c.consultation_id, c.appointment_id, c.doctor_id, u.full_name as doctor_name,
+             d.specialization as doctor_specialization,
              c.chief_complaint, c.symptoms, c.general_examination, c.physical_examination,
              c.primary_diagnosis_text, c.secondary_diagnosis_text, c.diagnosis_description,
              c.investigations, c.followup_recommended, c.followup_recommended_date,
@@ -146,24 +215,49 @@ async function getPatientOverview(req, res) {
       LEFT JOIN doctors d ON c.doctor_id = d.doctor_id
       LEFT JOIN users u ON d.user_id = u.user_id
       WHERE c.patient_id = $1
-      ORDER BY c.consultation_id DESC LIMIT 1
-    `, [patientId]);
+      ORDER BY 
+        CASE 
+          WHEN $2::int IS NOT NULL AND c.appointment_id = $2::int THEN 1
+          WHEN c.status = 'completed' THEN 2
+          ELSE 3
+        END ASC,
+        c.consultation_id DESC LIMIT 1
+    `, [patientId, activeApptId]);
 
     const consultation = consultRes.rows[0] || null;
 
-    // Latest Prescription
+    // Latest or Linked Prescription
     const prescRes = await db.query(`
-      SELECT p.id as prescription_id, p.created_at,
+      SELECT p.id as prescription_id, p.created_at, p.pharmacy_status, p.appointment_id, p.consultation_id,
              json_agg(pi.*) as items
       FROM prescriptions p
       LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
       WHERE p.patient_id = $1
       GROUP BY p.id
-      ORDER BY p.id DESC LIMIT 1
-    `, [patientId]);
+      ORDER BY 
+        CASE 
+          WHEN $2::int IS NOT NULL AND p.appointment_id = $2::int THEN 1
+          ELSE 2
+        END ASC,
+        p.id DESC LIMIT 1
+    `, [patientId, activeApptId]);
 
     // Financials
-    const billsRes = await db.query(`SELECT * FROM bills WHERE patient_id = $1 ORDER BY bill_id DESC`, [patientId]);
+    const billsRes = await db.query(`
+      SELECT b.*,
+             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) as paid_amount,
+             CASE
+               WHEN COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) >= b.final_amount THEN 'paid'
+               WHEN COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) > 0 THEN 'partial'
+               ELSE 'unpaid'
+             END as payment_status,
+             u.full_name as created_by_name,
+             u.role as created_by_role
+      FROM bills b
+      LEFT JOIN users u ON b.created_by = u.user_id
+      WHERE b.patient_id = $1
+      ORDER BY b.bill_id DESC
+    `, [patientId]);
     const paymentsRes = await db.query(`SELECT * FROM payments WHERE patient_id = $1 ORDER BY payment_id DESC`, [patientId]);
     const duesRes = await db.query(`SELECT id as due_id, patient_id, bill_id, due_amount, status FROM due_patients WHERE patient_id = $1 ORDER BY id DESC`, [patientId]);
 
@@ -172,11 +266,69 @@ async function getPatientOverview(req, res) {
     const followupsRes = await db.query(`SELECT * FROM crm_followups WHERE patient_id = $1 ORDER BY id DESC`, [patientId]);
     const renewalsRes = await db.query(`SELECT * FROM renewals WHERE patient_id = $1 ORDER BY id DESC`, [patientId]);
     const packagesRes = await db.query(`SELECT * FROM packages WHERE patient_id = $1 ORDER BY package_id DESC`, [patientId]);
+    // Treatment Plans prescribed by Doctor
+    const tpRes = await db.query(`SELECT * FROM treatment_plans WHERE patient_id = $1 ORDER BY treatment_id DESC`, [patientId]);
+
+    // Full Historical Timeline Collections
+    const allApptsRes = await db.query(`
+      SELECT a.appointment_id, a.patient_id, a.doctor_id, a.appointment_date, a.appointment_time,
+             a.appointment_type, a.status, a.created_at,
+             u.full_name as doctor_name, d.specialization as doctor_specialization
+      FROM appointments a
+      LEFT JOIN doctors d ON a.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE a.patient_id = $1
+      ORDER BY a.appointment_id DESC
+    `, [patientId]);
+
+    const allConsultsRes = await db.query(`
+      SELECT c.consultation_id, c.appointment_id, c.doctor_id, u.full_name as doctor_name,
+             d.specialization as doctor_specialization,
+             c.chief_complaint, c.symptoms, c.primary_diagnosis_text, c.secondary_diagnosis_text,
+             c.diagnosis_description, c.investigations, c.followup_recommended,
+             c.followup_recommended_date, c.followup_instructions, c.pro_required,
+             c.pro_reason, c.status, c.created_at
+      FROM consultations c
+      LEFT JOIN doctors d ON c.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE c.patient_id = $1
+      ORDER BY c.consultation_id DESC
+    `, [patientId]);
+
+    const allPrescRes = await db.query(`
+      SELECT p.id as prescription_id, p.appointment_id, p.consultation_id, p.created_at,
+             p.pharmacy_status, u.full_name as doctor_name,
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'id', pi.id,
+                   'medicine_id', pi.medicine_id,
+                   'medicine_name', mm.medicine_name,
+                   'dosage', pi.dosage,
+                   'frequency', pi.frequency,
+                   'duration_days', pi.duration_days,
+                   'quantity', pi.quantity,
+                   'dispense_status', pi.dispense_status,
+                   'dispensed_quantity', pi.dispensed_quantity
+                 )
+               ) FILTER (WHERE pi.id IS NOT NULL), '[]'::json
+             ) as items
+      FROM prescriptions p
+      LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE p.patient_id = $1
+      GROUP BY p.id, u.full_name
+      ORDER BY p.id DESC
+    `, [patientId]);
 
     const overview = {
       patient,
+      appointment: activeAppt,
       consultation, // Note: doctor_notes is NOT included here!
       prescription: prescRes.rows[0] || null,
+      treatment_plans: tpRes.rows,
       financials: {
         bills: billsRes.rows,
         payments: paymentsRes.rows,
@@ -187,6 +339,16 @@ async function getPatientOverview(req, res) {
         followups: followupsRes.rows,
         renewals: renewalsRes.rows,
         packages: packagesRes.rows
+      },
+      history: {
+        appointments: allApptsRes.rows,
+        consultations: allConsultsRes.rows,
+        prescriptions: allPrescRes.rows,
+        treatment_plans: tpRes.rows,
+        packages: packagesRes.rows,
+        bills: billsRes.rows,
+        payments: paymentsRes.rows,
+        dues: duesRes.rows
       }
     };
 
@@ -385,16 +547,30 @@ async function updatePackageStatus(req, res) {
 async function getPrescriptionDetails(req, res) {
   try {
     const prescriptionId = parseInt(req.params.id);
-    const prescRes = await db.query(`SELECT * FROM prescriptions WHERE id = $1`, [prescriptionId]);
+    if (!prescriptionId) {
+      return res.status(400).json(formatResponse(false, null, 'Valid prescription ID is required'));
+    }
+
+    const prescRes = await db.query(`
+      SELECT pr.*, p.full_name as patient_name, p.mobile_number as patient_mobile,
+             COALESCE(u.full_name, 'Doctor') as doctor_name, d.specialization as doctor_specialization
+      FROM prescriptions pr
+      LEFT JOIN patients p ON pr.patient_id = p.patient_id
+      LEFT JOIN doctors d ON pr.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE pr.id = $1
+    `, [prescriptionId]);
+
     if (prescRes.rows.length === 0) {
       return res.status(404).json(formatResponse(false, null, 'Prescription not found'));
     }
 
     const itemsRes = await db.query(`
-      SELECT pi.*, mm.medicine_name, mm.generic_name
+      SELECT pi.*, mm.medicine_name, mm.generic_name, mm.strength, mm.medicine_type as dosage_form, mm.medicine_type, mm.category
       FROM prescription_items pi
       LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
       WHERE pi.prescription_id = $1
+      ORDER BY pi.id ASC
     `, [prescriptionId]);
 
     return res.json(formatResponse(true, { prescription: prescRes.rows[0], items: itemsRes.rows }, 'Prescription details retrieved successfully'));
@@ -408,8 +584,12 @@ async function modifyPrescriptionItem(req, res) {
   const client = await db.pool.connect();
   try {
     const itemId = parseInt(req.params.item_id);
+    if (!itemId) {
+      return res.status(400).json(formatResponse(false, null, 'Invalid prescription item ID'));
+    }
+
     const { field_changed, modified_value, reason } = req.body;
-    if (!field_changed || !modified_value || !reason) {
+    if (!field_changed || modified_value === undefined || modified_value === null || !reason) {
       return res.status(400).json(formatResponse(false, null, 'field_changed, modified_value, and reason are required'));
     }
 
@@ -421,16 +601,63 @@ async function modifyPrescriptionItem(req, res) {
     }
 
     const item = itemRes.rows[0];
-    const origVal = item[field_changed] !== undefined ? String(item[field_changed]) : (item.quantity !== undefined ? String(item.quantity) : '');
+
+    // Check parent prescription status
+    const prescRes = await client.query(`SELECT * FROM prescriptions WHERE id = $1`, [item.prescription_id]);
+    if (prescRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(formatResponse(false, null, 'Parent prescription not found'));
+    }
+
+    const rx = prescRes.rows[0];
+    const currentStatus = (rx.pharmacy_status || '').toLowerCase();
+    if (['dispensed', 'completed', 'cancelled'].includes(currentStatus)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Prescription is already ${currentStatus} and cannot be modified`));
+    }
+
+    const origVal = (field_changed === 'duration' || field_changed === 'duration_days')
+      ? String(item.duration_days || 5)
+      : (item[field_changed] !== undefined ? String(item[field_changed]) : String(item.quantity || 1));
+
     const userId = req.user.user_id;
     const role = req.user.role;
 
-    const isOperational = ['duration', 'quantity'].includes(field_changed);
+    const isOperational = ['duration', 'duration_days', 'quantity'].includes(field_changed);
     const modStatus = isOperational ? 'applied' : 'pending_doctor_confirmation';
+    let newQty = item.quantity;
+    let newDays = item.duration_days || 5;
 
     if (isOperational) {
-      if (field_changed === 'duration' || field_changed === 'quantity') {
-        await client.query(`UPDATE prescription_items SET quantity = $1 WHERE id = $2`, [parseInt(modified_value) || 5, itemId]);
+      if (field_changed === 'duration' || field_changed === 'duration_days') {
+        newDays = parseInt(modified_value);
+        if (isNaN(newDays) || newDays <= 0 || newDays > 365) {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, 'Supply duration must be a valid number of days between 1 and 365'));
+        }
+
+        // Calculate daily multiplier from frequency (e.g. "1 time/day" -> 1, "2 times/day" -> 2, "1-0-1" -> 2)
+        let dailyFreq = 1;
+        if (item.frequency) {
+          const match = item.frequency.match(/\d+/g);
+          if (match) {
+            dailyFreq = match.reduce((sum, n) => sum + parseInt(n), 0) || 1;
+          }
+        }
+        newQty = dailyFreq * newDays;
+
+        await client.query(`
+          UPDATE prescription_items
+          SET duration_days = $1, quantity = $2
+          WHERE id = $3
+        `, [newDays, newQty, itemId]);
+      } else if (field_changed === 'quantity') {
+        newQty = parseInt(modified_value);
+        if (isNaN(newQty) || newQty <= 0 || newQty > 1000) {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, 'Supply quantity must be a positive number'));
+        }
+        await client.query(`UPDATE prescription_items SET quantity = $1 WHERE id = $2`, [newQty, itemId]);
       }
     }
 
@@ -438,13 +665,26 @@ async function modifyPrescriptionItem(req, res) {
       INSERT INTO prescription_modifications (
         prescription_item_id, field_changed, original_value, modified_value,
         modified_by, modifier_role, reason, status, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
-    `, [itemId, field_changed, origVal, String(modified_value), userId, role, reason, modStatus]);
+    `, [itemId, field_changed, origVal, String(modified_value), userId, role, reason, modStatus, rx.branch_id || 1]);
+
+    const updatedItemRes = await client.query(`
+      SELECT pi.*, mm.medicine_name, mm.generic_name, mm.strength, mm.medicine_type as dosage_form, mm.medicine_type
+      FROM prescription_items pi
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE pi.id = $1
+    `, [itemId]);
 
     await client.query('COMMIT');
     res.locals.auditEntry = { module: 'PRO Prescription Modification', action: 'Modify Item', recordId: modRes.rows[0].id, newValue: modRes.rows[0] };
-    return res.status(201).json(formatResponse(true, modRes.rows[0], isOperational ? 'Prescription item modified and applied successfully' : 'Prescription modification submitted for Doctor confirmation'));
+    return res.status(201).json(formatResponse(true, {
+      ...modRes.rows[0],
+      modification: modRes.rows[0],
+      updated_item: updatedItemRes.rows[0],
+      calculated_quantity: newQty,
+      duration_days: newDays
+    }, isOperational ? 'Prescription item modified and operational supply updated successfully' : 'Prescription modification submitted for Doctor confirmation'));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('modifyPrescriptionItem error:', err);
@@ -547,7 +787,7 @@ async function getPendingBills(req, res) {
              COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
-      WHERE b.status != 'refunded' AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
+      WHERE b.status != 'refunded' AND b.bill_type != 'consultation' AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
       ORDER BY b.bill_id DESC
     `);
     return res.json(formatResponse(true, result.rows, 'Pending bills retrieved successfully'));
@@ -581,7 +821,8 @@ async function getPartialDueBills(req, res) {
              COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
-      WHERE COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) > 0
+      WHERE b.bill_type != 'consultation'
+        AND COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) > 0
         AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
       ORDER BY b.bill_id DESC
     `);
@@ -635,6 +876,12 @@ async function recordPayment(req, res) {
     }
     const bill = billRes.rows[0];
 
+    // Business Rule: PRO must never collect or record consultation payments (Receptionist responsibility)
+    if (bill.bill_type === 'consultation') {
+      await client.query('ROLLBACK');
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Consultation fee payment is handled by Receptionist only'));
+    }
+
     // Compute existing paid amount
     const prevPayRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as prev_paid FROM payments WHERE bill_id = $1`, [bill_id]);
     const prevPaid = parseFloat(prevPayRes.rows[0].prev_paid);
@@ -643,19 +890,34 @@ async function recordPayment(req, res) {
     const recordedPayments = [];
     const receivedBy = req.user.user_id;
 
+    const branchId = req.user.branch_id || bill.branch_id || 1;
+    let totalCashPayment = 0;
+
     for (const p of payList) {
       const pAmt = parseFloat(p.amount);
       const pMethod = p.payment_method || p.payment_mode || 'cash';
       totalNewPayment += pAmt;
+      if (pMethod === 'cash') totalCashPayment += pAmt;
 
       const pRes = await client.query(`
         INSERT INTO payments (
           patient_id, bill_id, amount, payment_method, payment_date,
           received_by, branch_id
-        ) VALUES ($1, $2, $3, $4, now(), $5, 1)
+        ) VALUES ($1, $2, $3, $4, now(), $5, $6)
         RETURNING *
-      `, [bill.patient_id, bill_id, pAmt, pMethod, receivedBy]);
+      `, [bill.patient_id, bill_id, pAmt, pMethod, receivedBy, branchId]);
       recordedPayments.push(pRes.rows[0]);
+    }
+
+    if (totalCashPayment > 0) {
+      await client.query(`
+        INSERT INTO cash_ledger (branch_id, ledger_date, opening_balance, cash_revenue, cash_expenditure, deposited_amount, closing_balance)
+        VALUES ($1, CURRENT_DATE, 0, $2, 0, 0, $2)
+        ON CONFLICT (branch_id, ledger_date)
+        DO UPDATE SET
+          cash_revenue = cash_ledger.cash_revenue + $2,
+          closing_balance = cash_ledger.opening_balance + (cash_ledger.cash_revenue + $2) - cash_ledger.cash_expenditure - cash_ledger.deposited_amount
+      `, [branchId, totalCashPayment]);
     }
 
     const newPaidTotal = prevPaid + totalNewPayment;
@@ -679,8 +941,8 @@ async function recordPayment(req, res) {
         await client.query(`
           INSERT INTO due_patients (
             patient_id, bill_id, due_amount, status, branch_id
-          ) VALUES ($1, $2, $3, $4, 1)
-        `, [bill.patient_id, bill_id, shortfall, newStatus === 'partial' ? 'partially_paid' : 'due']);
+          ) VALUES ($1, $2, $3, $4, $5)
+        `, [bill.patient_id, bill_id, shortfall, newStatus === 'partial' ? 'partially_paid' : 'due', branchId]);
       }
     } else {
       await client.query(`
@@ -798,8 +1060,35 @@ async function createCall(req, res) {
       return res.status(400).json(formatResponse(false, null, 'patient_id, interaction_type, call_purpose, and call_status are required'));
     }
 
+    const pId = parseInt(patient_id);
+    if (isNaN(pId) || pId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
+
+    // Verify patient exists
+    const ptCheck = await db.query(`SELECT patient_id, branch_id FROM patients WHERE patient_id = $1`, [pId]);
+    if (ptCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient ID ${pId} not found`));
+    }
+
     const handledBy = req.user.user_id;
+    const branchId = req.user.branch_id || ptCheck.rows[0].branch_id || 1;
+
+    const validInteractions = ['inbound', 'outbound'];
+    if (!validInteractions.includes(interaction_type)) {
+      return res.status(400).json(formatResponse(false, null, "interaction_type must be either 'inbound' or 'outbound'"));
+    }
+
+    const validStatuses = ['connected', 'not_connected', 'busy', 'switched_off', 'interested', 'not_interested', 'callback_requested', 'appointment_booked', 'followup_required', 'completed', 'closed'];
+    if (!validStatuses.includes(call_status)) {
+      return res.status(400).json(formatResponse(false, null, `Invalid call_status: ${call_status}`));
+    }
+
     const isCallback = call_status === 'callback_requested';
+    if (isCallback && !callback_date) {
+      return res.status(400).json(formatResponse(false, null, 'callback_date is required when call status is callback_requested'));
+    }
+
     const taskStatus = isCallback ? 'pending' : 'completed';
 
     let mappedPurpose = String(call_purpose).toLowerCase().replace(/\s+/g, '_');
@@ -808,15 +1097,29 @@ async function createCall(req, res) {
     else if (mappedPurpose.includes('renew')) mappedPurpose = 'renewal';
 
     const validPurposes = ['followup','renewal','due_payment','acq','ocnr','appointment','general_enquiry','callback','patient_feedback','other'];
-    if (!validPurposes.includes(mappedPurpose)) mappedPurpose = 'other';
+    if (!validPurposes.includes(mappedPurpose)) {
+      return res.status(400).json(formatResponse(false, null, `Invalid call_purpose: ${call_purpose}`));
+    }
+
+    // Idempotency check: duplicate call submission within 5 seconds
+    const dupCheck = await db.query(`
+      SELECT call_id FROM call_records
+      WHERE patient_id = $1 AND handled_by = $2 AND interaction_type = $3 AND call_status = $4
+        AND created_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [pId, handledBy, interaction_type, call_status]);
+
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate call record submission detected. Please wait a moment.'));
+    }
 
     const result = await db.query(`
       INSERT INTO call_records (
         patient_id, interaction_type, call_purpose, call_status,
         callback_date, callback_time, task_status, handled_by, branch_id, remarks
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9)
-      RETURNING *
-    `, [patient_id, interaction_type || 'outbound', mappedPurpose, call_status, callback_date || null, callback_time || null, taskStatus, handledBy, remarks || null]);
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      RETURNING *, to_char(callback_date, 'YYYY-MM-DD') as callback_date
+    `, [pId, interaction_type, mappedPurpose, call_status, callback_date || null, callback_time || null, taskStatus, handledBy, branchId, remarks || null]);
 
     res.locals.auditEntry = { module: 'PRO Calling', action: 'Record Call', recordId: result.rows[0].call_id, newValue: result.rows[0] };
     return res.status(201).json(formatResponse(true, result.rows[0], 'Call record created successfully'));
@@ -828,13 +1131,21 @@ async function createCall(req, res) {
 
 async function getTodayCalls(req, res) {
   try {
+    const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
-      SELECT c.*, p.full_name as patient_name
+      SELECT c.call_id, c.patient_id, c.lead_id, c.interaction_type, c.call_purpose, c.call_status,
+             to_char(c.callback_date, 'YYYY-MM-DD') as callback_date,
+             c.callback_time, c.task_status, c.handled_by, c.branch_id, c.remarks,
+             c.created_at, c.updated_at,
+             COALESCE(p.full_name, 'Patient #' || c.patient_id) as patient_name
       FROM call_records c
-      JOIN patients p ON c.patient_id = p.patient_id
-      WHERE DATE(c.created_at) = CURRENT_DATE
+      LEFT JOIN patients p ON c.patient_id = p.patient_id
+      WHERE c.branch_id = $1 AND DATE(c.created_at) = $2
       ORDER BY c.call_id DESC
-    `);
+    `, [branchId, dateParam]);
+
     return res.json(formatResponse(true, result.rows, "Today's calls retrieved successfully"));
   } catch (err) {
     console.error('getTodayCalls error:', err);
@@ -849,7 +1160,18 @@ async function createFollowup(req, res) {
       return res.status(400).json(formatResponse(false, null, 'patient_id, followup_type, followup_date, and purpose are required'));
     }
 
-    const assignedUserId = assigned_to || req.user.user_id;
+    const pId = parseInt(patient_id);
+    if (isNaN(pId) || pId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
+
+    const ptCheck = await db.query(`SELECT patient_id, branch_id FROM patients WHERE patient_id = $1`, [pId]);
+    if (ptCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient ID ${pId} not found`));
+    }
+
+    const branchId = req.user.branch_id || ptCheck.rows[0].branch_id || 1;
+    const assignedUserId = assigned_to ? parseInt(assigned_to) : req.user.user_id;
 
     // RULE 16: Block assignment to executive role
     const userCheck = await db.query(`SELECT role FROM users WHERE user_id = $1`, [assignedUserId]);
@@ -857,12 +1179,30 @@ async function createFollowup(req, res) {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: CRM follow-up tasks cannot be assigned to Executive role'));
     }
 
+    const validCategories = ['treatment', 'appointment', 'renewal', 'due', 'acq', 'ocnr', 'general'];
+    if (!validCategories.includes(followup_type)) {
+      return res.status(400).json(formatResponse(false, null, `Invalid followup_type: ${followup_type}. Must be one of: ${validCategories.join(', ')}`));
+    }
+    const cat = followup_type;
+
+    // Idempotency check: duplicate followup within 5 seconds
+    const dupCheck = await db.query(`
+      SELECT id FROM crm_followups
+      WHERE patient_id = $1 AND category = $2 AND due_date = $3 AND assigned_to = $4
+        AND created_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [pId, cat, followup_date, assignedUserId]);
+
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate follow-up task creation detected. Please wait a moment.'));
+    }
+
     const result = await db.query(`
       INSERT INTO crm_followups (
         patient_id, category, due_date, assigned_to, status, remarks, branch_id
-      ) VALUES ($1, $2, $3, $4, 'pending', $5, 1)
-      RETURNING *, id as followup_id
-    `, [patient_id, followup_type, followup_date, assignedUserId, remarks || purpose]);
+      ) VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+      RETURNING *, id as followup_id, to_char(due_date, 'YYYY-MM-DD') as due_date
+    `, [pId, cat, followup_date, assignedUserId, remarks || purpose, branchId]);
 
     res.locals.auditEntry = { module: 'PRO CRM', action: 'Create Follow-up', recordId: result.rows[0].id, newValue: result.rows[0] };
     return res.status(201).json(formatResponse(true, result.rows[0], 'Follow-up created successfully'));
@@ -874,13 +1214,29 @@ async function createFollowup(req, res) {
 
 async function getFollowups(req, res) {
   try {
-    const result = await db.query(`
-      SELECT f.*, f.id as followup_id, p.full_name as patient_name, u.full_name as assigned_to_name
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+    const statusFilter = req.query.status;
+
+    let query = `
+      SELECT f.id, f.id as followup_id, f.patient_id, f.category, f.assigned_to, f.status,
+             to_char(f.due_date, 'YYYY-MM-DD') as due_date,
+             f.remarks, f.branch_id, f.created_at, f.updated_at,
+             p.full_name as patient_name, u.full_name as assigned_to_name
       FROM crm_followups f
       JOIN patients p ON f.patient_id = p.patient_id
       LEFT JOIN users u ON f.assigned_to = u.user_id
-      ORDER BY f.id DESC
-    `);
+      WHERE f.branch_id = $1
+    `;
+    const params = [branchId];
+
+    if (statusFilter && statusFilter !== 'all') {
+      params.push(statusFilter);
+      query += ` AND f.status = $${params.length}`;
+    }
+
+    query += ` ORDER BY f.id DESC`;
+
+    const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Follow-up tasks retrieved successfully'));
   } catch (err) {
     console.error('getFollowups error:', err);
@@ -888,22 +1244,63 @@ async function getFollowups(req, res) {
   }
 }
 
+async function updateFollowupStatus(req, res) {
+  try {
+    const followupId = parseInt(req.params.id);
+    const { status, remarks } = req.body;
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
+    const validStatuses = ['pending', 'completed', 'cancelled'];
+    const newStatus = status && validStatuses.includes(status) ? status : 'completed';
+
+    const result = await db.query(`
+      UPDATE crm_followups
+      SET status = $1, remarks = COALESCE($2, remarks), updated_at = now()
+      WHERE id = $3 AND branch_id = $4
+      RETURNING *, id as followup_id, to_char(due_date, 'YYYY-MM-DD') as due_date
+    `, [newStatus, remarks || null, followupId, branchId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Follow-up task not found'));
+    }
+
+    res.locals.auditEntry = { module: 'PRO CRM', action: 'Update Follow-up Status', recordId: followupId, newValue: result.rows[0] };
+    return res.json(formatResponse(true, result.rows[0], 'Follow-up status updated successfully'));
+  } catch (err) {
+    console.error('updateFollowupStatus error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 async function getRenewalsQueue(req, res) {
   try {
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     // Dynamic scan of expired active packages to include in queue
     const expPkgs = await db.query(`
-      SELECT pkg.*, pt.full_name as patient_name
+      SELECT pkg.package_id, pkg.patient_id, pkg.package_name, pkg.package_type,
+             to_char(pkg.from_date, 'YYYY-MM-DD') as from_date,
+             to_char(pkg.to_date, 'YYYY-MM-DD') as to_date,
+             pkg.duration_days, pkg.package_amount, pkg.discount_amount, pkg.final_amount,
+             pkg.payment_status, pkg.status, pt.full_name as patient_name
       FROM packages pkg
       JOIN patients pt ON pkg.patient_id = pt.patient_id
-      WHERE pkg.to_date <= CURRENT_DATE + INTERVAL '7 days'
+      WHERE pkg.branch_id = $1 AND pkg.to_date <= CURRENT_DATE + INTERVAL '7 days'
       ORDER BY pkg.package_id DESC
-    `);
+    `, [branchId]);
+
     const renewalsRes = await db.query(`
-      SELECT r.*, pt.full_name as patient_name
+      SELECT r.id, r.id as renewal_id, r.patient_id, r.doctor_id,
+             to_char(r.renewal_date, 'YYYY-MM-DD') as renewal_date,
+             r.amount, r.status, r.package_id, r.created_at,
+             pt.full_name as patient_name,
+             u.full_name as doctor_name
       FROM renewals r
       JOIN patients pt ON r.patient_id = pt.patient_id
+      LEFT JOIN users u ON r.doctor_id = u.user_id
+      WHERE pt.branch_id = $1
       ORDER BY r.id DESC
-    `);
+    `, [branchId]);
 
     return res.json(formatResponse(true, { expired_packages: expPkgs.rows, renewals: renewalsRes.rows }, 'Renewal queue retrieved successfully'));
   } catch (err) {
@@ -915,8 +1312,23 @@ async function getRenewalsQueue(req, res) {
 async function createRenewal(req, res) {
   try {
     const { patient_id, package_id, doctor_id, renewal_type, renewal_amount, call_status, remarks } = req.body;
-    if (!patient_id || renewal_amount === undefined) {
+    if (!patient_id || renewal_amount === undefined || renewal_amount === null) {
       return res.status(400).json(formatResponse(false, null, 'patient_id and renewal_amount are required'));
+    }
+
+    const pId = parseInt(patient_id);
+    if (isNaN(pId) || pId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
+
+    const ptCheck = await db.query(`SELECT patient_id, branch_id FROM patients WHERE patient_id = $1`, [pId]);
+    if (ptCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient ID ${pId} not found`));
+    }
+
+    const renAmt = parseFloat(renewal_amount);
+    if (isNaN(renAmt) || renAmt <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'renewal_amount must be a positive number greater than 0'));
     }
 
     const today = new Date().toISOString().split('T')[0];
@@ -931,12 +1343,24 @@ async function createRenewal(req, res) {
       validPkgId = parseInt(package_id);
     }
 
+    // Idempotency check: duplicate renewal within 5 seconds
+    const dupCheck = await db.query(`
+      SELECT id FROM renewals
+      WHERE patient_id = $1 AND amount = $2 AND renewal_date = $3
+        AND created_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [pId, renAmt, today]);
+
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate renewal recording detected. Please wait a moment.'));
+    }
+
     const result = await db.query(`
       INSERT INTO renewals (
         patient_id, doctor_id, renewal_date, amount, status, package_id
       ) VALUES ($1, $2, $3, $4, $5, $6)
-      RETURNING *
-    `, [patient_id, docIdToUse, today, parseFloat(renewal_amount), call_status || 'renewed', validPkgId]);
+      RETURNING *, to_char(renewal_date, 'YYYY-MM-DD') as renewal_date
+    `, [pId, docIdToUse, today, renAmt, call_status || 'renewed', validPkgId]);
 
     res.locals.auditEntry = { module: 'PRO Renewals', action: 'Create Renewal', recordId: result.rows[0].id, newValue: result.rows[0] };
     return res.status(201).json(formatResponse(true, result.rows[0], 'Renewal recorded successfully'));
@@ -948,13 +1372,20 @@ async function createRenewal(req, res) {
 
 async function getDuePatients(req, res) {
   try {
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
-      SELECT d.*, p.full_name as patient_name, b.bill_number
+      SELECT d.id, d.patient_id, d.bill_id, d.due_amount,
+             to_char(d.due_date, 'YYYY-MM-DD') as due_date,
+             d.status, d.branch_id, d.created_at,
+             p.full_name as patient_name, b.bill_number
       FROM due_patients d
       JOIN patients p ON d.patient_id = p.patient_id
       JOIN bills b ON d.bill_id = b.bill_id
+      WHERE d.branch_id = $1
       ORDER BY d.id DESC
-    `);
+    `, [branchId]);
+
     return res.json(formatResponse(true, result.rows, 'Due patients list retrieved successfully'));
   } catch (err) {
     console.error('getDuePatients error:', err);
@@ -964,12 +1395,22 @@ async function getDuePatients(req, res) {
 
 async function getACQPatients(req, res) {
   try {
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
-      SELECT a.*, a.id as acq_id, p.full_name as patient_name
+      SELECT a.id, a.id as acq_id, a.patient_id, a.monthly_plan_amount,
+             to_char(a.start_date, 'YYYY-MM-DD') as start_date,
+             to_char(a.end_date, 'YYYY-MM-DD') as end_date,
+             a.frequency, a.status,
+             to_char(a.renewal_date, 'YYYY-MM-DD') as renewal_date,
+             a.created_at, a.package_id,
+             p.full_name as patient_name
       FROM acq_patients a
       JOIN patients p ON a.patient_id = p.patient_id
+      WHERE p.branch_id = $1
       ORDER BY a.id DESC
-    `);
+    `, [branchId]);
+
     return res.json(formatResponse(true, result.rows, 'ACQ patients retrieved successfully'));
   } catch (err) {
     console.error('getACQPatients error:', err);
@@ -981,13 +1422,15 @@ async function updateACQPatient(req, res) {
   try {
     const acqId = parseInt(req.params.id);
     const { status, renewal_date } = req.body;
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
       UPDATE acq_patients
       SET status = COALESCE($1, status),
           renewal_date = COALESCE($2, renewal_date)
-      WHERE id = $3
-      RETURNING *, id as acq_id
-    `, [status, renewal_date, acqId]);
+      WHERE id = $3 AND patient_id IN (SELECT patient_id FROM patients WHERE branch_id = $4)
+      RETURNING *, id as acq_id, to_char(renewal_date, 'YYYY-MM-DD') as renewal_date
+    `, [status, renewal_date, acqId, branchId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json(formatResponse(false, null, 'ACQ patient record not found'));
@@ -1003,12 +1446,18 @@ async function updateACQPatient(req, res) {
 
 async function getOCNRPatients(req, res) {
   try {
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
-      SELECT o.*, o.id as oc_nr_id, p.full_name as patient_name
+      SELECT o.id, o.id as oc_nr_id, o.patient_id, o.classification, o.reason,
+             to_char(o.marked_at, 'YYYY-MM-DD HH24:MI:SS') as marked_at,
+             p.full_name as patient_name
       FROM oc_nr_patients o
       JOIN patients p ON o.patient_id = p.patient_id
+      WHERE p.branch_id = $1
       ORDER BY o.id DESC
-    `);
+    `, [branchId]);
+
     return res.json(formatResponse(true, result.rows, 'OC/NR patients list retrieved successfully'));
   } catch (err) {
     console.error('getOCNRPatients error:', err);
@@ -1023,16 +1472,40 @@ async function createOCNRPatient(req, res) {
       return res.status(400).json(formatResponse(false, null, 'patient_id is required'));
     }
 
+    const pId = parseInt(patient_id);
+    if (isNaN(pId) || pId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
+
+    const ptCheck = await db.query(`SELECT patient_id, branch_id FROM patients WHERE patient_id = $1`, [pId]);
+    if (ptCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient ID ${pId} not found`));
+    }
+
     const reasonText = reason || reason_not_continuing || remarks || null;
     let cls = String(classification || 'oc').toLowerCase();
-    if (cls !== 'oc' && cls !== 'nr') cls = 'oc';
+    if (cls !== 'oc' && cls !== 'nr') {
+      return res.status(400).json(formatResponse(false, null, "classification must be either 'oc' or 'nr'"));
+    }
+
+    // Idempotency check: duplicate OC/NR within 5 seconds
+    const dupCheck = await db.query(`
+      SELECT id FROM oc_nr_patients
+      WHERE patient_id = $1 AND classification = $2
+        AND marked_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [pId, cls]);
+
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate OC/NR recording detected. Please wait a moment.'));
+    }
 
     const result = await db.query(`
       INSERT INTO oc_nr_patients (
         patient_id, classification, reason, marked_at
       ) VALUES ($1, $2, $3, now())
-      RETURNING *, id as oc_nr_id
-    `, [patient_id, cls, reasonText]);
+      RETURNING *, id as oc_nr_id, to_char(marked_at, 'YYYY-MM-DD HH24:MI:SS') as marked_at
+    `, [pId, cls, reasonText]);
 
     res.locals.auditEntry = { module: 'PRO OC/NR', action: 'Record OC/NR Patient', recordId: result.rows[0].id, newValue: result.rows[0] };
     return res.status(201).json(formatResponse(true, result.rows[0], 'OC/NR patient recorded successfully'));
@@ -1113,15 +1586,16 @@ async function rescheduleTask(req, res) {
 async function getOpeningBalance(req, res) {
   try {
     const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
 
-    // Compute opening balance from previous day's closing balance
+    // Compute opening balance from previous day's closing balance for this branch
     const prevRes = await db.query(`
-      SELECT closing_balance FROM cash_ledger WHERE ledger_date < $1 ORDER BY ledger_date DESC LIMIT 1
-    `, [dateParam]);
+      SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1
+    `, [branchId, dateParam]);
 
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
-    return res.json(formatResponse(true, { date: dateParam, opening_cash: openingCash }, 'Opening cash balance retrieved successfully'));
+    return res.json(formatResponse(true, { date: dateParam, opening_cash: openingCash, branch_id: branchId }, 'Opening cash balance retrieved successfully'));
   } catch (err) {
     console.error('getOpeningBalance error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -1131,13 +1605,15 @@ async function getOpeningBalance(req, res) {
 async function getCashRevenue(req, res) {
   try {
     const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
       SELECT COALESCE(SUM(amount), 0) as cash_revenue
       FROM payments
-      WHERE payment_method = 'cash' AND DATE(payment_date) = $1
-    `, [dateParam]);
+      WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2
+    `, [dateParam, branchId]);
 
-    return res.json(formatResponse(true, { date: dateParam, cash_revenue: parseFloat(result.rows[0].cash_revenue) }, 'Cash revenue retrieved successfully'));
+    return res.json(formatResponse(true, { date: dateParam, cash_revenue: parseFloat(result.rows[0].cash_revenue), branch_id: branchId }, 'Cash revenue retrieved successfully'));
   } catch (err) {
     console.error('getCashRevenue error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -1145,51 +1621,92 @@ async function getCashRevenue(req, res) {
 }
 
 async function createExpenditure(req, res) {
+  const client = await db.pool.connect();
   try {
+    await client.query('BEGIN');
     const { category, description, amount, remarks } = req.body;
-    if (!category || !description || !amount) {
-      return res.status(400).json(formatResponse(false, null, 'category, description, and amount are required'));
+    if (!category || !category.trim()) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Expense category is required'));
+    }
+    if (!description || !description.trim()) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Expense description is required'));
+    }
+    if (amount === undefined || amount === null || isNaN(parseFloat(amount)) || parseFloat(amount) <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Expense amount must be a positive number greater than 0'));
     }
 
     const expAmt = parseFloat(amount);
     const enteredBy = req.user.user_id;
+    const branchId = req.user.branch_id || 1;
     const today = new Date().toISOString().split('T')[0];
 
-    const result = await db.query(`
+    // Idempotency check: duplicate submission within 5 seconds
+    const dupCheck = await client.query(`
+      SELECT id FROM expenditures
+      WHERE branch_id = $1 AND entered_by = $2 AND expense_category = $3 AND amount = $4
+        AND created_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [branchId, enteredBy, category.trim(), expAmt]);
+
+    if (dupCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json(formatResponse(false, null, 'Duplicate expenditure submission detected. Please wait a moment.'));
+    }
+
+    const result = await client.query(`
       INSERT INTO expenditures (
         expense_date, expense_category, description, amount, payment_mode, entered_by, branch_id, remarks
-      ) VALUES ($1, $2, $3, $4, 'cash', $5, 1, $6)
+      ) VALUES ($1, $2, $3, $4, 'cash', $5, $6, $7)
       RETURNING *
-    `, [today, category, description, expAmt, enteredBy, remarks || null]);
+    `, [today, category.trim(), description.trim(), expAmt, enteredBy, branchId, remarks || null]);
 
+    // Update cash ledger
+    await client.query(`
+      INSERT INTO cash_ledger (branch_id, ledger_date, opening_balance, cash_revenue, cash_expenditure, deposited_amount, closing_balance)
+      VALUES ($1, $2, 0, 0, $3, 0, 0 - $3::numeric)
+      ON CONFLICT (branch_id, ledger_date)
+      DO UPDATE SET
+        cash_expenditure = cash_ledger.cash_expenditure + $3,
+        closing_balance = cash_ledger.opening_balance + cash_ledger.cash_revenue - (cash_ledger.cash_expenditure + $3) - cash_ledger.deposited_amount
+    `, [branchId, today, expAmt]);
+
+    await client.query('COMMIT');
     res.locals.auditEntry = { module: 'PRO Accountant', action: 'Create Cash Expenditure', recordId: result.rows[0].id, newValue: result.rows[0] };
     return res.status(201).json(formatResponse(true, result.rows[0], 'Cash expenditure recorded successfully'));
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('createExpenditure error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
 async function getClosingBalance(req, res) {
   try {
     const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
 
     // Opening
-    const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE ledger_date < $1 ORDER BY ledger_date DESC LIMIT 1`, [dateParam]);
+    const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1`, [branchId, dateParam]);
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
     // Cash Revenue
-    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1`, [dateParam]);
+    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2`, [dateParam, branchId]);
     const cashRev = parseFloat(revRes.rows[0].cash_rev);
 
     // Cash Expenditure
-    const expRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_exp FROM expenditures WHERE payment_mode = 'cash' AND expense_date = $1`, [dateParam]);
+    const expRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_exp FROM expenditures WHERE payment_mode = 'cash' AND expense_date = $1 AND branch_id = $2`, [dateParam, branchId]);
     const cashExp = parseFloat(expRes.rows[0].cash_exp);
 
     const closingCash = openingCash + cashRev - cashExp;
 
     return res.json(formatResponse(true, {
       date: dateParam,
+      branch_id: branchId,
       opening_cash: openingCash,
       cash_revenue: cashRev,
       cash_expenditure: cashExp,
@@ -1202,67 +1719,110 @@ async function getClosingBalance(req, res) {
 }
 
 async function depositCash(req, res) {
+  const client = await db.pool.connect();
   try {
+    await client.query('BEGIN');
     const { deposit_amount, deposit_reference, remarks } = req.body;
-    if (!deposit_amount) {
-      return res.status(400).json(formatResponse(false, null, 'deposit_amount is required'));
+    if (deposit_amount === undefined || deposit_amount === null || isNaN(parseFloat(deposit_amount)) || parseFloat(deposit_amount) <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Deposit amount must be a positive number greater than 0'));
     }
 
     const depAmt = parseFloat(deposit_amount);
     const depositedBy = req.user.user_id;
+    const branchId = req.user.branch_id || 1;
     const today = new Date().toISOString().split('T')[0];
 
     // Compute Opening Cash
-    const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE ledger_date < $1 ORDER BY ledger_date DESC LIMIT 1`, [today]);
+    const prevRes = await client.query(`SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1`, [branchId, today]);
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
     // Compute Cash Revenue
-    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1`, [today]);
+    const revRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2`, [today, branchId]);
     const cashRev = parseFloat(revRes.rows[0].cash_rev);
 
     // Compute Cash Expenditure
-    const expRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_exp FROM expenditures WHERE payment_mode = 'cash' AND expense_date = $1`, [today]);
+    const expRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as cash_exp FROM expenditures WHERE payment_mode = 'cash' AND expense_date = $1 AND branch_id = $2`, [today, branchId]);
     const cashExp = parseFloat(expRes.rows[0].cash_exp);
 
-    const availableCash = openingCash + cashRev - cashExp;
-    const closingCash = availableCash - depAmt;
+    // Previous deposits today
+    const depRes = await client.query(`SELECT COALESCE(SUM(deposited_amount), 0) as total_dep FROM cash_deposits WHERE DATE(deposit_date) = $1 AND branch_id = $2`, [today, branchId]);
+    const prevDeposited = parseFloat(depRes.rows[0].total_dep);
 
-    const result = await db.query(`
+    const availableCash = openingCash + cashRev - cashExp - prevDeposited;
+
+    if (depAmt > availableCash) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Deposit amount (${depAmt}) cannot exceed available cash in drawer (${availableCash})`));
+    }
+
+    // Idempotency check: duplicate submission within 5 seconds
+    const dupCheck = await client.query(`
+      SELECT id FROM cash_deposits
+      WHERE branch_id = $1 AND deposited_by = $2 AND deposited_amount = $3
+        AND created_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [branchId, depositedBy, depAmt]);
+
+    if (dupCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json(formatResponse(false, null, 'Duplicate cash deposit submission detected. Please wait a moment.'));
+    }
+
+    const totalDeposited = prevDeposited + depAmt;
+    const closingCash = openingCash + cashRev - cashExp - totalDeposited;
+
+    const result = await client.query(`
       INSERT INTO cash_deposits (
         deposit_date, opening_balance, cash_revenue, cash_expenditure, available_cash,
         deposited_amount, deposit_reference, deposited_by, closing_balance, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *, id as deposit_id
-    `, [today, openingCash, cashRev, cashExp, availableCash, depAmt, deposit_reference || null, depositedBy, closingCash]);
+    `, [today, openingCash, cashRev, cashExp, availableCash, depAmt, deposit_reference || null, depositedBy, closingCash, branchId]);
 
+    // Update cash ledger
+    await client.query(`
+      INSERT INTO cash_ledger (branch_id, ledger_date, opening_balance, cash_revenue, cash_expenditure, deposited_amount, closing_balance)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (branch_id, ledger_date)
+      DO UPDATE SET
+        deposited_amount = $6,
+        closing_balance = $7
+    `, [branchId, today, openingCash, cashRev, cashExp, totalDeposited, closingCash]);
+
+    await client.query('COMMIT');
     res.locals.auditEntry = { module: 'PRO Accountant', action: 'Deposit Cash', recordId: result.rows[0].id, newValue: result.rows[0] };
     return res.status(201).json(formatResponse(true, result.rows[0], 'Cash deposit recorded successfully'));
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('depositCash error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
 async function getDailyCashSummary(req, res) {
   try {
     const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
 
     // Opening
-    const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE ledger_date < $1 ORDER BY ledger_date DESC LIMIT 1`, [dateParam]);
+    const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1`, [branchId, dateParam]);
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
     // Cash Revenue
-    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1`, [dateParam]);
+    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2`, [dateParam, branchId]);
     const cashRev = parseFloat(revRes.rows[0].cash_rev);
 
     // Cash Expenditure
-    const expRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_exp FROM expenditures WHERE payment_mode = 'cash' AND expense_date = $1`, [dateParam]);
+    const expRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_exp FROM expenditures WHERE payment_mode = 'cash' AND expense_date = $1 AND branch_id = $2`, [dateParam, branchId]);
     const cashExp = parseFloat(expRes.rows[0].cash_exp);
 
     const expectedCash = openingCash + cashRev - cashExp;
 
     // Cash Deposited
-    const depRes = await db.query(`SELECT COALESCE(SUM(deposited_amount), 0) as total_dep FROM cash_deposits WHERE DATE(deposit_date) = $1`, [dateParam]);
+    const depRes = await db.query(`SELECT COALESCE(SUM(deposited_amount), 0) as total_dep FROM cash_deposits WHERE DATE(deposit_date) = $1 AND branch_id = $2`, [dateParam, branchId]);
     const cashDeposited = parseFloat(depRes.rows[0].total_dep);
     const closingCash = expectedCash - cashDeposited;
 
@@ -1270,9 +1830,9 @@ async function getDailyCashSummary(req, res) {
     const methodRes = await db.query(`
       SELECT payment_method, COALESCE(SUM(amount), 0) as total
       FROM payments
-      WHERE DATE(payment_date) = $1
+      WHERE DATE(payment_date) = $1 AND branch_id = $2
       GROUP BY payment_method
-    `, [dateParam]);
+    `, [dateParam, branchId]);
 
     const breakdown = { cash: 0, card: 0, upi: 0, razorpay: 0, bajaj_pay: 0 };
     let grandTotal = 0;
@@ -1287,6 +1847,7 @@ async function getDailyCashSummary(req, res) {
 
     const summary = {
       date: dateParam,
+      branch_id: branchId,
       opening_cash: openingCash,
       cash_revenue: cashRev,
       cash_expenditure: cashExp,
@@ -1307,13 +1868,15 @@ async function getDailyCashSummary(req, res) {
 async function getGrandTotal(req, res) {
   try {
     const dateParam = req.query.date || new Date().toISOString().split('T')[0];
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
+
     const result = await db.query(`
       SELECT COALESCE(SUM(amount), 0) as grand_total
       FROM payments
-      WHERE DATE(payment_date) = $1
-    `, [dateParam]);
+      WHERE DATE(payment_date) = $1 AND branch_id = $2
+    `, [dateParam, branchId]);
 
-    return res.json(formatResponse(true, { date: dateParam, grand_total: parseFloat(result.rows[0].grand_total) }, 'Grand total retrieved successfully'));
+    return res.json(formatResponse(true, { date: dateParam, grand_total: parseFloat(result.rows[0].grand_total), branch_id: branchId }, 'Grand total retrieved successfully'));
   } catch (err) {
     console.error('getGrandTotal error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -1432,37 +1995,117 @@ async function getComplaints(req, res) {
 async function getPROChecklist(req, res) {
   try {
     const patientId = parseInt(req.params.id);
+    if (!patientId || isNaN(patientId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
+    }
 
-    // Doctor consultation completed check
-    const consultRes = await db.query(`SELECT status FROM consultations WHERE patient_id = $1 ORDER BY consultation_id DESC LIMIT 1`, [patientId]);
-    const doctorConsultationCompleted = consultRes.rows.length > 0 && ['completed', 'doctor_completed', 'pro_pending', 'pro_completed'].includes(consultRes.rows[0].status);
+    // 1. Doctor consultation completed check
+    const consultRes = await db.query(`
+      SELECT c.consultation_id, c.appointment_id, c.status, c.primary_diagnosis_text,
+             c.chief_complaint, u.full_name as doctor_name
+      FROM consultations c
+      LEFT JOIN doctors d ON c.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE c.patient_id = $1 AND c.status = 'completed'
+      ORDER BY c.consultation_id DESC LIMIT 1
+    `, [patientId]);
 
-    // Counselling check
-    const counselRes = await db.query(`SELECT counselling_id FROM counselling_records WHERE patient_id = $1`, [patientId]);
-    const counsellingCompleted = counselRes.rows.length > 0;
+    const apptCheckRes = await db.query(`
+      SELECT a.appointment_id, a.status, u.full_name as doctor_name
+      FROM appointments a
+      LEFT JOIN doctors d ON a.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE a.patient_id = $1 AND a.status IN ('doctor_completed', 'pro_pending', 'pro_completed', 'completed')
+      ORDER BY a.appointment_id DESC LIMIT 1
+    `, [patientId]);
 
-    // Billing check
-    const billsRes = await db.query(`SELECT bill_id FROM bills WHERE patient_id = $1`, [patientId]);
+    const completedConsult = consultRes.rows[0] || null;
+    const completedAppt = apptCheckRes.rows[0] || null;
+    const doctorConsultationCompleted = !!(completedConsult || completedAppt);
+
+    // 2. Clinical Diagnosis Reviewed check
+    const diagRes = await db.query(`
+      SELECT c.primary_diagnosis_text, c.secondary_diagnosis_text, c.primary_diagnosis_id
+      FROM consultations c
+      WHERE c.patient_id = $1 AND (c.primary_diagnosis_text IS NOT NULL OR c.primary_diagnosis_id IS NOT NULL OR c.secondary_diagnosis_text IS NOT NULL)
+      ORDER BY c.consultation_id DESC LIMIT 1
+    `, [patientId]);
+    const diagnosisReviewed = diagRes.rows.length > 0;
+    const diagnosisText = diagRes.rows[0]?.primary_diagnosis_text || diagRes.rows[0]?.secondary_diagnosis_text || null;
+
+    // 3. Prescription Item Details Reviewed check
+    const prescRes = await db.query(`
+      SELECT p.id, COUNT(pi.id) as item_count
+      FROM prescriptions p
+      JOIN prescription_items pi ON p.id = pi.prescription_id
+      WHERE p.patient_id = $1
+      GROUP BY p.id
+      ORDER BY p.id DESC LIMIT 1
+    `, [patientId]);
+    const prescriptionReviewed = prescRes.rows.length > 0;
+    const prescriptionItemCount = prescRes.rows.length > 0 ? parseInt(prescRes.rows[0].item_count) : 0;
+
+    // 4. Treatment / Package Details Confirmed check
+    const tpRes = await db.query(`SELECT treatment_id, treatment_name FROM treatment_plans WHERE patient_id = $1 ORDER BY treatment_id DESC LIMIT 1`, [patientId]);
+    const pkgRes = await db.query(`SELECT package_id, package_name FROM packages WHERE patient_id = $1 ORDER BY package_id DESC LIMIT 1`, [patientId]);
+    const treatBillRes = await db.query(`SELECT bill_id, bill_number FROM bills WHERE patient_id = $1 AND bill_type IN ('treatment', 'package') ORDER BY bill_id DESC LIMIT 1`, [patientId]);
+    const treatmentPackageConfirmed = tpRes.rows.length > 0 || pkgRes.rows.length > 0 || treatBillRes.rows.length > 0;
+
+    // 5. Treatment / Package Invoice Generated check (non-consultation bill)
+    const billsRes = await db.query(`
+      SELECT bill_id, bill_number, amount, final_amount, status, bill_type
+      FROM bills
+      WHERE patient_id = $1 AND bill_type != 'consultation'
+      ORDER BY bill_id DESC LIMIT 1
+    `, [patientId]);
     const billingCompleted = billsRes.rows.length > 0;
+    const latestBill = billsRes.rows[0] || null;
 
-    // Payment / Due check
-    const payRes = await db.query(`SELECT payment_id FROM payments WHERE patient_id = $1`, [patientId]);
-    const dueRes = await db.query(`SELECT id FROM due_patients WHERE patient_id = $1`, [patientId]);
+    // 6. Payment or Outstanding Due Recorded check
+    const payRes = await db.query(`
+      SELECT payment_id, amount, payment_method, payment_date
+      FROM payments
+      WHERE patient_id = $1 AND status = 'success'
+      ORDER BY payment_id DESC LIMIT 1
+    `, [patientId]);
+    const dueRes = await db.query(`
+      SELECT id, due_amount, status
+      FROM due_patients
+      WHERE patient_id = $1
+      ORDER BY id DESC LIMIT 1
+    `, [patientId]);
     const paymentOrDueRecorded = payRes.rows.length > 0 || dueRes.rows.length > 0;
 
     const checklist = {
       doctor_consultation_completed: doctorConsultationCompleted,
-      diagnosis_reviewed: doctorConsultationCompleted,
-      prescription_reviewed: doctorConsultationCompleted,
-      counselling_completed: counsellingCompleted,
-      treatment_package_confirmed: counsellingCompleted,
+      diagnosis_reviewed: diagnosisReviewed,
+      prescription_reviewed: prescriptionReviewed,
+      treatment_package_confirmed: treatmentPackageConfirmed,
       billing_completed: billingCompleted,
       payment_or_due_recorded: paymentOrDueRecorded
     };
 
+    const metadata = {
+      doctor_name: completedConsult?.doctor_name || completedAppt?.doctor_name || null,
+      diagnosis: diagnosisText,
+      prescription_id: prescRes.rows[0]?.id || null,
+      prescription_items_count: prescriptionItemCount,
+      treatment_name: tpRes.rows[0]?.treatment_name || pkgRes.rows[0]?.package_name || null,
+      bill_id: latestBill?.bill_id || null,
+      bill_number: latestBill?.bill_number || null,
+      bill_final_amount: latestBill ? parseFloat(latestBill.final_amount) : 0,
+      payment_amount: payRes.rows[0] ? parseFloat(payRes.rows[0].amount) : 0,
+      due_amount: dueRes.rows[0] ? parseFloat(dueRes.rows[0].due_amount) : 0
+    };
+
     const allSatisfied = Object.values(checklist).every(val => val === true);
 
-    return res.json(formatResponse(true, { patient_id: patientId, checklist, ready_for_pro_completion: allSatisfied }, 'PRO completion checklist retrieved successfully'));
+    return res.json(formatResponse(true, {
+      patient_id: patientId,
+      checklist,
+      metadata,
+      ready_for_pro_completion: allSatisfied
+    }, 'PRO completion checklist retrieved successfully'));
   } catch (err) {
     console.error('getPROChecklist error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -1472,14 +2115,20 @@ async function getPROChecklist(req, res) {
 async function completePRO(req, res) {
   try {
     const patientId = parseInt(req.params.id);
+    if (!patientId || isNaN(patientId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
+    }
 
-    // Validate checklist
-    const counselRes = await db.query(`SELECT counselling_id FROM counselling_records WHERE patient_id = $1`, [patientId]);
-    const billsRes = await db.query(`SELECT bill_id FROM bills WHERE patient_id = $1`, [patientId]);
-
+    // Validate checklist (treatment/package billing required)
+    const billsRes = await db.query(`SELECT bill_id FROM bills WHERE patient_id = $1 AND bill_type != 'consultation'`, [patientId]);
     const missingItems = [];
-    if (counselRes.rows.length === 0) missingItems.push('Counselling session record');
     if (billsRes.rows.length === 0) missingItems.push('Treatment/Package billing invoice');
+
+    const payRes = await db.query(`SELECT payment_id FROM payments WHERE patient_id = $1 AND status = 'success'`, [patientId]);
+    const dueRes = await db.query(`SELECT id FROM due_patients WHERE patient_id = $1`, [patientId]);
+    if (payRes.rows.length === 0 && dueRes.rows.length === 0) {
+      missingItems.push('Payment collection or recorded outstanding due balance');
+    }
 
     if (missingItems.length > 0) {
       return res.status(422).json(formatResponse(false, { missing_items: missingItems }, 'PRO completion checklist incomplete. Please complete missing items before handoff to Pharmacy.'));
@@ -1493,12 +2142,463 @@ async function completePRO(req, res) {
       RETURNING *
     `, [patientId]);
 
-    const updatedAppt = apptRes.rows[0] || null;
+    let updatedAppt = apptRes.rows[0] || null;
+    if (!updatedAppt) {
+      const existingAppt = await db.query(`
+        SELECT * FROM appointments
+        WHERE patient_id = $1 AND status = 'pro_completed'
+        ORDER BY appointment_id DESC LIMIT 1
+      `, [patientId]);
+      updatedAppt = existingAppt.rows[0] || null;
+    }
 
     res.locals.auditEntry = { module: 'PRO Completion', action: 'Complete PRO Handoff', recordId: patientId, newValue: updatedAppt };
-    return res.json(formatResponse(true, { patient_id: patientId, appointment: updatedAppt, pharmacy_queue_status: 'unlocked' }, 'PRO completion verified successfully. Prescription released to Pharmacy queue.'));
+    return res.json(formatResponse(true, {
+      patient_id: patientId,
+      appointment: updatedAppt,
+      pharmacy_queue_status: 'unlocked'
+    }, 'PRO completion verified successfully. Prescription released to Pharmacy queue.'));
   } catch (err) {
     console.error('completePRO error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 13b. Dedicated Patient Operational History
+async function getPatientHistory(req, res) {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!patientId || isNaN(patientId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
+    }
+
+    const ptRes = await db.query(`SELECT * FROM patients WHERE patient_id = $1`, [patientId]);
+    if (ptRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Patient not found'));
+    }
+    const patient = ptRes.rows[0];
+
+    // All Appointments
+    const apptsRes = await db.query(`
+      SELECT a.appointment_id, a.patient_id, a.doctor_id, a.appointment_date, a.appointment_time,
+             a.appointment_type, a.status, a.created_at,
+             u.full_name as doctor_name, d.specialization as doctor_specialization
+      FROM appointments a
+      LEFT JOIN doctors d ON a.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE a.patient_id = $1
+      ORDER BY a.appointment_id DESC
+    `, [patientId]);
+
+    // All Consultations (confidentiality protected: doctor_notes stripped)
+    const consultsRes = await db.query(`
+      SELECT c.consultation_id, c.appointment_id, c.doctor_id, u.full_name as doctor_name,
+             d.specialization as doctor_specialization,
+             c.chief_complaint, c.symptoms, c.primary_diagnosis_text, c.secondary_diagnosis_text,
+             c.diagnosis_description, c.investigations, c.followup_recommended,
+             c.followup_recommended_date, c.followup_instructions, c.pro_required,
+             c.pro_reason, c.status, c.created_at
+      FROM consultations c
+      LEFT JOIN doctors d ON c.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE c.patient_id = $1
+      ORDER BY c.consultation_id DESC
+    `, [patientId]);
+
+    // All Prescriptions with Items & Dispensing Status
+    const prescRes = await db.query(`
+      SELECT p.id as prescription_id, p.appointment_id, p.consultation_id, p.created_at,
+             p.pharmacy_status, u.full_name as doctor_name,
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'id', pi.id,
+                   'medicine_id', pi.medicine_id,
+                   'medicine_name', mm.medicine_name,
+                   'dosage', pi.dosage,
+                   'frequency', pi.frequency,
+                   'duration_days', pi.duration_days,
+                   'quantity', pi.quantity,
+                   'dispense_status', pi.dispense_status,
+                   'dispensed_quantity', pi.dispensed_quantity
+                 )
+               ) FILTER (WHERE pi.id IS NOT NULL), '[]'::json
+             ) as items
+      FROM prescriptions p
+      LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
+      WHERE p.patient_id = $1
+      GROUP BY p.id, u.full_name
+      ORDER BY p.id DESC
+    `, [patientId]);
+
+    // Treatment Plans
+    const tpRes = await db.query(`
+      SELECT tp.*, u.full_name as doctor_name
+      FROM treatment_plans tp
+      LEFT JOIN doctors d ON tp.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE tp.patient_id = $1
+      ORDER BY tp.treatment_id DESC
+    `, [patientId]);
+
+    // Packages
+    const pkgRes = await db.query(`SELECT * FROM packages WHERE patient_id = $1 ORDER BY package_id DESC`, [patientId]);
+
+    // Bills with payments & dues
+    const billsRes = await db.query(`
+      SELECT b.*,
+             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) as paid_amount,
+             COALESCE((SELECT due_amount FROM due_patients WHERE bill_id = b.bill_id AND status = 'pending' LIMIT 1), 0) as due_amount,
+             u.full_name as created_by_name
+      FROM bills b
+      LEFT JOIN users u ON b.created_by = u.user_id
+      WHERE b.patient_id = $1
+      ORDER BY b.bill_id DESC
+    `, [patientId]);
+
+    // Payments
+    const payRes = await db.query(`
+      SELECT p.*, u.full_name as received_by_name
+      FROM payments p
+      LEFT JOIN users u ON p.received_by = u.user_id
+      WHERE p.patient_id = $1
+      ORDER BY p.payment_id DESC
+    `, [patientId]);
+
+    // Dues
+    const duesRes = await db.query(`SELECT * FROM due_patients WHERE patient_id = $1 ORDER BY id DESC`, [patientId]);
+
+    return res.json(formatResponse(true, {
+      patient,
+      appointments: apptsRes.rows,
+      consultations: consultsRes.rows,
+      prescriptions: prescRes.rows,
+      treatment_plans: tpRes.rows,
+      packages: pkgRes.rows,
+      bills: billsRes.rows,
+      payments: payRes.rows,
+      dues: duesRes.rows
+    }, 'Patient operational history retrieved successfully'));
+  } catch (err) {
+    console.error('getPatientHistory error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 13c. Authoritative Bill / Invoice Details
+async function getBillDetails(req, res) {
+  try {
+    const billId = parseInt(req.params.id);
+    if (!billId || isNaN(billId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid bill ID is required'));
+    }
+
+    const billRes = await db.query(`
+      SELECT b.*,
+             p.full_name as patient_name, p.registration_id, p.mobile_number, p.age, p.gender,
+             COALESCE(p.village, p.mandal, 'Karimnagar') as patient_location,
+             COALESCE(doc_u.full_name, 'Doctor') as doctor_name,
+             d.specialization as doctor_specialization,
+             COALESCE(rec_u.full_name, 'PRO Desk') as created_by_name,
+             rec_u.employee_id as created_by_employee_id
+      FROM bills b
+      JOIN patients p ON b.patient_id = p.patient_id
+      LEFT JOIN doctors d ON b.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+      LEFT JOIN users rec_u ON b.created_by = rec_u.user_id
+      WHERE b.bill_id = $1
+    `, [billId]);
+
+    if (billRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Bill not found'));
+    }
+
+    const bill = billRes.rows[0];
+
+    // Fetch line items from bill_items
+    const itemsRes = await db.query(`
+      SELECT id, charge_type, description, amount
+      FROM bill_items
+      WHERE bill_id = $1
+      ORDER BY id ASC
+    `, [billId]);
+
+    // Fetch payments
+    const paymentsRes = await db.query(`
+      SELECT payment_id, payment_method, amount, payment_date, status, received_by
+      FROM payments
+      WHERE bill_id = $1 AND status = 'success'
+      ORDER BY payment_id ASC
+    `, [billId]);
+
+    // Fetch dues
+    const dueRes = await db.query(`
+      SELECT id as due_id, due_amount, due_date, status
+      FROM due_patients
+      WHERE bill_id = $1
+      ORDER BY id DESC LIMIT 1
+    `, [billId]);
+
+    const totalPaid = paymentsRes.rows.reduce((sum, p) => sum + parseFloat(p.amount || 0), 0);
+    const finalAmount = parseFloat(bill.final_amount || 0);
+    const remainingDue = dueRes.rows.length > 0 ? parseFloat(dueRes.rows[0].due_amount) : Math.max(0, finalAmount - totalPaid);
+
+    const invoiceData = {
+      ...bill,
+      items: itemsRes.rows.length > 0 ? itemsRes.rows : [
+        { id: 1, charge_type: bill.bill_type === 'treatment' ? 'Treatment' : 'Package', description: `${bill.bill_type.toUpperCase()} Charges`, amount: bill.amount }
+      ],
+      payments: paymentsRes.rows,
+      paid_amount: totalPaid,
+      due_amount: remainingDue,
+      payment_status: remainingDue <= 0 ? 'paid' : totalPaid > 0 ? 'partial' : 'unpaid'
+    };
+
+    return res.json(formatResponse(true, invoiceData, 'Bill details retrieved successfully'));
+  } catch (err) {
+    console.error('getBillDetails error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 13d. PRO Operational Reports
+async function getOperationalReports(req, res) {
+  try {
+    const branchId = req.user.branch_id || 1;
+    const { from_date, to_date, bill_type, payment_method } = req.query;
+
+    let billDateCond = '';
+    const billParams = [branchId];
+    if (from_date) {
+      billParams.push(from_date);
+      billDateCond += ` AND DATE(b.created_at) >= $${billParams.length}`;
+    }
+    if (to_date) {
+      billParams.push(to_date);
+      billDateCond += ` AND DATE(b.created_at) <= $${billParams.length}`;
+    }
+    if (bill_type && bill_type !== 'all') {
+      billParams.push(bill_type);
+      billDateCond += ` AND b.bill_type = $${billParams.length}`;
+    }
+
+    // Bills Summary
+    const billsRes = await db.query(`
+      SELECT b.bill_id, b.bill_number, b.patient_id, b.bill_type, b.final_amount, b.created_at,
+             p.full_name as patient_name, p.registration_id,
+             COALESCE(doc_u.full_name, 'Doctor') as doctor_name,
+             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) as paid_amount
+      FROM bills b
+      JOIN patients p ON b.patient_id = p.patient_id
+      LEFT JOIN doctors d ON b.doctor_id = d.doctor_id
+      LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+      WHERE b.branch_id = $1 ${billDateCond}
+      ORDER BY b.bill_id DESC
+      LIMIT 100
+    `, billParams);
+
+    // Authoritative totals from Postgres
+    const totalBilledRes = await db.query(`
+      SELECT COALESCE(SUM(b.final_amount), 0) as total_billed, COUNT(*) as bills_count
+      FROM bills b
+      WHERE b.branch_id = $1 ${billDateCond}
+    `, billParams);
+
+    // Payments Summary
+    let payDateCond = '';
+    const payParams = [branchId];
+    if (from_date) {
+      payParams.push(from_date);
+      payDateCond += ` AND DATE(py.payment_date) >= $${payParams.length}`;
+    }
+    if (to_date) {
+      payParams.push(to_date);
+      payDateCond += ` AND DATE(py.payment_date) <= $${payParams.length}`;
+    }
+    if (payment_method && payment_method !== 'all') {
+      payParams.push(payment_method);
+      payDateCond += ` AND py.payment_method = $${payParams.length}`;
+    }
+
+    const totalCollectedRes = await db.query(`
+      SELECT COALESCE(SUM(py.amount), 0) as total_collected, COUNT(*) as payments_count
+      FROM payments py
+      WHERE py.branch_id = $1 AND py.status = 'success' ${payDateCond}
+    `, payParams);
+
+    // Method breakdown
+    const methodBreakdownRes = await db.query(`
+      SELECT py.payment_method, COALESCE(SUM(py.amount), 0) as amount, COUNT(*) as count
+      FROM payments py
+      WHERE py.branch_id = $1 AND py.status = 'success' ${payDateCond}
+      GROUP BY py.payment_method
+    `, payParams);
+
+    // Category breakdown
+    const categoryBreakdownRes = await db.query(`
+      SELECT b.bill_type, COALESCE(SUM(b.final_amount), 0) as amount, COUNT(*) as count
+      FROM bills b
+      WHERE b.branch_id = $1 ${billDateCond}
+      GROUP BY b.bill_type
+    `, billParams);
+
+    // Total Due
+    const totalDueRes = await db.query(`
+      SELECT COALESCE(SUM(due_amount), 0) as total_due, COUNT(*) as due_count
+      FROM due_patients
+      WHERE branch_id = $1 AND status = 'pending'
+    `, [branchId]);
+
+    // Volume stats
+    const proCompletedRes = await db.query(`
+      SELECT COUNT(*) as count FROM appointments WHERE branch_id = $1 AND status = 'pro_completed'
+    `, [branchId]);
+
+    const report = {
+      summary: {
+        total_billed: parseFloat(totalBilledRes.rows[0].total_billed),
+        bills_count: parseInt(totalBilledRes.rows[0].bills_count),
+        total_collected: parseFloat(totalCollectedRes.rows[0].total_collected),
+        payments_count: parseInt(totalCollectedRes.rows[0].payments_count),
+        total_due: parseFloat(totalDueRes.rows[0].total_due),
+        due_count: parseInt(totalDueRes.rows[0].due_count),
+        pro_completed_count: parseInt(proCompletedRes.rows[0].count)
+      },
+      category_breakdown: categoryBreakdownRes.rows.map(r => ({
+        category: r.bill_type,
+        amount: parseFloat(r.amount),
+        count: parseInt(r.count)
+      })),
+      payment_methods: methodBreakdownRes.rows.map(r => ({
+        method: r.payment_method,
+        amount: parseFloat(r.amount),
+        count: parseInt(r.count)
+      })),
+      bills: billsRes.rows
+    };
+
+    return res.json(formatResponse(true, report, 'PRO operational report retrieved successfully'));
+  } catch (err) {
+    console.error('getOperationalReports error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 14. PRO Profile
+async function getProfile(req, res) {
+  try {
+    const userId = req.user.user_id;
+    const result = await db.query(`
+      SELECT u.user_id, u.employee_id, u.full_name, u.username, u.mobile_number, u.email,
+             u.gender, to_char(u.date_of_joining, 'YYYY-MM-DD') as date_of_joining,
+             u.department, u.designation, u.role, u.status, u.branch_id,
+             b.branch_name, b.branch_code
+      FROM users u
+      LEFT JOIN branches b ON u.branch_id = b.branch_id
+      WHERE u.user_id = $1
+    `, [userId]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'PRO user profile not found'));
+    }
+
+    const profileData = result.rows[0];
+
+    // Fetch dynamic permissions from pro_manager_permissions table
+    const permRes = await db.query(`
+      SELECT * FROM pro_manager_permissions WHERE user_id = $1
+    `, [userId]);
+
+    let permissions = [];
+    if (permRes.rows.length > 0) {
+      const p = permRes.rows[0];
+      if (p.counselling) permissions.push('Prescription & Treatment Review');
+      if (p.renewals) permissions.push('Treatment Package Enrollments');
+      if (p.billing) permissions.push('Patient Billing & Invoicing (Non-consultation)');
+      if (p.payment) permissions.push('Payment Collection & Attribution');
+      if (p.accountant) permissions.push('Cash Drawer Reconciliation & Bank Deposits');
+      if (p.crm || p.followup) permissions.push('CRM Patient Calling & Follow-up Scheduling');
+      if (p.billing) permissions.push('Prescription Modifications (Days / Quantity)');
+      if (p.billing && p.payment) permissions.push('PRO Completion & Pharmacy Queue Release');
+      profileData.module_permissions = p;
+    } else {
+      // Role default permissions if no individual override exists
+      permissions = [
+        'Prescription & Treatment Review',
+        'Treatment Package Enrollments',
+        'Patient Billing & Invoicing (Non-consultation)',
+        'Payment Collection & Attribution',
+        'Cash Drawer Reconciliation & Bank Deposits',
+        'CRM Patient Calling & Follow-up Scheduling',
+        'Prescription Modifications (Days / Quantity)',
+        'PRO Completion & Pharmacy Queue Release'
+      ];
+      profileData.module_permissions = null;
+    }
+
+    profileData.permissions = permissions;
+
+    return res.json(formatResponse(true, profileData, 'PRO profile retrieved successfully'));
+  } catch (err) {
+    console.error('getProfile error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function updateProfile(req, res) {
+  try {
+    const userId = req.user.user_id;
+    const { mobile_number, email } = req.body;
+
+    const hasMobile = mobile_number !== undefined && mobile_number !== null && String(mobile_number).trim() !== '';
+    const hasEmail = email !== undefined && email !== null && String(email).trim() !== '';
+
+    if (!hasMobile && !hasEmail) {
+      return res.status(400).json(formatResponse(false, null, 'At least one contact field (mobile number or email) must be provided'));
+    }
+
+    let cleanMobile = null;
+    if (hasMobile) {
+      cleanMobile = String(mobile_number).trim();
+      if (!/^\d{10,15}$/.test(cleanMobile)) {
+        return res.status(400).json(formatResponse(false, null, 'Invalid mobile number format. Must be between 10 and 15 digits'));
+      }
+      const dupMobile = await db.query('SELECT user_id FROM users WHERE mobile_number = $1 AND user_id != $2', [cleanMobile, userId]);
+      if (dupMobile.rows.length > 0) {
+        return res.status(409).json(formatResponse(false, null, 'Mobile number is already registered to another account'));
+      }
+    }
+
+    let cleanEmail = null;
+    if (hasEmail) {
+      cleanEmail = String(email).trim().toLowerCase();
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(cleanEmail)) {
+        return res.status(400).json(formatResponse(false, null, 'Invalid email format'));
+      }
+      const dupEmail = await db.query('SELECT user_id FROM users WHERE LOWER(email) = $1 AND user_id != $2', [cleanEmail, userId]);
+      if (dupEmail.rows.length > 0) {
+        return res.status(409).json(formatResponse(false, null, 'Email address is already registered to another account'));
+      }
+    }
+
+    // PRO can update personal contact details (mobile_number, email). Professional fields are admin-managed.
+    const result = await db.query(`
+      UPDATE users
+      SET mobile_number = COALESCE($1, mobile_number),
+          email = COALESCE($2, email),
+          updated_at = now()
+      WHERE user_id = $3
+      RETURNING user_id, employee_id, full_name, username, mobile_number, email, role, status
+    `, [cleanMobile, cleanEmail, userId]);
+
+    res.locals.auditEntry = { module: 'PRO Profile', action: 'Update Contact Details', recordId: userId, newValue: result.rows[0] };
+    return res.json(formatResponse(true, result.rows[0], 'PRO contact details updated successfully'));
+  } catch (err) {
+    console.error('updateProfile error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -1506,6 +2606,7 @@ async function completePRO(req, res) {
 module.exports = {
   getDashboard,
   getPatientQueue,
+  searchPatients,
   getPatientOverview,
   createCounselling,
   getCounsellingHistory,
@@ -1529,6 +2630,7 @@ module.exports = {
   getTodayCalls,
   createFollowup,
   getFollowups,
+  updateFollowupStatus,
   getRenewalsQueue,
   createRenewal,
   getDuePatients,
@@ -1552,5 +2654,10 @@ module.exports = {
   updateComplaint,
   getComplaints,
   getPROChecklist,
-  completePRO
+  completePRO,
+  getPatientHistory,
+  getBillDetails,
+  getOperationalReports,
+  getProfile,
+  updateProfile
 };

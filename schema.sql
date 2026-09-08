@@ -280,6 +280,8 @@ CREATE TABLE IF NOT EXISTS leads (
     status                  lead_status NOT NULL DEFAULT 'new',
     assigned_receptionist_id INTEGER REFERENCES users(user_id),
     branch_id               INTEGER NOT NULL DEFAULT 1 REFERENCES branches(branch_id),
+    requirement             TEXT,
+    remarks                 TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );

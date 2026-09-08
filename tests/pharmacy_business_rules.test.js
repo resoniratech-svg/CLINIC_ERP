@@ -474,4 +474,612 @@ describe('Pharmacy Module End-to-End Business Rules Verification', () => {
     expect(phaLog).toBeDefined();
     expect(phaLog.session_duration_seconds).toBeGreaterThanOrEqual(0);
   });
+
+  test('Rule 21: Inventory getStock search, strength mapping, Excel import pricing, and alerts', async () => {
+    // 1. Create a specific test medicine and batch
+    const medRes = await request(app)
+      .post('/api/v1/pharmacy/medicines')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        medicine_name: 'Test Chamomilla Vulgaris',
+        generic_name: 'German Chamomile',
+        strength: '200CH',
+        unit: 'bottle',
+        category: 'Homeopathic Dilution',
+        manufacturer: 'Dr. Reckeweg',
+        reorder_level: 15
+      });
+    expect(medRes.status).toBe(201);
+    const newMedId = medRes.body.data.id;
+
+    const stockRes = await request(app)
+      .post('/api/v1/pharmacy/stock')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        medicine_id: newMedId,
+        batch_number: 'CHAM-2026-X1',
+        expiry_date: '2028-10-31',
+        quantity: 25,
+        purchase_rate: 65.50,
+        mrp: 110.00,
+        supplier: 'Reckeweg Direct',
+        invoice_number: 'INV-CHAM-01'
+      });
+    expect(stockRes.status).toBe(201);
+
+    // 2. Query getStock with search by medicine name
+    const searchByName = await request(app)
+      .get('/api/v1/pharmacy/stock')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ search: 'Chamomilla' });
+    expect(searchByName.status).toBe(200);
+    expect(searchByName.body.data.length).toBeGreaterThan(0);
+    const foundItem = searchByName.body.data.find(s => s.batch_number === 'CHAM-2026-X1');
+    expect(foundItem).toBeDefined();
+    expect(foundItem.strength).toBe('200CH');
+    expect(parseFloat(foundItem.mrp)).toBe(110.00);
+
+    // 3. Query getStock with search by batch number
+    const searchByBatch = await request(app)
+      .get('/api/v1/pharmacy/stock')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ search: 'CHAM-2026-X1' });
+    expect(searchByBatch.status).toBe(200);
+    expect(searchByBatch.body.data.length).toBe(1);
+    expect(searchByBatch.body.data[0].batch_number).toBe('CHAM-2026-X1');
+
+    // 4. Excel import with pricing and vendor persistence
+    const importRes = await request(app)
+      .post('/api/v1/pharmacy/stock/import/confirm')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        file_name: 'test_pricing_import.xlsx',
+        rows: [
+          {
+            'Medicine Name': 'Test Hypericum Perforatum',
+            'Potency': '1M',
+            'Unit': 'bottle',
+            'Category': 'Homeopathic Dilution',
+            'Batch Number': 'HYP-BATCH-99',
+            'Expiry Date': '2028-08-15',
+            'Quantity': 40,
+            'Purchase Price': 72.00,
+            'MRP': 125.00,
+            'Supplier': 'Hahnemann Direct',
+            'Invoice Number': 'INV-HYP-99'
+          }
+        ]
+      });
+    expect(importRes.status).toBe(201);
+    expect(importRes.body.data.valid_rows).toBe(1);
+
+    // Verify persisted stock has mrp, purchase_rate, supplier, invoice_number
+    const checkImportedStock = await request(app)
+      .get('/api/v1/pharmacy/stock')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ search: 'HYP-BATCH-99' });
+    expect(checkImportedStock.status).toBe(200);
+    expect(checkImportedStock.body.data.length).toBe(1);
+    const hypItem = checkImportedStock.body.data[0];
+    expect(parseFloat(hypItem.purchase_rate)).toBe(72.00);
+    expect(parseFloat(hypItem.mrp)).toBe(125.00);
+    expect(hypItem.supplier).toBe('Hahnemann Direct');
+    expect(hypItem.invoice_number).toBe('INV-HYP-99');
+
+    // 5. Test Stock Alert endpoints
+    const lowStockRes = await request(app).get('/api/v1/pharmacy/stock/low-stock').set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(lowStockRes.status).toBe(200);
+    expect(Array.isArray(lowStockRes.body.data)).toBe(true);
+
+    const expiringRes = await request(app).get('/api/v1/pharmacy/stock/expiring').set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(expiringRes.status).toBe(200);
+    expect(Array.isArray(expiringRes.body.data)).toBe(true);
+
+    const expiredRes = await request(app).get('/api/v1/pharmacy/stock/expired').set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(expiredRes.status).toBe(200);
+    expect(Array.isArray(expiredRes.body.data)).toBe(true);
+
+    const outOfStockRes = await request(app).get('/api/v1/pharmacy/stock/out-of-stock').set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(outOfStockRes.status).toBe(200);
+    expect(Array.isArray(outOfStockRes.body.data)).toBe(true);
+  });
+
+  test('Rule 22: Stock Transactions Ledger filtering, case-insensitive search, and type validation', async () => {
+    // 1. Fetch all transactions
+    const allTxns = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(allTxns.status).toBe(200);
+    expect(allTxns.body.data.length).toBeGreaterThan(0);
+    const sample = allTxns.body.data[0];
+    expect(sample).toHaveProperty('id');
+    expect(sample).toHaveProperty('transaction_type');
+    expect(sample).toHaveProperty('quantity');
+    expect(sample).toHaveProperty('medicine_name');
+    expect(sample).toHaveProperty('performed_by_name');
+    expect(sample).toHaveProperty('created_at');
+
+    // 2. Filter by type 'in'
+    const inTxns = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ type: 'in' });
+    expect(inTxns.status).toBe(200);
+    expect(inTxns.body.data.every(t => t.transaction_type === 'in')).toBe(true);
+
+    // 3. Filter by type 'out'
+    const outTxns = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ type: 'out' });
+    expect(outTxns.status).toBe(200);
+    expect(outTxns.body.data.every(t => t.transaction_type === 'out')).toBe(true);
+    expect(outTxns.body.data.every(t => t.quantity < 0)).toBe(true);
+
+    // 4. Filter by type 'adjustment'
+    const adjTxns = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ type: 'adjustment' });
+    expect(adjTxns.status).toBe(200);
+    expect(adjTxns.body.data.every(t => t.transaction_type === 'adjustment')).toBe(true);
+
+    // 5. Filter by type 'return'
+    const retTxns = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ type: 'return' });
+    expect(retTxns.status).toBe(200);
+    expect(retTxns.body.data.every(t => t.transaction_type === 'return')).toBe(true);
+
+    // 6. Case-insensitive and partial search by batch number
+    const searchRes = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ batch_number: 'batch-valid' });
+    expect(searchRes.status).toBe(200);
+    expect(searchRes.body.data.length).toBeGreaterThan(0);
+    expect(searchRes.body.data.every(t => t.batch_number.toLowerCase().includes('batch-valid'))).toBe(true);
+
+    // 7. Invalid type returns empty array gracefully without 500 error
+    const invalidTypeRes = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ type: 'non_existent_type' });
+    expect(invalidTypeRes.status).toBe(200);
+    expect(invalidTypeRes.body.data).toEqual([]);
+
+    // 8. Role isolation: Doctor and Receptionist blocked from Stock Transactions
+    const docBlocked = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${doctorToken}`);
+    expect(docBlocked.status).toBe(403);
+
+    const recBlocked = await request(app)
+      .get('/api/v1/pharmacy/stock/transactions')
+      .set('Authorization', `Bearer ${receptionistToken}`);
+    expect(recBlocked.status).toBe(403);
+  });
+
+  test('Rule 23: Medicine Returns API multi-filter querying, branch isolation, and stock update contracts', async () => {
+    // 1. Validation checks
+    const badQtyRes = await request(app)
+      .post('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        patient_id: testPatientId,
+        medicine_id: testMedicineId,
+        stock_id: testStockId,
+        return_quantity: -5,
+        return_reason: 'Test bad qty',
+        condition: 'good'
+      });
+    expect(badQtyRes.status).toBe(400);
+
+    const badConditionRes = await request(app)
+      .post('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        patient_id: testPatientId,
+        medicine_id: testMedicineId,
+        stock_id: testStockId,
+        return_quantity: 2,
+        return_reason: 'Test bad condition',
+        condition: 'invalid_cond'
+      });
+    expect(badConditionRes.status).toBe(400);
+
+    // 2. Process return with condition: 'good' -> Restocked
+    const stockBeforeGood = await db.query(`SELECT quantity FROM medicine_stock WHERE id = $1`, [testStockId]);
+    const initQty = stockBeforeGood.rows[0].quantity;
+
+    const goodReturnRes = await request(app)
+      .post('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        patient_id: testPatientId,
+        medicine_id: testMedicineId,
+        stock_id: testStockId,
+        return_quantity: 4,
+        return_reason: 'Patient changed mind',
+        condition: 'good',
+        remarks: 'Original foil intact'
+      });
+    expect(goodReturnRes.status).toBe(201);
+    expect(goodReturnRes.body.data.restocked).toBe(true);
+    expect(goodReturnRes.body.data.return_quantity).toBe(4);
+
+    // Verify stock incremented
+    const stockAfterGood = await db.query(`SELECT quantity FROM medicine_stock WHERE id = $1`, [testStockId]);
+    expect(stockAfterGood.rows[0].quantity).toBe(initQty + 4);
+
+    // Verify stock_transaction created
+    const returnTxn = await db.query(`
+      SELECT * FROM stock_transactions 
+      WHERE medicine_id = $1 AND transaction_type = 'return' 
+      ORDER BY id DESC LIMIT 1
+    `, [testMedicineId]);
+    expect(returnTxn.rows.length).toBe(1);
+    expect(returnTxn.rows[0].quantity).toBe(4);
+    expect(returnTxn.rows[0].reference).toContain('Patient changed mind');
+
+    // 3. Process return with condition: 'expired' -> Quarantined (NOT restocked)
+    const expReturnRes = await request(app)
+      .post('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        patient_id: testPatientId,
+        medicine_id: testMedicineId,
+        stock_id: testStockId,
+        return_quantity: 2,
+        return_reason: 'Past expiry date',
+        condition: 'expired',
+        remarks: 'Found in medicine cabinet'
+      });
+    expect(expReturnRes.status).toBe(201);
+    expect(expReturnRes.body.data.restocked).toBe(false);
+
+    // Verify stock was NOT incremented for expired condition
+    const stockAfterExp = await db.query(`SELECT quantity FROM medicine_stock WHERE id = $1`, [testStockId]);
+    expect(stockAfterExp.rows[0].quantity).toBe(initQty + 4);
+
+    // 4. Test GET /pharmacy/returns with filters
+    const allReturnsRes = await request(app)
+      .get('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(allReturnsRes.status).toBe(200);
+    expect(allReturnsRes.body.data.length).toBeGreaterThanOrEqual(2);
+    const firstRet = allReturnsRes.body.data[0];
+    expect(firstRet).toHaveProperty('patient_name');
+    expect(firstRet).toHaveProperty('medicine_name');
+    expect(firstRet).toHaveProperty('batch_number');
+    expect(firstRet).toHaveProperty('processed_by_name');
+
+    // Filter by condition
+    const goodOnlyRes = await request(app)
+      .get('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ condition: 'good' });
+    expect(goodOnlyRes.status).toBe(200);
+    expect(goodOnlyRes.body.data.every(r => r.condition === 'good')).toBe(true);
+
+    // Filter by search
+    const searchRetRes = await request(app)
+      .get('/api/v1/pharmacy/returns')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ search: 'changed mind' });
+    expect(searchRetRes.status).toBe(200);
+    expect(searchRetRes.body.data.some(r => r.return_reason.includes('changed mind'))).toBe(true);
+  });
+
+  test('Rule 24: Stock Adjustments multi-filter querying, validation, and rejection workflow', async () => {
+    // 1. Validation: negative physical quantity rejected
+    const negQtyRes = await request(app)
+      .post('/api/v1/pharmacy/stock/adjustments')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        medicine_id: testMedicineId,
+        stock_id: testStockId,
+        physical_quantity: -10,
+        reason: 'damage'
+      });
+    expect(negQtyRes.status).toBe(400);
+
+    // 2. Validation: mismatched medicine and stock
+    const mismatchRes = await request(app)
+      .post('/api/v1/pharmacy/stock/adjustments')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        medicine_id: testMedicineId + 9999,
+        stock_id: testStockId,
+        physical_quantity: 20,
+        reason: 'stock_count_correction'
+      });
+    expect(mismatchRes.status).toBe(400);
+
+    // 3. Rejection lifecycle
+    const stockBeforeReject = await db.query(`SELECT quantity FROM medicine_stock WHERE id = $1`, [testStockId]);
+    const initStock = stockBeforeReject.rows[0].quantity;
+
+    // Create large adjustment > 10 discrepancy
+    const largeAdjRes = await request(app)
+      .post('/api/v1/pharmacy/stock/adjustments')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        medicine_id: testMedicineId,
+        stock_id: testStockId,
+        physical_quantity: initStock + 50,
+        reason: 'theft_loss',
+        remarks: 'Audit discrepancy awaiting review'
+      });
+    expect(largeAdjRes.status).toBe(201);
+    expect(largeAdjRes.body.data.approval_status).toBe('pending');
+    const pendingAdjId = largeAdjRes.body.data.id;
+
+    // Non-admin attempting to reject -> 403
+    const unauthorizedReject = await request(app)
+      .post(`/api/v1/pharmacy/stock/adjustments/${pendingAdjId}/reject`)
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({});
+    expect(unauthorizedReject.status).toBe(403);
+
+    // Super Admin rejects
+    const rejectRes = await request(app)
+      .post(`/api/v1/pharmacy/stock/adjustments/${pendingAdjId}/reject`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({});
+    expect(rejectRes.status).toBe(200);
+    expect(rejectRes.body.data.approval_status).toBe('rejected');
+
+    // Stock must remain unchanged after rejection
+    const stockAfterReject = await db.query(`SELECT quantity FROM medicine_stock WHERE id = $1`, [testStockId]);
+    expect(stockAfterReject.rows[0].quantity).toBe(initStock);
+
+    // Re-approving rejected adjustment must fail with 400
+    const reApproveRes = await request(app)
+      .post(`/api/v1/pharmacy/stock/adjustments/${pendingAdjId}/approve`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({});
+    expect(reApproveRes.status).toBe(400);
+
+    // 4. Test GET /stock/adjustments multi-filter
+    const allAdjRes = await request(app)
+      .get('/api/v1/pharmacy/stock/adjustments')
+      .set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(allAdjRes.status).toBe(200);
+    expect(allAdjRes.body.data.length).toBeGreaterThan(0);
+    const sampleAdj = allAdjRes.body.data[0];
+    expect(sampleAdj).toHaveProperty('medicine_name');
+    expect(sampleAdj).toHaveProperty('batch_number');
+    expect(sampleAdj).toHaveProperty('performed_by_name');
+
+    // Filter by status 'rejected'
+    const rejectedAdjRes = await request(app)
+      .get('/api/v1/pharmacy/stock/adjustments')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ status: 'rejected' });
+    expect(rejectedAdjRes.status).toBe(200);
+    expect(rejectedAdjRes.body.data.some(a => a.id === pendingAdjId)).toBe(true);
+    expect(rejectedAdjRes.body.data.every(a => a.approval_status === 'rejected')).toBe(true);
+
+    // Filter by search
+    const searchAdjRes = await request(app)
+      .get('/api/v1/pharmacy/stock/adjustments')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ search: 'theft_loss' });
+    expect(searchAdjRes.status).toBe(200);
+    expect(searchAdjRes.body.data.some(a => a.reason === 'theft_loss')).toBe(true);
+  });
+
+  it('Rule 25: Prescription Clarification workflow — raise, item gating, doctor response, pharmacy resolution, and unblocking', async () => {
+    // 1. Find test prescription with items
+    const rxRes = await db.query(`SELECT p.id, p.patient_id, p.doctor_id FROM prescriptions p ORDER BY p.id DESC LIMIT 1`);
+    expect(rxRes.rows.length).toBeGreaterThan(0);
+    const rx = rxRes.rows[0];
+
+    const itemRes = await db.query(`SELECT id FROM prescription_items WHERE prescription_id = $1 LIMIT 1`, [rx.id]);
+    expect(itemRes.rows.length).toBeGreaterThan(0);
+    const itemId = itemRes.rows[0].id;
+
+    // 2. Pharmacy raises clarification for the item
+    const clarRes = await request(app)
+      .post('/api/v1/pharmacy/clarifications')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        prescription_id: rx.id,
+        prescription_item_id: itemId,
+        issue_type: 'dosage_clarification',
+        priority: 'urgent',
+        description: 'Potency check: patient is a child, is 200C appropriate or should we give 30C?',
+        remarks: 'Patient waiting in dispensary'
+      });
+    expect(clarRes.status).toBe(201);
+    expect(clarRes.body.data).toHaveProperty('id');
+    const clarId = clarRes.body.data.id;
+    expect(clarRes.body.data.status).toBe('open');
+    expect(clarRes.body.data.priority).toBe('urgent');
+    expect(clarRes.body.data.issue_type).toBe('dosage_clarification');
+
+    // 3. Item dispense_status must be 'clarification_requested' (gated)
+    const itemAfterClar = await db.query(`SELECT dispense_status FROM prescription_items WHERE id = $1`, [itemId]);
+    expect(itemAfterClar.rows[0].dispense_status).toBe('clarification_requested');
+
+    // 4. Pharmacy list clarifications
+    const listRes = await request(app)
+      .get('/api/v1/pharmacy/clarifications')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .query({ status: 'open', priority: 'urgent' });
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.data.some(c => c.id === clarId)).toBe(true);
+    const clarItem = listRes.body.data.find(c => c.id === clarId);
+    expect(clarItem).toHaveProperty('doctor_name');
+    expect(clarItem).toHaveProperty('patient_name');
+
+    // 5. Doctor views clarifications and responds
+    const docListRes = await request(app)
+      .get('/api/v1/doctor/clarifications')
+      .set('Authorization', `Bearer ${doctorToken}`)
+      .query({ status: 'open' });
+    expect(docListRes.status).toBe(200);
+    expect(docListRes.body.data.some(c => c.id === clarId)).toBe(true);
+
+    const docResp = await request(app)
+      .post(`/api/v1/doctor/clarifications/${clarId}/respond`)
+      .set('Authorization', `Bearer ${doctorToken}`)
+      .send({
+        doctor_response: 'Approved: 30C 4 pills twice daily is suitable.'
+      });
+    expect(docResp.status).toBe(200);
+    expect(docResp.body.data.status).toBe('responded');
+
+    // 6. Pharmacy resolves / closes clarification
+    const closeRes = await request(app)
+      .put(`/api/v1/pharmacy/clarifications/${clarId}/close`)
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        remarks: 'Dispensed 30C as advised by doctor'
+      });
+    expect(closeRes.status).toBe(200);
+    expect(closeRes.body.data.status).toBe('closed');
+
+    // 7. Item dispense_status must be unblocked back to 'pending'
+    const itemAfterClose = await db.query(`SELECT dispense_status FROM prescription_items WHERE id = $1`, [itemId]);
+    expect(itemAfterClose.rows[0].dispense_status).toBe('pending');
+  });
+
+  it('Rule 26: Pharmacy User Profile & Security Settings Lifecycle', async () => {
+    // 1. Unauthenticated request to GET /pharmacy/profile is rejected (401)
+    const unauthRes = await request(app).get('/api/v1/pharmacy/profile');
+    expect(unauthRes.status).toBe(401);
+
+    // 2. Unauthorized role request is rejected (403)
+    const unauthRoleRes = await request(app)
+      .get('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${receptionistToken}`);
+    expect(unauthRoleRes.status).toBe(403);
+
+    // 3. Authenticated Pharmacist fetches profile dynamically from DB
+    const profileRes = await request(app)
+      .get('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(profileRes.status).toBe(200);
+    expect(profileRes.body.success).toBe(true);
+    const profile = profileRes.body.data;
+    expect(profile.username).toBe('peter_pharmacy');
+    expect(profile.role).toBe('pharmacy');
+    expect(profile.status).toBe('active');
+    expect(profile.branch_id).toBe(1);
+    expect(profile.branch_name).toBeTruthy();
+    expect(profile.employee_id).toBeTruthy();
+
+    const origFullName = profile.full_name;
+    const origMobile = profile.mobile_number;
+    const origEmail = profile.email;
+
+    // 4. Contact validation failures
+    const emptyNameRes = await request(app)
+      .put('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ full_name: '   ' });
+    expect(emptyNameRes.status).toBe(400);
+
+    const badPhoneRes = await request(app)
+      .put('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ mobile_number: '123' });
+    expect(badPhoneRes.status).toBe(400);
+
+    const badEmailRes = await request(app)
+      .put('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ email: 'not-an-email' });
+    expect(badEmailRes.status).toBe(400);
+
+    // 5. Valid contact update
+    const updateRes = await request(app)
+      .put('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        full_name: 'Peter Pharmacy Lead',
+        mobile_number: '9888877779',
+        email: 'peter.lead@clinic.com'
+      });
+    expect(updateRes.status).toBe(200);
+    expect(updateRes.body.success).toBe(true);
+    expect(updateRes.body.data.full_name).toBe('Peter Pharmacy Lead');
+    expect(updateRes.body.data.mobile_number).toBe('9888877779');
+    expect(updateRes.body.data.email).toBe('peter.lead@clinic.com');
+
+    // Verify persistence in PostgreSQL
+    const dbCheck = await db.query(`SELECT full_name, mobile_number, email FROM users WHERE username = 'peter_pharmacy'`);
+    expect(dbCheck.rows[0].full_name).toBe('Peter Pharmacy Lead');
+    expect(dbCheck.rows[0].mobile_number).toBe('9888877779');
+    expect(dbCheck.rows[0].email).toBe('peter.lead@clinic.com');
+
+    // 6. Privilege escalation / tampering immunity
+    const tamperRes = await request(app)
+      .put('/api/v1/pharmacy/profile')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({
+        role: 'super_admin',
+        branch_id: 999,
+        employee_id: 'HACKED',
+        status: 'suspended'
+      });
+    expect(tamperRes.status).toBe(200);
+
+    // Verify DB was NOT tampered with
+    const tamperCheck = await db.query(`SELECT role, branch_id, employee_id, status FROM users WHERE username = 'peter_pharmacy'`);
+    expect(tamperCheck.rows[0].role).toBe('pharmacy');
+    expect(tamperCheck.rows[0].branch_id).toBe(1);
+    expect(tamperCheck.rows[0].employee_id).toBe('PHA001');
+    expect(tamperCheck.rows[0].status).toBe('active');
+
+    // 7. Password change validations
+    const wrongOldRes = await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ old_password: 'WrongPassword!', new_password: 'NewPassword@123' });
+    expect(wrongOldRes.status).toBe(400);
+
+    const shortPwRes = await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ old_password: 'Password@123', new_password: '123' });
+    expect(shortPwRes.status).toBe(400);
+
+    const samePwRes = await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ old_password: 'Password@123', new_password: 'Password@123' });
+    expect(samePwRes.status).toBe(400);
+
+    // Valid change password
+    const validPwRes = await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Authorization', `Bearer ${pharmacyToken}`)
+      .send({ old_password: 'Password@123', new_password: 'NewPassword@123' });
+    expect(validPwRes.status).toBe(200);
+
+    // Verify login with new password
+    const newLoginRes = await request(app)
+      .post('/api/v1/auth/login')
+      .send({ username: 'peter_pharmacy', password: 'NewPassword@123' });
+    expect(newLoginRes.status).toBe(200);
+    const newPhaToken = newLoginRes.body.data.token;
+
+    // Change back to original password
+    const revertPwRes = await request(app)
+      .post('/api/v1/auth/change-password')
+      .set('Authorization', `Bearer ${newPhaToken}`)
+      .send({ old_password: 'NewPassword@123', new_password: 'Password@123' });
+    expect(revertPwRes.status).toBe(200);
+
+    // Restore original contact details
+    await db.query(`
+      UPDATE users
+      SET full_name = $1, mobile_number = $2, email = $3
+      WHERE username = 'peter_pharmacy'
+    `, [origFullName, origMobile, origEmail]);
+  });
 });

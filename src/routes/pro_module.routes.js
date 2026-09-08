@@ -11,11 +11,14 @@ router.use(authorizeRoles('pro_manager', 'super_admin'));
 // 1. Dashboard
 router.get('/dashboard', proController.getDashboard);
 
-// 2. Patient Queue
+// 2. Patient Queue & Search
 router.get('/queue', proController.getPatientQueue);
+router.get('/patients/search', proController.searchPatients);
 
-// 3. Patient 360° Overview
+// 3. Patient 360° Overview & History
+router.get('/patients/:id', proController.getPatientOverview);
 router.get('/patients/:id/overview', proController.getPatientOverview);
+router.get('/patients/:id/history', proController.getPatientHistory);
 
 // 4. Counselling
 router.post('/counselling', proController.createCounselling);
@@ -33,13 +36,15 @@ router.get('/prescriptions/:id', proController.getPrescriptionDetails);
 router.post('/prescriptions/items/:item_id/modify', proController.modifyPrescriptionItem);
 router.get('/prescriptions/items/:item_id/modifications', proController.getPrescriptionItemModifications);
 
-// 7. Billing
+// 7. Billing & Invoices
 router.post('/bills', proController.createBill);
 router.post('/billing', proController.createBill);
 router.get('/bills/pending', proController.getPendingBills);
 router.get('/bills/paid', proController.getPaidBills);
 router.get('/bills/partial-due', proController.getPartialDueBills);
 router.get('/bills/history', proController.getBillingHistory);
+router.get('/bills/:id', proController.getBillDetails);
+router.get('/invoices/:id', proController.getBillDetails);
 
 // 8. Payments & Doctor Target Attribution
 router.post('/payments', proController.recordPayment);
@@ -56,6 +61,9 @@ router.get('/calls', proController.getTodayCalls);
 router.post('/followups', proController.createFollowup);
 router.post('/crm/followups', proController.createFollowup);
 router.get('/followups', proController.getFollowups);
+router.put('/followups/:id/status', proController.updateFollowupStatus);
+router.post('/followups/:id/complete', proController.updateFollowupStatus);
+router.put('/crm/followups/:id/status', proController.updateFollowupStatus);
 
 router.get('/renewals/queue', proController.getRenewalsQueue);
 router.post('/renewals', proController.createRenewal);
@@ -87,6 +95,8 @@ router.get('/accountant/daily-summary', proController.getDailyCashSummary);
 router.get('/accountant/cash-ledger', proController.getDailyCashSummary);
 router.get('/accountant/grand-total', proController.getGrandTotal);
 router.get('/reports/revenue', proController.getGrandTotal);
+router.get('/reports/operational', proController.getOperationalReports);
+router.get('/reports/summary', proController.getOperationalReports);
 
 // 12. Feedback & Complaints
 router.post('/feedback', proController.createFeedback);
@@ -98,7 +108,13 @@ router.get('/complaints', proController.getComplaints);
 
 // 13. PRO Completion & Pharmacy Handoff
 router.get('/patients/:id/pro-checklist', proController.getPROChecklist);
+router.get('/patients/:id/checklist', proController.getPROChecklist);
 router.post('/patients/:id/complete-pro', proController.completePRO);
+router.post('/patients/:id/complete', proController.completePRO);
 router.get('/patients/:id/complete-pro', proController.completePRO);
+
+// 14. PRO Profile
+router.get('/profile', proController.getProfile);
+router.put('/profile', proController.updateProfile);
 
 module.exports = router;
