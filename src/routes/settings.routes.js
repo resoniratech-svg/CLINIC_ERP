@@ -11,4 +11,9 @@ router.put('/hospital', authenticateToken, authorizeRoles('super_admin'), settin
 router.get('/masters/:type', authenticateToken, settingsController.getMasterData);
 router.post('/masters/:type', authenticateToken, authorizeRoles('super_admin'), settingsController.addMasterData);
 
+// Authenticated User Profile & Branches for Settings
+router.get('/profile', authenticateToken, settingsController.getProfile);
+router.put('/profile', authenticateToken, settingsController.updateProfile);
+router.get('/branches', authenticateToken, settingsController.getBranches);
+
 module.exports = router;
