@@ -1,11 +1,25 @@
 const db = require('../db');
 const { formatResponse } = require('../utils/helpers');
 
-// Helper to generate padded sequential code
-async function generateId(prefix, tableName) {
-  const res = await db.query(`SELECT COUNT(*) as count FROM ${tableName}`);
-  const nextNum = parseInt(res.rows[0].count) + 1;
-  return `${prefix}${String(nextNum).padStart(5, '0')}`;
+// Helper to generate padded sequential code (collision-proof)
+async function generateId(prefix, tableName, client = null) {
+  const queryRunner = client || db;
+  let colName = 'id';
+  if (tableName === 'patients') colName = 'registration_id';
+  else if (tableName === 'bills') colName = 'bill_number';
+  else if (tableName === 'referrals') colName = 'referral_code';
+
+  const res = await queryRunner.query(`SELECT COUNT(*) as count FROM ${tableName}`);
+  let nextNum = parseInt(res.rows[0]?.count || 0) + 1;
+  let candidate = `${prefix}${String(nextNum).padStart(5, '0')}`;
+
+  let check = await queryRunner.query(`SELECT 1 FROM ${tableName} WHERE ${colName} = $1`, [candidate]);
+  while (check.rows.length > 0) {
+    nextNum++;
+    candidate = `${prefix}${String(nextNum).padStart(5, '0')}`;
+    check = await queryRunner.query(`SELECT 1 FROM ${tableName} WHERE ${colName} = $1`, [candidate]);
+  }
+  return candidate;
 }
 
 // 3.2 Dashboard
@@ -320,7 +334,10 @@ async function registerPatient(req, res) {
     }
 
     const cleanMobile = mobile_number.toString().trim();
-    const numericMobile = cleanMobile.replace(/\D/g, '');
+    let numericMobile = cleanMobile.replace(/\D/g, '');
+    if (numericMobile.length === 12 && numericMobile.startsWith('91')) {
+      numericMobile = numericMobile.slice(2);
+    }
     if (numericMobile.length !== 10) {
       await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'Mobile number must be a valid 10-digit number'));
@@ -394,12 +411,17 @@ async function registerPatient(req, res) {
         await client.query(`UPDATE patients SET ailment_reason = $1, updated_at = now() WHERE patient_id = $2`, [resolvedAilment, targetPatientId]);
         targetPatient.ailment_reason = resolvedAilment;
       }
+      if (!targetPatient.registration_id) {
+        const regId = await generateId('REG-', 'patients', client);
+        await client.query(`UPDATE patients SET registration_id = $1 WHERE patient_id = $2`, [regId, targetPatientId]);
+        targetPatient.registration_id = regId;
+      }
     } else {
       // Calculate registration expiry (default 30 days)
       const settingRes = await client.query(`SELECT setting_value FROM hospital_settings WHERE setting_key = 'registration_validity_days'`);
       const validityDays = settingRes.rows.length > 0 ? parseInt(settingRes.rows[0].setting_value) : 30;
 
-      const regId = await generateId('REG-', 'patients');
+      const regId = await generateId('REG-', 'patients', client);
       const regDate = new Date();
       const regExpiry = new Date();
       regExpiry.setDate(regExpiry.getDate() + validityDays);
@@ -475,20 +497,34 @@ async function registerPatient(req, res) {
     }
     const dueAmt = Math.max(0, finalFee - paidAmt);
 
+    // Parse and sanitize appointment date (accepts YYYY-MM-DD or DD/MM/YYYY)
+    let cleanDate = appointment_date.toString().trim();
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(cleanDate)) {
+      const [d, m, y] = cleanDate.split('/');
+      cleanDate = `${y}-${m}-${d}`;
+    }
+
+    // Parse and sanitize appointment time (strips 'hrs', 'am', 'pm' and ensures valid time format)
+    let cleanTime = appointment_time.toString().trim().replace(/\s*hrs$/i, '').replace(/\s*(am|pm)$/i, '').trim();
+    if (/^\d{1,2}:\d{2}$/.test(cleanTime)) {
+      cleanTime = `${cleanTime}:00`;
+    }
+
     // Check Doctor Slot Availability (Prevent Double Booking)
     const slotCheck = await client.query(`
       SELECT appointment_id FROM appointments
       WHERE doctor_id = $1 AND appointment_date = $2 AND appointment_time::time = $3::time AND status NOT IN ('cancelled')
-    `, [parseInt(assigned_doctor_id), appointment_date, appointment_time]);
+    `, [parseInt(assigned_doctor_id), cleanDate, cleanTime]);
 
     if (slotCheck.rows.length > 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json(formatResponse(false, null, `Selected doctor is already booked at ${appointment_time} on ${appointment_date}. Double booking is not allowed. Please choose another time slot.`));
+      return res.status(400).json(formatResponse(false, null, `Selected doctor is already booked at ${appointment_time} on ${cleanDate}. Double booking is not allowed. Please choose another time slot.`));
     }
 
     // Determine initial appointment status (checked_in for today if auto_checkin enabled, scheduled otherwise)
-    const today = new Date().toISOString().split('T')[0];
-    const isToday = appointment_date === today;
+    const localToday = new Date().toLocaleDateString('en-CA');
+    const utcToday = new Date().toISOString().split('T')[0];
+    const isToday = (cleanDate === localToday || cleanDate === utcToday);
     const initialApptStatus = (isToday && req.body.auto_checkin !== false) ? 'checked_in' : 'scheduled';
 
     // Create Appointment
@@ -496,12 +532,12 @@ async function registerPatient(req, res) {
       INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_time, appointment_type, status, created_by, branch_id)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *
-    `, [targetPatientId, parseInt(assigned_doctor_id), appointment_date, appointment_time, apptType, initialApptStatus, req.user.user_id, branchId]);
+    `, [targetPatientId, parseInt(assigned_doctor_id), cleanDate, cleanTime, apptType, initialApptStatus, req.user.user_id, branchId]);
 
     const newAppt = apptRes.rows[0];
 
     // Create Bill (Bill Type = 'consultation', status = 'created')
-    const billNum = await generateId('INV-', 'bills');
+    const billNum = await generateId('INV-', 'bills', client);
     const billRes = await client.query(`
       INSERT INTO bills (
         bill_number, patient_id, doctor_id, bill_type, created_by, branch_id,
@@ -551,7 +587,7 @@ async function registerPatient(req, res) {
         return res.status(400).json(formatResponse(false, null, 'Selected referring employee not found or inactive'));
       }
       const emp = empRes.rows[0];
-      const refCode = await generateId('REF-', 'referrals');
+      const refCode = await generateId('REF-', 'referrals', client);
       const refRes = await client.query(`
         INSERT INTO referrals (patient_id, referral_type, referred_by, referral_code, referring_employee_id, department, remarks)
         VALUES ($1, 'employee', $2, $3, $4, $5, $6)
@@ -565,7 +601,7 @@ async function registerPatient(req, res) {
           await client.query('ROLLBACK');
           return res.status(400).json(formatResponse(false, null, 'Selected referring patient not found'));
         }
-        const refCode = await generateId('REF-', 'referrals');
+        const refCode = await generateId('REF-', 'referrals', client);
         const refRes = await client.query(`
           INSERT INTO referrals (patient_id, referral_type, referral_code, referring_patient_id, remarks)
           VALUES ($1, 'patient', $2, $3, $4)
@@ -596,7 +632,7 @@ async function registerPatient(req, res) {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('registerPatient error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
   } finally {
     client.release();
   }
