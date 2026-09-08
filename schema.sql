@@ -204,6 +204,7 @@ CREATE TABLE IF NOT EXISTS master_departments     (id SERIAL PRIMARY KEY, name V
 CREATE TABLE IF NOT EXISTS master_specializations (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL UNIQUE, status user_status DEFAULT 'active');
 CREATE TABLE IF NOT EXISTS master_charge_types    (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL UNIQUE, status user_status DEFAULT 'active');
 CREATE TABLE IF NOT EXISTS master_expense_categories (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL UNIQUE, status user_status DEFAULT 'active');
+CREATE TABLE IF NOT EXISTS master_ailments          (id SERIAL PRIMARY KEY, name VARCHAR(150) NOT NULL UNIQUE, status user_status DEFAULT 'active', created_at TIMESTAMPTZ DEFAULT now());
 CREATE TABLE IF NOT EXISTS master_discount_rules (
     id               SERIAL PRIMARY KEY,
     name             VARCHAR(100) NOT NULL,

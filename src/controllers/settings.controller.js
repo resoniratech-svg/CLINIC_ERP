@@ -102,7 +102,13 @@ const masterTableMap = {
   'charge-types': 'master_charge_types',
   'charge_types': 'master_charge_types',
   'expense-categories': 'master_expense_categories',
-  'expense_categories': 'master_expense_categories'
+  'expense_categories': 'master_expense_categories',
+  'ailments': 'master_ailments',
+  'ailment': 'master_ailments',
+  'aliments': 'master_ailments',
+  'aliment': 'master_ailments',
+  'patient-problems': 'master_ailments',
+  'patient_problems': 'master_ailments'
 };
 
 async function getMasterData(req, res) {
@@ -130,15 +136,26 @@ async function addMasterData(req, res) {
     }
 
     const { name } = req.body;
-    if (!name) {
+    if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json(formatResponse(false, null, 'name is required'));
     }
 
-    const result = await db.query(`
-      INSERT INTO ${tableName} (name) VALUES ($1) ON CONFLICT DO NOTHING RETURNING *
-    `, [name]);
+    const trimmedName = name.trim();
 
-    const created = result.rows[0] || { name };
+    // Check duplicate (case-insensitive)
+    const existing = await db.query(
+      `SELECT * FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))`,
+      [trimmedName]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(400).json(formatResponse(false, null, `Entry '${trimmedName}' already exists in ${type}`));
+    }
+
+    const result = await db.query(`
+      INSERT INTO ${tableName} (name) VALUES ($1) RETURNING *
+    `, [trimmedName]);
+
+    const created = result.rows[0] || { name: trimmedName };
     res.locals.auditEntry = { module: 'Master Data', action: `Add Master ${type}`, newValue: created };
     return res.status(201).json(formatResponse(true, created, `Master ${type} entry added successfully`));
   } catch (err) {
