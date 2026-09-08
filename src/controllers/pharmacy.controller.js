@@ -1060,6 +1060,541 @@ async function getMedicineStockDetail(req, res) {
 }
 
 // -------------------------------------------------------------
+// 7b. Pharmacy Master - Medicine Formulary Excel Import (Super Admin)
+// -------------------------------------------------------------
+
+const MEDICINE_IMPORT_ALIASES = {
+  serial: [
+    'sl.no', 'sl no', 's.no', 's no', 'sl number', 'sl. number',
+    'serial number', 'serial no', 'serial.no', 'serial', 'number', 'id'
+  ],
+  medicine_name: [
+    'm name', 'mname', 'medicine', 'medicine name', 'medicines',
+    'medicine_name', 'drug', 'drug name', 'drugname', 'name'
+  ],
+  potency: [
+    'potency', 'dosage', 'dose', 'strength',
+    'potency / strength', 'potency/strength', 'potency strength'
+  ],
+  quantity: [
+    'quantity', 'qty', 'q.t.y', 'qnty', 'quant', 'stock quantity'
+  ]
+};
+
+function normalizeHeaderString(str) {
+  if (!str) return '';
+  return String(str)
+    .trim()
+    .toLowerCase()
+    .replace(/[._\/-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveMedicineImportHeaders(rawHeaders) {
+  const aliasLookup = {};
+  for (const [canonicalField, aliasList] of Object.entries(MEDICINE_IMPORT_ALIASES)) {
+    for (const alias of aliasList) {
+      aliasLookup[normalizeHeaderString(alias)] = canonicalField;
+      aliasLookup[alias.toLowerCase().replace(/[^a-z0-9]/g, '')] = canonicalField;
+    }
+  }
+
+  const detectedColumns = {}; // canonicalField -> array of raw header strings
+  const headerToField = {};
+
+  for (const raw of rawHeaders) {
+    if (!raw) continue;
+    const norm = normalizeHeaderString(raw);
+    const compact = String(raw).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const canonical = aliasLookup[norm] || aliasLookup[compact];
+
+    if (canonical) {
+      if (!detectedColumns[canonical]) {
+        detectedColumns[canonical] = [];
+      }
+      detectedColumns[canonical].push(raw);
+      headerToField[raw] = canonical;
+    }
+  }
+
+  // Ambiguity check: Reject if multiple columns map to the same logical field
+  for (const [field, headers] of Object.entries(detectedColumns)) {
+    if (headers.length > 1) {
+      const fieldDisplay =
+        field === 'medicine_name' ? 'Medicine Name' :
+        field === 'potency' ? 'Potency' :
+        field === 'serial' ? 'Serial Number / Sl.No' : 'Quantity';
+      return {
+        error: `Ambiguous headers: Multiple columns (${headers.map(h => `"${h}"`).join(', ')}) matched the logical field "${fieldDisplay}". Please ensure only one column is provided for each field.`
+      };
+    }
+  }
+
+  // Required columns check: Medicine Name and Potency
+  if (!detectedColumns.medicine_name || !detectedColumns.potency) {
+    return {
+      error: 'Required columns not found. Please provide Medicine Name and Potency.'
+    };
+  }
+
+  return {
+    success: true,
+    detectedColumns: {
+      serial: detectedColumns.serial ? detectedColumns.serial[0] : null,
+      medicine_name: detectedColumns.medicine_name[0],
+      potency: detectedColumns.potency[0],
+      quantity: detectedColumns.quantity ? detectedColumns.quantity[0] : null
+    },
+    headerToField
+  };
+}
+
+function parseMedicineWorkbook(fileBuffer) {
+  const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+  if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    const err = new Error('Uploaded Excel file contains no worksheets.');
+    err.status = 400;
+    throw err;
+  }
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const rawSheetData = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!rawSheetData || rawSheetData.length === 0) {
+    const err = new Error('Excel sheet is empty.');
+    err.status = 400;
+    throw err;
+  }
+
+  let headerRowIndex = -1;
+  for (let r = 0; r < rawSheetData.length; r++) {
+    const row = rawSheetData[r];
+    if (row && row.some(cell => String(cell).trim() !== '')) {
+      headerRowIndex = r;
+      break;
+    }
+  }
+  if (headerRowIndex === -1) {
+    const err = new Error('Excel sheet contains no header row.');
+    err.status = 400;
+    throw err;
+  }
+
+  const rawHeaders = rawSheetData[headerRowIndex].map(h => String(h || '').trim()).filter(Boolean);
+  const headerResolution = resolveMedicineImportHeaders(rawHeaders);
+  if (headerResolution.error) {
+    const err = new Error(headerResolution.error);
+    err.status = 400;
+    throw err;
+  }
+
+  const headerNames = rawSheetData[headerRowIndex];
+  const { serial: serialCol, medicine_name: medCol, potency: potCol, quantity: qtyCol } = headerResolution.detectedColumns;
+
+  const serialIdx = serialCol ? headerNames.indexOf(serialCol) : -1;
+  const medIdx = headerNames.indexOf(medCol);
+  const potIdx = headerNames.indexOf(potCol);
+  const qtyIdx = qtyCol ? headerNames.indexOf(qtyCol) : -1;
+
+  const dataRows = [];
+  for (let r = headerRowIndex + 1; r < rawSheetData.length; r++) {
+    const row = rawSheetData[r];
+    if (!row || !row.some(cell => String(cell ?? '').trim() !== '')) {
+      continue;
+    }
+    dataRows.push({
+      rowNum: r + 1,
+      sourceSerial: serialIdx >= 0 ? String(row[serialIdx] ?? '').trim() : '',
+      medicineName: medIdx >= 0 ? String(row[medIdx] ?? '').trim() : '',
+      potency: potIdx >= 0 ? String(row[potIdx] ?? '').trim() : '',
+      quantityStr: qtyIdx >= 0 ? String(row[qtyIdx] ?? '').trim() : ''
+    });
+  }
+
+  return {
+    headerResolution,
+    dataRows
+  };
+}
+
+async function previewMedicineImport(req, res) {
+  try {
+    let parseResult;
+    let fileName = 'medicine_import.xlsx';
+
+    if (req.file) {
+      fileName = req.file.originalname;
+      try {
+        parseResult = parseMedicineWorkbook(req.file.buffer);
+      } catch (err) {
+        return res.status(err.status || 400).json(formatResponse(false, null, err.message));
+      }
+    } else {
+      return res.status(400).json(formatResponse(false, null, 'Please upload an Excel (.xlsx/.xls) file'));
+    }
+
+    const { headerResolution, dataRows } = parseResult;
+    const totalRows = dataRows.length;
+    let validRows = 0;
+    let invalidRows = 0;
+    let duplicateRows = 0;
+
+    const rowIssues = [];
+    const validItems = [];
+
+    // Load existing active medicines from DB
+    const dbMedsRes = await db.query(
+      `SELECT LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
+       FROM medicine_master 
+       WHERE status != 'deleted'`
+    );
+    const existingDbMap = new Map();
+    for (const m of dbMedsRes.rows) {
+      existingDbMap.set(`${m.name}|${m.strength}`, m.serial_number);
+    }
+
+    const inMemoryTracker = new Map();
+
+    for (const item of dataRows) {
+      const { rowNum, sourceSerial, medicineName, potency, quantityStr } = item;
+
+      // 1. Missing Medicine Name
+      if (!medicineName) {
+        invalidRows++;
+        rowIssues.push({
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName,
+          potency: potency,
+          quantity: quantityStr,
+          status: 'invalid',
+          reason: 'Medicine Name is missing'
+        });
+        continue;
+      }
+
+      // 2. Missing Potency
+      if (!potency) {
+        invalidRows++;
+        rowIssues.push({
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName,
+          potency: potency,
+          quantity: quantityStr,
+          status: 'invalid',
+          reason: 'Potency is missing'
+        });
+        continue;
+      }
+
+      // 3. Validate Quantity if present
+      let parsedQty = null;
+      if (quantityStr !== '') {
+        const num = Number(quantityStr);
+        if (isNaN(num) || !Number.isInteger(num) || num < 0) {
+          invalidRows++;
+          rowIssues.push({
+            row: rowNum,
+            source_serial: sourceSerial || null,
+            medicine_name: medicineName,
+            potency: potency,
+            quantity: quantityStr,
+            status: 'invalid',
+            reason: num < 0
+              ? 'Quantity cannot be negative'
+              : `Invalid quantity "${quantityStr}". Quantity must be a valid whole number`
+          });
+          continue;
+        }
+        parsedQty = num;
+      }
+
+      // 4. Duplicate check against existing DB
+      const medKey = `${medicineName.toLowerCase()}|${potency.toLowerCase()}`;
+      if (existingDbMap.has(medKey)) {
+        duplicateRows++;
+        rowIssues.push({
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName,
+          potency: potency,
+          quantity: parsedQty,
+          status: 'duplicate',
+          reason: `Medicine already exists in formulary (${existingDbMap.get(medKey) || 'active'})`
+        });
+        continue;
+      }
+
+      // 5. In-file duplicate check
+      if (inMemoryTracker.has(medKey)) {
+        duplicateRows++;
+        rowIssues.push({
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName,
+          potency: potency,
+          quantity: parsedQty,
+          status: 'duplicate',
+          reason: `Duplicate row in uploaded file (matches row ${inMemoryTracker.get(medKey)})`
+        });
+        continue;
+      }
+      inMemoryTracker.set(medKey, rowNum);
+
+      // Passed all checks
+      validRows++;
+      validItems.push({
+        row: rowNum,
+        source_serial: sourceSerial || null,
+        medicine_name: medicineName,
+        strength: potency,
+        quantity: parsedQty
+      });
+    }
+
+    return res.json(formatResponse(true, {
+      file_name: fileName,
+      total_rows: totalRows,
+      valid_rows: validRows,
+      invalid_rows: invalidRows,
+      duplicate_rows: duplicateRows,
+      detected_columns: {
+        serial: headerResolution.detectedColumns.serial || null,
+        medicine_name: headerResolution.detectedColumns.medicine_name,
+        potency: headerResolution.detectedColumns.potency,
+        quantity: headerResolution.detectedColumns.quantity || null
+      },
+      row_issues: rowIssues,
+      valid_items: validItems
+    }, 'Formulary Excel import validated successfully'));
+  } catch (err) {
+    console.error('previewMedicineImport error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function confirmMedicineImport(req, res) {
+  const client = await db.pool.connect();
+  try {
+    let itemsToImport = [];
+    let fileName = req.body.file_name || 'excel_import.xlsx';
+    let rowIssues = [];
+    let initialDuplicateCount = 0;
+    let initialInvalidCount = 0;
+
+    if (req.file) {
+      fileName = req.file.originalname;
+      const parseResult = parseMedicineWorkbook(req.file.buffer);
+      const { dataRows } = parseResult;
+
+      // Validate data rows
+      const dbMeds = await client.query(
+        `SELECT LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
+         FROM medicine_master WHERE status != 'deleted'`
+      );
+      const existingDb = new Map();
+      for (const m of dbMeds.rows) {
+        existingDb.set(`${m.name}|${m.strength}`, m.serial_number);
+      }
+      const inMem = new Map();
+
+      for (const itm of dataRows) {
+        const { rowNum, sourceSerial, medicineName, potency, quantityStr } = itm;
+        if (!medicineName) {
+          initialInvalidCount++;
+          rowIssues.push({ row: rowNum, reason: 'Medicine Name is missing' });
+          continue;
+        }
+        if (!potency) {
+          initialInvalidCount++;
+          rowIssues.push({ row: rowNum, reason: 'Potency is missing' });
+          continue;
+        }
+        let pQty = null;
+        if (quantityStr !== '') {
+          const num = Number(quantityStr);
+          if (isNaN(num) || !Number.isInteger(num) || num < 0) {
+            initialInvalidCount++;
+            rowIssues.push({ row: rowNum, reason: num < 0 ? 'Quantity cannot be negative' : 'Invalid quantity' });
+            continue;
+          }
+          pQty = num;
+        }
+        const k = `${medicineName.toLowerCase()}|${potency.toLowerCase()}`;
+        if (existingDb.has(k)) {
+          initialDuplicateCount++;
+          rowIssues.push({ row: rowNum, reason: `Medicine already exists (${existingDb.get(k)})` });
+          continue;
+        }
+        if (inMem.has(k)) {
+          initialDuplicateCount++;
+          rowIssues.push({ row: rowNum, reason: `Duplicate row in file (matches row ${inMem.get(k)})` });
+          continue;
+        }
+        inMem.set(k, rowNum);
+        itemsToImport.push({
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName,
+          strength: potency,
+          quantity: pQty
+        });
+      }
+    } else if (Array.isArray(req.body.items)) {
+      itemsToImport = req.body.items;
+      rowIssues = Array.isArray(req.body.row_issues) ? req.body.row_issues : [];
+      initialDuplicateCount = parseInt(req.body.duplicate_rows || 0);
+      initialInvalidCount = parseInt(req.body.invalid_rows || 0);
+    } else {
+      return res.status(400).json(formatResponse(false, null, 'No items or file payload provided for import'));
+    }
+
+    if (itemsToImport.length === 0) {
+      return res.status(400).json(formatResponse(false, null, 'No valid items to import'));
+    }
+
+    await client.query('BEGIN');
+
+    // Fetch existing medicines in DB inside transaction to avoid concurrency conflicts
+    const currentDbRes = await client.query(
+      `SELECT LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
+       FROM medicine_master
+       WHERE status != 'deleted'`
+    );
+    const activeDbSet = new Map();
+    for (const m of currentDbRes.rows) {
+      activeDbSet.set(`${m.name}|${m.strength}`, m.serial_number);
+    }
+
+    const branchId = req.user.branch_id || 1;
+    let successfullyImported = 0;
+    let skippedDuplicates = initialDuplicateCount;
+    let invalidCount = initialInvalidCount;
+    const importedMedicines = [];
+    const details = [...rowIssues];
+
+    for (const item of itemsToImport) {
+      const medName = String(item.medicine_name || '').trim();
+      const potency = String(item.strength || item.potency || '').trim();
+      const qty = item.quantity !== undefined && item.quantity !== null && item.quantity !== ''
+        ? parseInt(item.quantity, 10)
+        : null;
+
+      if (!medName || !potency) {
+        invalidCount++;
+        details.push({
+          row: item.row,
+          medicine_name: medName,
+          potency: potency,
+          status: 'invalid',
+          reason: 'Missing medicine name or potency'
+        });
+        continue;
+      }
+
+      if (qty !== null && (isNaN(qty) || qty < 0)) {
+        invalidCount++;
+        details.push({
+          row: item.row,
+          medicine_name: medName,
+          potency: potency,
+          status: 'invalid',
+          reason: 'Invalid quantity'
+        });
+        continue;
+      }
+
+      const key = `${medName.toLowerCase()}|${potency.toLowerCase()}`;
+      if (activeDbSet.has(key)) {
+        skippedDuplicates++;
+        details.push({
+          row: item.row,
+          medicine_name: medName,
+          potency: potency,
+          status: 'skipped',
+          reason: `Medicine already exists in formulary (${activeDbSet.get(key) || 'active'})`
+        });
+        continue;
+      }
+
+      // Generate unique serial number using the application's existing generator
+      const serialNumber = await generateMedicineSerial(client);
+
+      const insRes = await client.query(`
+        INSERT INTO medicine_master (
+          serial_number, medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status
+        ) VALUES ($1, $2, null, 'dilution', $3, 'pcs', 'General', null, 10, 'active')
+        RETURNING *
+      `, [serialNumber, medName, potency]);
+
+      const createdMed = insRes.rows[0];
+      activeDbSet.set(key, serialNumber);
+
+      // Create opening stock if qty > 0
+      if (qty !== null && qty > 0) {
+        const batchNum = `INIT-${createdMed.id}`;
+        await client.query(`
+          INSERT INTO medicine_stock (
+            medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+          ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+          ON CONFLICT (medicine_id, batch_number)
+          DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+        `, [createdMed.id, batchNum, qty, branchId]);
+
+        await client.query(`
+          INSERT INTO stock_transactions (
+            medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+          ) VALUES ($1, 'in', $2, $3, 'Initial stock on formulary import', $4, $5)
+        `, [createdMed.id, qty, batchNum, req.user.user_id, branchId]);
+
+        createdMed.quantity = qty;
+      }
+
+      successfullyImported++;
+      importedMedicines.push(createdMed);
+      details.push({
+        row: item.row,
+        source_serial: item.source_serial || null,
+        medicine_name: medName,
+        potency: potency,
+        serial_number: serialNumber,
+        quantity: qty,
+        status: 'imported'
+      });
+    }
+
+    await client.query('COMMIT');
+
+    res.locals.auditEntry = {
+      module: 'Pharmacy Master',
+      action: 'Import Medicine Formularies',
+      recordId: null,
+      newValue: {
+        file_name: fileName,
+        imported: successfullyImported,
+        skipped: skippedDuplicates,
+        invalid: invalidCount
+      }
+    };
+
+    return res.status(201).json(formatResponse(true, {
+      total_processed: itemsToImport.length + initialDuplicateCount + initialInvalidCount,
+      successfully_imported: successfullyImported,
+      skipped_duplicates: skippedDuplicates,
+      invalid_rows: invalidCount,
+      imported_medicines: importedMedicines,
+      details
+    }, 'Medicine formulary import completed successfully'));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('confirmMedicineImport error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
+  }
+}
+
+// -------------------------------------------------------------
 // 8. Manual Stock Entry & Excel Stock Import
 // -------------------------------------------------------------
 async function getStock(req, res) {
@@ -2233,6 +2768,8 @@ module.exports = {
   createMedicine,
   updateMedicine,
   getMedicineStockDetail,
+  previewMedicineImport,
+  confirmMedicineImport,
   getStock,
   addStock,
   previewStockImport,

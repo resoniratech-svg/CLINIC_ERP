@@ -56,6 +56,10 @@ router.post('/medicines', authorizeRoles('pharmacy', 'super_admin'), pharmacyCon
 router.put('/medicines/:id', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.updateMedicine);
 router.get('/medicines/:id/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getMedicineStockDetail);
 
+// Medicine Formulary Excel Import (Strictly Super Admin Only)
+router.post('/medicines/import/preview', authorizeRoles('super_admin'), upload.single('file'), pharmacyController.previewMedicineImport);
+router.post('/medicines/import/confirm', authorizeRoles('super_admin'), upload.single('file'), pharmacyController.confirmMedicineImport);
+
 // 8. Manual Stock Entry & Excel Stock Import
 router.get('/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getStock);
 router.post('/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.addStock);
