@@ -167,6 +167,11 @@ export const ProfileSettingsPage = () => {
       return;
     }
 
+    if (!editForm.branch_code.trim()) {
+      showToast('Branch Code is required', 'warning');
+      return;
+    }
+
     setSavingProfile(true);
     try {
       const payload = {
@@ -175,6 +180,7 @@ export const ProfileSettingsPage = () => {
         mobile_number: editForm.mobile_number.trim() || null,
         branch_id: editForm.branch_id,
         branch_name: editForm.branch_name.trim(),
+        branch_code: editForm.branch_code.trim().toUpperCase(),
         department: editForm.department.trim() || null,
       };
 
@@ -472,10 +478,38 @@ export const ProfileSettingsPage = () => {
                 />
               </div>
 
-              {/* Assigned Branch Name (Editable) */}
+              {/* Assigned Branch Selector */}
               <div>
                 <label className="block font-bold text-slate-800 text-[11px] uppercase mb-1">
-                  Assigned Branch Name *
+                  Assigned Branch *
+                </label>
+                <select
+                  required
+                  value={editForm.branch_id}
+                  onChange={(e) => {
+                    const newId = parseInt(e.target.value, 10);
+                    const selected = branches.find((b) => b.branch_id === newId);
+                    setEditForm({
+                      ...editForm,
+                      branch_id: newId,
+                      branch_name: selected?.branch_name || editForm.branch_name,
+                      branch_code: selected?.branch_code || editForm.branch_code,
+                    });
+                  }}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold text-slate-900 cursor-pointer"
+                >
+                  {branches.map((b) => (
+                    <option key={b.branch_id} value={b.branch_id}>
+                      {b.branch_name} ({b.branch_code})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Branch Name (Editable) */}
+              <div>
+                <label className="block font-bold text-slate-800 text-[11px] uppercase mb-1">
+                  Branch Name *
                 </label>
                 <input
                   type="text"
@@ -487,21 +521,18 @@ export const ProfileSettingsPage = () => {
                 />
               </div>
 
-              {/* Branch Code (Strictly Read Only) */}
+              {/* Branch Code (Editable) */}
               <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className="block font-bold text-slate-500 text-[11px] uppercase">
-                    Branch Code
-                  </label>
-                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                    READ ONLY
-                  </span>
-                </div>
+                <label className="block font-bold text-slate-800 text-[11px] uppercase mb-1">
+                  Branch Code *
+                </label>
                 <input
                   type="text"
-                  disabled
-                  value={editForm.branch_code || currentBranch?.branch_code || displayUser?.branch_code || 'HYD001'}
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-slate-100 font-mono font-bold text-slate-500 cursor-not-allowed"
+                  required
+                  value={editForm.branch_code}
+                  onChange={(e) => setEditForm({ ...editForm, branch_code: e.target.value.toUpperCase() })}
+                  placeholder="e.g. HYD001"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-slate-900 uppercase"
                 />
               </div>
 
