@@ -1221,10 +1221,19 @@ async function previewMedicineImport(req, res) {
     let parseResult;
     let fileName = 'medicine_import.xlsx';
 
-    if (req.file) {
-      fileName = req.file.originalname;
+    let file = req.file;
+    if (!file && req.files && req.files.length > 0) {
+      file = req.files.find((f) => f.fieldname === 'file') || req.files[0];
+    }
+
+    if (file && (file.buffer || file.path)) {
+      fileName = file.originalname || 'medicine_import.xlsx';
+      const buffer = file.buffer || (file.path ? require('fs').readFileSync(file.path) : null);
+      if (!buffer) {
+        return res.status(400).json(formatResponse(false, null, 'Uploaded file buffer could not be read'));
+      }
       try {
-        parseResult = parseMedicineWorkbook(req.file.buffer);
+        parseResult = parseMedicineWorkbook(buffer);
       } catch (err) {
         return res.status(err.status || 400).json(formatResponse(false, null, err.message));
       }
@@ -1382,9 +1391,18 @@ async function confirmMedicineImport(req, res) {
     let initialDuplicateCount = 0;
     let initialInvalidCount = 0;
 
-    if (req.file) {
-      fileName = req.file.originalname;
-      const parseResult = parseMedicineWorkbook(req.file.buffer);
+    let file = req.file;
+    if (!file && req.files && req.files.length > 0) {
+      file = req.files.find((f) => f.fieldname === 'file') || req.files[0];
+    }
+
+    if (file && (file.buffer || file.path)) {
+      fileName = file.originalname || 'excel_import.xlsx';
+      const buffer = file.buffer || (file.path ? require('fs').readFileSync(file.path) : null);
+      if (!buffer) {
+        return res.status(400).json(formatResponse(false, null, 'Uploaded file buffer could not be read'));
+      }
+      const parseResult = parseMedicineWorkbook(buffer);
       const { dataRows } = parseResult;
 
       // Validate data rows

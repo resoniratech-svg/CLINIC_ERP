@@ -57,8 +57,21 @@ router.put('/medicines/:id', authorizeRoles('pharmacy', 'super_admin'), pharmacy
 router.get('/medicines/:id/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getMedicineStockDetail);
 
 // Medicine Formulary Excel Import (Strictly Super Admin Only)
-router.post('/medicines/import/preview', authorizeRoles('super_admin'), upload.single('file'), pharmacyController.previewMedicineImport);
-router.post('/medicines/import/confirm', authorizeRoles('super_admin'), upload.single('file'), pharmacyController.confirmMedicineImport);
+const uploadMedicineFile = (req, res, next) => {
+  upload.any()(req, res, (err) => {
+    if (err) {
+      console.error('uploadMedicineFile multer error:', err);
+      return res.status(400).json({ success: false, data: null, message: err.message || 'File upload error' });
+    }
+    if (req.files && req.files.length > 0) {
+      req.file = req.files.find((f) => f.fieldname === 'file') || req.files[0];
+    }
+    next();
+  });
+};
+
+router.post('/medicines/import/preview', authorizeRoles('super_admin'), uploadMedicineFile, pharmacyController.previewMedicineImport);
+router.post('/medicines/import/confirm', authorizeRoles('super_admin'), uploadMedicineFile, pharmacyController.confirmMedicineImport);
 
 // 8. Manual Stock Entry & Excel Stock Import
 router.get('/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getStock);
