@@ -15,7 +15,7 @@ import {
   FileText,
   AlertCircle
 } from 'lucide-react';
-import { proApi } from '../../api';
+import { proApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 
@@ -49,6 +49,8 @@ export const PROAccountantPage = () => {
     remarks: ''
   });
 
+  const [expenseCategoriesList, setExpenseCategoriesList] = useState([]);
+
   const fetchSummary = async () => {
     setLoading(true);
     setError(null);
@@ -68,6 +70,12 @@ export const PROAccountantPage = () => {
   useEffect(() => {
     fetchSummary();
   }, [date]);
+
+  useEffect(() => {
+    settingsApi.getMasterData('expense_categories', { status: 'active' })
+      .then(res => { if (res?.success && Array.isArray(res.data)) setExpenseCategoriesList(res.data); })
+      .catch(() => {});
+  }, []);
 
   const handleCreateExpense = async (e) => {
     e.preventDefault();
@@ -383,13 +391,26 @@ export const PROAccountantPage = () => {
                   onChange={e => setExpenseForm({ ...expenseForm, category: e.target.value })}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-red-400 outline-none bg-white font-medium"
                 >
-                  <option value="Clinic Supplies">Clinic Supplies</option>
-                  <option value="Maintenance & Repairs">Maintenance & Repairs</option>
-                  <option value="Tea & Refreshments">Tea & Refreshments</option>
-                  <option value="Printing & Stationery">Printing & Stationery</option>
-                  <option value="Staff Conveyance">Staff Conveyance</option>
-                  <option value="Courier & Postage">Courier & Postage</option>
-                  <option value="Other Petty Cash">Other Petty Cash</option>
+                  {expenseCategoriesList.length > 0 ? (
+                    <>
+                      {expenseCategoriesList.map(ec => (
+                        <option key={ec.id || ec.name} value={ec.name}>{ec.name}</option>
+                      ))}
+                      {expenseForm.category && !expenseCategoriesList.some(ec => ec.name === expenseForm.category) && (
+                        <option value={expenseForm.category}>{expenseForm.category}</option>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <option value="Clinic Supplies">Clinic Supplies</option>
+                      <option value="Maintenance & Repairs">Maintenance & Repairs</option>
+                      <option value="Tea & Refreshments">Tea & Refreshments</option>
+                      <option value="Printing & Stationery">Printing & Stationery</option>
+                      <option value="Staff Conveyance">Staff Conveyance</option>
+                      <option value="Courier & Postage">Courier & Postage</option>
+                      <option value="Other Petty Cash">Other Petty Cash</option>
+                    </>
+                  )}
                 </select>
               </div>
 

@@ -103,20 +103,40 @@ export const NewRegistrationPage = () => {
   const ptDropdownRef = useRef(null);
   const [searchingPt, setSearchingPt] = useState(false);
   const [ailmentsList, setAilmentsList] = useState([]);
+  const [villagesList, setVillagesList] = useState([]);
+  const [mandalsList, setMandalsList] = useState([]);
+  const [leadSourcesList, setLeadSourcesList] = useState([]);
+  const [referralSourcesList, setReferralSourcesList] = useState([]);
 
   useEffect(() => {
     const fetchPrerequisites = async () => {
       setLoadingInitial(true);
       try {
-        const [docRes, empRes, permRes, ailRes] = await Promise.all([
+        const [docRes, empRes, permRes, ailRes, vilRes, manRes, lsRes, refRes] = await Promise.all([
           receptionistApi.getActiveDoctors(),
           receptionistApi.getEmployees().catch(() => ({ data: [] })),
           settingsApi.getPermissionsMatrix().catch(() => ({ data: [] })),
-          settingsApi.getMasterData('ailments').catch(() => ({ data: [] })),
+          settingsApi.getMasterData('ailments', { status: 'active' }).catch(() => ({ data: [] })),
+          settingsApi.getMasterData('villages', { status: 'active' }).catch(() => ({ data: [] })),
+          settingsApi.getMasterData('mandals', { status: 'active' }).catch(() => ({ data: [] })),
+          settingsApi.getMasterData('lead_sources', { status: 'active' }).catch(() => ({ data: [] })),
+          settingsApi.getMasterData('referral_sources', { status: 'active' }).catch(() => ({ data: [] })),
         ]);
 
         if (ailRes?.success && Array.isArray(ailRes.data)) {
           setAilmentsList(ailRes.data);
+        }
+        if (vilRes?.success && Array.isArray(vilRes.data)) {
+          setVillagesList(vilRes.data);
+        }
+        if (manRes?.success && Array.isArray(manRes.data)) {
+          setMandalsList(manRes.data);
+        }
+        if (lsRes?.success && Array.isArray(lsRes.data)) {
+          setLeadSourcesList(lsRes.data);
+        }
+        if (refRes?.success && Array.isArray(refRes.data)) {
+          setReferralSourcesList(refRes.data);
         }
 
         if (docRes.success && docRes.data) {
@@ -459,11 +479,20 @@ export const NewRegistrationPage = () => {
               <input
                 type="text"
                 required
+                list="registered-villages-datalist"
                 value={formData.village_mandal}
                 onChange={(e) => setFormData({ ...formData, village_mandal: e.target.value })}
                 placeholder="e.g. Kukatpally, Hyderabad"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
+              <datalist id="registered-villages-datalist">
+                {villagesList.map((v) => (
+                  <option key={v.id || v.name} value={v.name} />
+                ))}
+                {mandalsList.map((m) => (
+                  <option key={`mandal-${m.id || m.name}`} value={m.name} />
+                ))}
+              </datalist>
             </div>
 
             {/* Lead Source */}
@@ -476,14 +505,26 @@ export const NewRegistrationPage = () => {
                 onChange={(e) => setFormData({ ...formData, lead_source: e.target.value })}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium"
               >
+                {/* Always-present system keys that drive conditional UI panels */}
                 <option value="walkin">Walk-in Patient</option>
                 <option value="employee_referral">Employee Referral</option>
                 <option value="patient_referral">Patient-to-Patient Referral</option>
-                <option value="phone_enquiry">Phone Enquiry</option>
-                <option value="camp_data">Health Camp Data</option>
-                <option value="cold_data">Cold Outreach Data</option>
                 <option value="executive_lead">Call Center Executive Lead</option>
-                <option value="other">Other</option>
+                {/* Dynamic master data options from Super Admin */}
+                {leadSourcesList.filter(ls =>
+                  !['walkin', 'employee_referral', 'patient_referral', 'executive_lead'].includes(ls.name?.toLowerCase().replace(/\s+/g, '_'))
+                ).map((ls) => (
+                  <option key={ls.id || ls.name} value={ls.name}>{ls.name}</option>
+                ))}
+                {/* Fallback static options if master list is empty */}
+                {leadSourcesList.length === 0 && (
+                  <>
+                    <option value="phone_enquiry">Phone Enquiry</option>
+                    <option value="camp_data">Health Camp Data</option>
+                    <option value="cold_data">Cold Outreach Data</option>
+                    <option value="other">Other</option>
+                  </>
+                )}
               </select>
             </div>
 

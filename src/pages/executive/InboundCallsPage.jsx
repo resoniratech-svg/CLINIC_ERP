@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { executiveApi } from '../../api';
+import { executiveApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
@@ -43,6 +43,23 @@ export const InboundCallsPage = () => {
   const { showToast } = useToast();
   const { user } = useAuth();
   const navigate = useNavigate();
+
+  const [villagesList, setVillagesList] = useState([]);
+  const [mandalsList, setMandalsList] = useState([]);
+  const [ailmentsList, setAilmentsList] = useState([]);
+
+  useEffect(() => {
+    Promise.all([
+      settingsApi.getMasterData('villages', { status: 'active' }).catch(() => ({ data: [] })),
+      settingsApi.getMasterData('mandals', { status: 'active' }).catch(() => ({ data: [] })),
+      settingsApi.getMasterData('ailments', { status: 'active' }).catch(() => ({ data: [] })),
+    ]).then(([vRes, mRes, aRes]) => {
+      if (vRes?.success && Array.isArray(vRes.data)) setVillagesList(vRes.data);
+      if (mRes?.success && Array.isArray(mRes.data)) setMandalsList(mRes.data);
+      if (aRes?.success && Array.isArray(aRes.data)) setAilmentsList(aRes.data);
+    });
+  }, []);
+
 
   useEffect(() => {
     if (initialMobile && initialMobile.length === 10) {
@@ -423,11 +440,15 @@ export const InboundCallsPage = () => {
                 </label>
                 <input
                   type="text"
+                  list="inbound-villages-datalist"
                   placeholder="e.g. Subhash Nagar"
                   value={leadForm.village}
                   onChange={(e) => setLeadForm({ ...leadForm, village: e.target.value })}
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
+                <datalist id="inbound-villages-datalist">
+                  {villagesList.map(v => <option key={v.id || v.name} value={v.name} />)}
+                </datalist>
               </div>
 
               {/* Mandal */}
@@ -437,11 +458,15 @@ export const InboundCallsPage = () => {
                 </label>
                 <input
                   type="text"
+                  list="inbound-mandals-datalist"
                   placeholder="e.g. Karimnagar"
                   value={leadForm.mandal}
                   onChange={(e) => setLeadForm({ ...leadForm, mandal: e.target.value })}
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
+                <datalist id="inbound-mandals-datalist">
+                  {mandalsList.map(m => <option key={m.id || m.name} value={m.name} />)}
+                </datalist>
               </div>
             </div>
 
@@ -453,11 +478,15 @@ export const InboundCallsPage = () => {
               <input
                 type="text"
                 required
+                list="inbound-ailments-datalist"
                 placeholder="e.g. Chronic Joint Pain, Psoriasis, Asthma, Child Immunity Consultation"
                 value={leadForm.requirement}
                 onChange={(e) => setLeadForm({ ...leadForm, requirement: e.target.value })}
                 className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
+              <datalist id="inbound-ailments-datalist">
+                {ailmentsList.map(a => <option key={a.id || a.name} value={a.name} />)}
+              </datalist>
             </div>
 
             {/* Remarks */}

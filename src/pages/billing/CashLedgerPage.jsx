@@ -1,5 +1,5 @@
-﻿import React, { useEffect, useState } from 'react';
-import { cashApi } from '../../api';
+import React, { useEffect, useState } from 'react';
+import { cashApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { useToast } from '../../context/ToastContext';
@@ -27,6 +27,7 @@ export const CashLedgerPage = () => {
     bank_name: 'SBI Main Branch',
   });
   const [savingDep, setSavingDep] = useState(false);
+  const [expenseCategoriesList, setExpenseCategoriesList] = useState([]);
 
   const { showToast } = useToast();
 
@@ -47,6 +48,12 @@ export const CashLedgerPage = () => {
   useEffect(() => {
     fetchLedger();
   }, [selectedDate]);
+
+  useEffect(() => {
+    settingsApi.getMasterData('expense_categories', { status: 'active' })
+      .then(res => { if (res?.success && Array.isArray(res.data)) setExpenseCategoriesList(res.data); })
+      .catch(() => {});
+  }, []);
 
   const handleCreateExpense = async (e) => {
     e.preventDefault();
@@ -231,11 +238,24 @@ export const CashLedgerPage = () => {
               onChange={(e) => setExpForm({ ...expForm, expense_category: e.target.value })}
               className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
             >
-              <option value="Clinic Supplies">Clinic Supplies</option>
-              <option value="Hospital Maintenance">Hospital Maintenance</option>
-              <option value="Refreshments">Refreshments</option>
-              <option value="Travel & Transport">Travel & Transport</option>
-              <option value="Office Stationery">Office Stationery</option>
+              {expenseCategoriesList.length > 0 ? (
+                <>
+                  {expenseCategoriesList.map(ec => (
+                    <option key={ec.id || ec.name} value={ec.name}>{ec.name}</option>
+                  ))}
+                  {expForm.expense_category && !expenseCategoriesList.some(ec => ec.name === expForm.expense_category) && (
+                    <option value={expForm.expense_category}>{expForm.expense_category}</option>
+                  )}
+                </>
+              ) : (
+                <>
+                  <option value="Clinic Supplies">Clinic Supplies</option>
+                  <option value="Hospital Maintenance">Hospital Maintenance</option>
+                  <option value="Refreshments">Refreshments</option>
+                  <option value="Travel & Transport">Travel &amp; Transport</option>
+                  <option value="Office Stationery">Office Stationery</option>
+                </>
+              )}
             </select>
           </div>
 

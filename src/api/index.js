@@ -165,11 +165,14 @@ export const settingsApi = {
   updatePermissionsMatrix: (data) => axiosClient.post('/settings/permissions-matrix', data),
   getHospitalSettings: () => axiosClient.get('/settings/hospital'),
   updateHospitalSettings: (data) => axiosClient.put('/settings/hospital', data),
-  getMasterData: (type) => axiosClient.get(`/settings/masters/${type}`),
+  getMasterData: (type, params) => axiosClient.get(`/settings/masters/${type}`, { params }),
   addMasterData: (type, data) => axiosClient.post(`/settings/masters/${type}`, data),
+  updateMasterData: (type, id, data) => axiosClient.put(`/settings/masters/${type}/${id}`, data),
+  toggleMasterDataStatus: (type, id, data) => axiosClient.patch(`/settings/masters/${type}/${id}/status`, data),
   getProfile: () => axiosClient.get('/settings/profile'),
   updateProfile: (data) => axiosClient.put('/settings/profile', data),
   getBranches: () => axiosClient.get('/settings/branches'),
+  updateBranch: (id, data) => axiosClient.put(`/settings/branches/${id}`, data),
 };
 
 export const receptionistApi = {

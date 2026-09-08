@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal } from '../../components/common/Modal';
-import { usersApi } from '../../api';
+import { usersApi, settingsApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { UserPlus, Loader2 } from 'lucide-react';
@@ -84,7 +84,19 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
   });
 
   const [loading, setLoading] = useState(false);
+  const [departmentsList, setDepartmentsList] = useState([]);
+  const [specializationsList, setSpecializationsList] = useState([]);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    settingsApi.getMasterData('departments', { status: 'active' })
+      .then(res => { if (res?.success && Array.isArray(res.data)) setDepartmentsList(res.data); })
+      .catch(() => {});
+    settingsApi.getMasterData('specializations', { status: 'active' })
+      .then(res => { if (res?.success && Array.isArray(res.data)) setSpecializationsList(res.data); })
+      .catch(() => {});
+  }, []);
+
 
   const handleRoleChange = (newRole) => {
     setRole(newRole);
@@ -268,11 +280,17 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Department</label>
               <input
                 type="text"
+                list="create-user-departments-datalist"
                 value={formData.department}
                 onChange={(e) => setFormData({ ...formData, department: e.target.value })}
                 placeholder="e.g. Front Desk"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
+              <datalist id="create-user-departments-datalist">
+                {departmentsList.map(d => (
+                  <option key={d.id || d.name} value={d.name} />
+                ))}
+              </datalist>
             </div>
 
             <div>
@@ -333,10 +351,16 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">Specialization *</label>
                 <input
                   type="text"
+                  list="create-user-specializations-datalist"
                   value={doctorDetails.specialization}
                   onChange={(e) => setDoctorDetails({ ...doctorDetails, specialization: e.target.value })}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
+                <datalist id="create-user-specializations-datalist">
+                  {specializationsList.map(s => (
+                    <option key={s.id || s.name} value={s.name} />
+                  ))}
+                </datalist>
               </div>
               <div>
                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">Qualification</label>

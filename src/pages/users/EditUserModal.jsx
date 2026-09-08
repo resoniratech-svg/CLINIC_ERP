@@ -1,6 +1,6 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal } from '../../components/common/Modal';
-import { usersApi } from '../../api';
+import { usersApi, settingsApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import { UserCheck, Loader2, Edit3, Shield } from 'lucide-react';
 
@@ -15,7 +15,14 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
     status: 'active',
   });
   const [loading, setLoading] = useState(false);
+  const [departmentsList, setDepartmentsList] = useState([]);
   const { showToast } = useToast();
+
+  useEffect(() => {
+    settingsApi.getMasterData('departments', { status: 'active' })
+      .then(res => { if (res?.success && Array.isArray(res.data)) setDepartmentsList(res.data); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (user) {
@@ -145,11 +152,17 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Department</label>
               <input
                 type="text"
+                list="edit-user-departments-datalist"
                 value={formData.department}
                 onChange={(e) => setFormData({ ...formData, department: e.target.value })}
                 placeholder="e.g. Front Desk"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
+              <datalist id="edit-user-departments-datalist">
+                {departmentsList.map(d => (
+                  <option key={d.id || d.name} value={d.name} />
+                ))}
+              </datalist>
             </div>
 
             <div>

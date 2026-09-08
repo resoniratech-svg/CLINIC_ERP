@@ -20,7 +20,7 @@ import {
   Wallet,
   CreditCard
 } from 'lucide-react';
-import { proApi } from '../../api';
+import { proApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
@@ -67,6 +67,15 @@ export const PROBillingPage = () => {
   const [loadingPackages, setLoadingPackages] = useState(false);
   const [prescribedTreatments, setPrescribedTreatments] = useState([]);
   const [consultingDoctor, setConsultingDoctor] = useState(null);
+  const [chargeTypesList, setChargeTypesList] = useState([]);
+
+  // Fetch master charge types on mount
+  useEffect(() => {
+    settingsApi.getMasterData('charge_types', { status: 'active' })
+      .then(res => { if (res?.success && Array.isArray(res.data)) setChargeTypesList(res.data); })
+      .catch(() => {});
+  }, []);
+
 
   // New Bill Form State
   const [form, setForm] = useState({
@@ -677,13 +686,27 @@ export const PROBillingPage = () => {
                       onChange={e => updateItem(idx, 'charge_type', e.target.value)}
                       className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white outline-none focus:border-[#1565C0] font-medium"
                     >
-                      <option value="Treatment">Treatment</option>
-                      <option value="Package">Package</option>
-                      <option value="Procedure">Procedure</option>
-                      <option value="Investigation">Investigation</option>
-                      <option value="Medicine">Medicine</option>
-                      <option value="Service">Service</option>
-                      <option value="General Charge">General Charge</option>
+                      {chargeTypesList.length > 0 ? (
+                        <>
+                          {chargeTypesList.map(ct => (
+                            <option key={ct.id || ct.name} value={ct.name}>{ct.name}</option>
+                          ))}
+                          {/* Preserve historical value if not in active list */}
+                          {it.charge_type && !chargeTypesList.some(ct => ct.name === it.charge_type) && (
+                            <option value={it.charge_type}>{it.charge_type}</option>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <option value="Treatment">Treatment</option>
+                          <option value="Package">Package</option>
+                          <option value="Procedure">Procedure</option>
+                          <option value="Investigation">Investigation</option>
+                          <option value="Medicine">Medicine</option>
+                          <option value="Service">Service</option>
+                          <option value="General Charge">General Charge</option>
+                        </>
+                      )}
                     </select>
                   </div>
 
