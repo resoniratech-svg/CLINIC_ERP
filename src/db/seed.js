@@ -13,6 +13,20 @@ async function seed() {
     console.log('Schema applied successfully.');
   }
 
+  const migDir = path.join(__dirname, '../../migrations');
+  if (fs.existsSync(migDir)) {
+    const files = fs.readdirSync(migDir).filter(f => f.endsWith('.sql')).sort();
+    for (const f of files) {
+      try {
+        const sql = fs.readFileSync(path.join(migDir, f), 'utf8');
+        await db.query(sql);
+      } catch (err) {
+        // Safe to ignore if already exists
+      }
+    }
+    console.log('All migrations applied successfully.');
+  }
+
   console.log('Seeding database...');
 
   // Ensure default branch

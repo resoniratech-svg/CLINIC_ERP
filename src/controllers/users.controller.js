@@ -319,6 +319,18 @@ async function deleteUser(req, res) {
       return res.status(400).json(formatResponse(false, null, 'Primary Root Administrator account cannot be deleted'));
     }
 
+    // Safely check feedback_complaints if table exists
+    let feedbackCount = 0;
+    try {
+      const fcCheck = await db.query(
+        `SELECT COUNT(*) FROM feedback_complaints WHERE assigned_to = $1 OR logged_by = $1`,
+        [userId]
+      );
+      feedbackCount = parseInt(fcCheck.rows[0]?.count || 0);
+    } catch (e) {
+      feedbackCount = 0;
+    }
+
     // Check if user or doctor has permanent historical clinical, appointment, or financial records
     const checkRecords = await db.query(`
       SELECT
@@ -328,8 +340,7 @@ async function deleteUser(req, res) {
         (SELECT COUNT(*) FROM consultations WHERE vitals_recorded_by = $1 OR doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as consult_count,
         (SELECT COUNT(*) FROM prescriptions WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as presc_count,
         (SELECT COUNT(*) FROM leads WHERE assigned_receptionist_id = $1 OR lead_created_by_user_id = $1) as lead_count,
-        (SELECT COUNT(*) FROM crm_followups WHERE assigned_to = $1) as followup_count,
-        (SELECT COUNT(*) FROM feedback_complaints WHERE assigned_to = $1 OR logged_by = $1) as feedback_count
+        (SELECT COUNT(*) FROM crm_followups WHERE assigned_to = $1) as followup_count
     `, [userId]);
 
     const stats = checkRecords.rows[0];
@@ -341,7 +352,7 @@ async function deleteUser(req, res) {
       parseInt(stats.presc_count || 0) > 0 ||
       parseInt(stats.lead_count || 0) > 0 ||
       parseInt(stats.followup_count || 0) > 0 ||
-      parseInt(stats.feedback_count || 0) > 0
+      feedbackCount > 0
     );
 
     if (hasHistory) {
@@ -364,8 +375,12 @@ async function deleteUser(req, res) {
     } else if (targetUser.role === 'executive') {
       await client.query(`DELETE FROM executives WHERE user_id = $1`, [userId]);
     } else if (targetUser.role === 'doctor') {
-      await client.query(`DELETE FROM doctor_leaves WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
-      await client.query(`DELETE FROM doctor_transfers WHERE from_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1) OR to_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
+      try {
+        await client.query(`DELETE FROM doctor_leaves WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
+      } catch (e) {}
+      try {
+        await client.query(`DELETE FROM doctor_transfers WHERE from_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1) OR to_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
+      } catch (e) {}
       await client.query(`DELETE FROM doctors WHERE user_id = $1`, [userId]);
     }
 
@@ -396,7 +411,7 @@ async function deleteUser(req, res) {
         'Cannot delete this user because they have active linked connections in the database. Please clear or transfer their records first before deleting.'
       ));
     }
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
   } finally {
     client.release();
   }
