@@ -302,23 +302,6 @@ export const MedicineMasterPage = () => {
     }
   };
 
-  // Toggle Active/Inactive Status
-  const handleToggleStatus = async (med) => {
-    const newStatus = med.status === 'active' ? 'inactive' : 'active';
-    const confirmMsg = `Are you sure you want to mark ${med.medicine_name} as ${newStatus.toUpperCase()}?`;
-    if (!window.confirm(confirmMsg)) return;
-
-    try {
-      const res = await pharmacyApi.updateMedicine(med.id, { status: newStatus });
-      if (res.success) {
-        showToast(`Medicine marked as ${newStatus}`, 'success');
-        fetchMedicines();
-      }
-    } catch (err) {
-      showToast(err.message || 'Failed to update status', 'error');
-    }
-  };
-
   // View Medicine & Stock Details
   const handleViewDetails = async (med) => {
     setViewingMed(med);
