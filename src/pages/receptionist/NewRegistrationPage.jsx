@@ -102,16 +102,22 @@ export const NewRegistrationPage = () => {
   const [isPtDropdownOpen, setIsPtDropdownOpen] = useState(false);
   const ptDropdownRef = useRef(null);
   const [searchingPt, setSearchingPt] = useState(false);
+  const [ailmentsList, setAilmentsList] = useState([]);
 
   useEffect(() => {
     const fetchPrerequisites = async () => {
       setLoadingInitial(true);
       try {
-        const [docRes, empRes, permRes] = await Promise.all([
+        const [docRes, empRes, permRes, ailRes] = await Promise.all([
           receptionistApi.getActiveDoctors(),
           receptionistApi.getEmployees().catch(() => ({ data: [] })),
           settingsApi.getPermissionsMatrix().catch(() => ({ data: [] })),
+          settingsApi.getMasterData('ailments').catch(() => ({ data: [] })),
         ]);
+
+        if (ailRes?.success && Array.isArray(ailRes.data)) {
+          setAilmentsList(ailRes.data);
+        }
 
         if (docRes.success && docRes.data) {
           setDoctors(docRes.data);
@@ -488,11 +494,17 @@ export const NewRegistrationPage = () => {
               </label>
               <input
                 type="text"
+                list="registered-ailments-datalist"
                 value={formData.ailment_reason}
                 onChange={(e) => setFormData({ ...formData, ailment_reason: e.target.value })}
-                placeholder="e.g. Chronic Asthma, Allergy"
+                placeholder="e.g. Fever, Bronchial Asthma, Allergy"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
+              <datalist id="registered-ailments-datalist">
+                {ailmentsList.map((a) => (
+                  <option key={a.id || a.name} value={a.name} />
+                ))}
+              </datalist>
             </div>
           </div>
 

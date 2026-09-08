@@ -3,7 +3,7 @@ import { settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { useToast } from '../../context/ToastContext';
-import { Sliders, Building, Plus, CheckCircle2, MapPin, Layers } from 'lucide-react';
+import { Sliders, Building, Plus, CheckCircle2, MapPin, Layers, Search, Activity } from 'lucide-react';
 
 export const HospitalSettingsPage = () => {
   const [activeTab, setActiveTab] = useState('hospital');
@@ -17,6 +17,7 @@ export const HospitalSettingsPage = () => {
   const [loadingMaster, setLoadingMaster] = useState(false);
   const [newMasterName, setNewMasterName] = useState('');
   const [addingMaster, setAddingMaster] = useState(false);
+  const [searchFilter, setSearchFilter] = useState('');
 
   const { showToast } = useToast();
 
@@ -73,12 +74,13 @@ export const HospitalSettingsPage = () => {
     try {
       const res = await settingsApi.addMasterData(masterType, { name: newMasterName.trim() });
       if (res.success) {
-        showToast(`Added to ${masterType}`, 'success');
+        showToast(`Added to ${masterType.replace('_', ' ')}`, 'success');
         setNewMasterName('');
         fetchMasterData(masterType);
       }
     } catch (err) {
-      showToast(err.message || 'Failed to add master data entry', 'error');
+      const msg = err.response?.data?.message || err.message || 'Failed to add master data entry';
+      showToast(msg, 'error');
     } finally {
       setAddingMaster(false);
     }
@@ -248,17 +250,26 @@ export const HospitalSettingsPage = () => {
               { id: 'specializations', label: 'Specializations' },
               { id: 'charge_types', label: 'Charge Types' },
               { id: 'expense_categories', label: 'Expense Categories' },
+              { id: 'ailments', label: 'Ailments (Patient Problems)' },
             ].map((m) => (
               <button
                 key={m.id}
-                onClick={() => setMasterType(m.id)}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                onClick={() => {
+                  setMasterType(m.id);
+                  setSearchFilter('');
+                }}
+                className={`w-full text-left px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-between ${
                   masterType === m.id
                     ? 'bg-blue-600 text-white shadow-xs'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                {m.label}
+                <span>{m.label}</span>
+                {m.id === 'ailments' && masterType !== m.id && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-200">
+                    Homeopathy
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -270,7 +281,11 @@ export const HospitalSettingsPage = () => {
                 <input
                   type="text"
                   required
-                  placeholder={`Add new entry to ${masterType.replace('_', ' ')}...`}
+                  placeholder={
+                    masterType === 'ailments'
+                      ? 'Add new ailment / patient problem (e.g. Fever, Bronchial Asthma, Migraine)...'
+                      : `Add new entry to ${masterType.replace('_', ' ')}...`
+                  }
                   value={newMasterName}
                   onChange={(e) => setNewMasterName(e.target.value)}
                   className="flex-1 px-3.5 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
@@ -287,20 +302,50 @@ export const HospitalSettingsPage = () => {
 
             {/* List */}
             <div className="bg-white rounded-3xl border border-slate-200 shadow-2xs overflow-hidden">
+              <div className="p-3.5 px-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/50">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-800 text-xs">
+                    {masterType === 'ailments'
+                      ? 'Ailments & Clinical Patient Problems'
+                      : `${masterType.replace('_', ' ').toUpperCase()} REGISTRY`}
+                  </span>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-mono">
+                    {masterList.length} items
+                  </span>
+                </div>
+                <div className="relative w-full sm:w-56">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="Search entries..."
+                    value={searchFilter}
+                    onChange={(e) => setSearchFilter(e.target.value)}
+                    className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
               {loadingMaster ? (
                 <LoadingSpinner label="Loading registry items..." />
-              ) : masterList.length === 0 ? (
+              ) : masterList.filter((item) => !searchFilter || item.name.toLowerCase().includes(searchFilter.toLowerCase())).length === 0 ? (
                 <div className="p-8 text-center text-slate-500 text-xs font-medium">
-                  No records in {masterType.replace('_', ' ')} yet. Add entries using the field above.
+                  {searchFilter
+                    ? `No matches found for "${searchFilter}"`
+                    : `No records in ${masterType.replace('_', ' ')} yet. Add entries using the field above.`}
                 </div>
               ) : (
-                <div className="divide-y divide-slate-100 text-xs">
-                  {masterList.map((item) => (
-                    <div key={item.id} className="p-3.5 px-5 flex items-center justify-between hover:bg-slate-50">
-                      <span className="font-bold text-slate-800">{item.name}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">ID: #{item.id}</span>
-                    </div>
-                  ))}
+                <div className="divide-y divide-slate-100 text-xs max-h-[460px] overflow-y-auto">
+                  {masterList
+                    .filter((item) => !searchFilter || item.name.toLowerCase().includes(searchFilter.toLowerCase()))
+                    .map((item) => (
+                      <div key={item.id} className="p-3 px-5 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                          <span className="font-bold text-slate-800">{item.name}</span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-mono bg-slate-100 px-2 py-0.5 rounded-md">ID: #{item.id}</span>
+                      </div>
+                    ))}
                 </div>
               )}
             </div>
