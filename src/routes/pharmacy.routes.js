@@ -51,6 +51,7 @@ router.get('/clarifications/:id/close', authorizeRoles('pharmacy', 'super_admin'
 
 // 7. Inventory & Medicine Master
 router.get('/medicines', authorizeRoles('pharmacy', 'super_admin', 'doctor', 'receptionist'), pharmacyController.getMedicines);
+router.get('/medicines/next-serial', authorizeRoles('pharmacy', 'super_admin', 'doctor', 'receptionist'), pharmacyController.getNextMedicineSerial);
 router.post('/medicines', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.createMedicine);
 router.put('/medicines/:id', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.updateMedicine);
 router.get('/medicines/:id/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getMedicineStockDetail);

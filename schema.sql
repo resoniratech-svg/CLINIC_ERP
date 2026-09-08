@@ -508,6 +508,7 @@ CREATE TABLE IF NOT EXISTS referrals (
 -- 16. PHARMACY
 CREATE TABLE IF NOT EXISTS medicine_master (
     id              SERIAL PRIMARY KEY,
+    serial_number   VARCHAR(50) UNIQUE,
     medicine_name   VARCHAR(150) NOT NULL,
     generic_name    VARCHAR(150),
     medicine_type   VARCHAR(80),

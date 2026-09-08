@@ -830,6 +830,33 @@ async function closeClarification(req, res) {
 // -------------------------------------------------------------
 // 7. Inventory & Medicine Master
 // -------------------------------------------------------------
+
+// Helper to generate padded sequential medicine serial number (collision-proof)
+async function generateMedicineSerial(client = null) {
+  const runner = client || db;
+  const countRes = await runner.query(`SELECT COUNT(*) as count FROM medicine_master`);
+  let nextNum = parseInt(countRes.rows[0]?.count || 0) + 1;
+  let candidate = `MED-${String(nextNum).padStart(5, '0')}`;
+
+  let check = await runner.query(`SELECT 1 FROM medicine_master WHERE serial_number = $1`, [candidate]);
+  while (check.rows.length > 0) {
+    nextNum++;
+    candidate = `MED-${String(nextNum).padStart(5, '0')}`;
+    check = await runner.query(`SELECT 1 FROM medicine_master WHERE serial_number = $1`, [candidate]);
+  }
+  return candidate;
+}
+
+async function getNextMedicineSerial(req, res) {
+  try {
+    const nextSerial = await generateMedicineSerial();
+    return res.json(formatResponse(true, { serial_number: nextSerial }, 'Next medicine serial number retrieved successfully'));
+  } catch (err) {
+    console.error('getNextMedicineSerial error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 async function getMedicines(req, res) {
   try {
     const { search, category, status } = req.query;
@@ -846,7 +873,7 @@ async function getMedicines(req, res) {
     }
     if (search) {
       params.push(`%${search}%`);
-      query += ` AND (medicine_name ILIKE $${params.length} OR generic_name ILIKE $${params.length})`;
+      query += ` AND (medicine_name ILIKE $${params.length} OR generic_name ILIKE $${params.length} OR serial_number ILIKE $${params.length} OR strength ILIKE $${params.length})`;
     }
 
     query += ` ORDER BY id DESC`;
@@ -859,27 +886,121 @@ async function getMedicines(req, res) {
 }
 
 async function createMedicine(req, res) {
+  const client = await db.pool.connect();
   try {
-    const { medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level } = req.body;
-    if (!medicine_name) {
-      return res.status(400).json(formatResponse(false, null, 'medicine_name is required'));
+    await client.query('BEGIN');
+    const { 
+      medicine_name, 
+      strength, 
+      potency, 
+      quantity,
+      generic_name, 
+      medicine_type, 
+      unit, 
+      category, 
+      manufacturer, 
+      reorder_level 
+    } = req.body;
+
+    if (!medicine_name || !medicine_name.trim()) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Medicine Name is required'));
     }
 
-    const result = await db.query(`
+    const medStrength = (strength || potency || '').trim();
+    if (!medStrength) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Potency / Strength is required'));
+    }
+
+    let numQty = null;
+    if (quantity !== undefined && quantity !== null && quantity !== '') {
+      numQty = parseInt(quantity, 10);
+      if (isNaN(numQty) || numQty < 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Quantity must be a valid non-negative number (0 or greater)'));
+      }
+    }
+
+    // Duplicate check: prevent duplicate medicine name + potency
+    const dupCheck = await client.query(
+      `SELECT id, serial_number, medicine_name, strength 
+       FROM medicine_master 
+       WHERE LOWER(TRIM(medicine_name)) = LOWER(TRIM($1)) 
+         AND LOWER(TRIM(strength)) = LOWER(TRIM($2)) 
+         AND status != 'deleted'`,
+      [medicine_name.trim(), medStrength]
+    );
+    if (dupCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json(formatResponse(
+        false,
+        null,
+        `Medicine "${medicine_name.trim()}" (${medStrength}) already exists in formulary with Serial Number ${dupCheck.rows[0].serial_number || `#${dupCheck.rows[0].id}`}.`
+      ));
+    }
+
+    // Generate atomic sequential serial number
+    const serialNumber = await generateMedicineSerial(client);
+
+    const result = await client.query(`
       INSERT INTO medicine_master (
-        medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
+        serial_number, medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
       RETURNING *
     `, [
-      medicine_name, generic_name || null, medicine_type || null, strength || null,
-      unit || 'pcs', category || 'General', manufacturer || null, reorder_level || 10
+      serialNumber,
+      medicine_name.trim(),
+      generic_name ? generic_name.trim() : null,
+      medicine_type || 'dilution',
+      medStrength,
+      unit || 'pcs',
+      category || 'General',
+      manufacturer || null,
+      reorder_level ? parseInt(reorder_level, 10) : 10
     ]);
 
-    res.locals.auditEntry = { module: 'Pharmacy Master', action: 'Create Medicine Master Item', recordId: result.rows[0].id, newValue: result.rows[0] };
-    return res.status(201).json(formatResponse(true, result.rows[0], 'Medicine master item created successfully'));
+    const createdMed = result.rows[0];
+
+    // If optional quantity is provided and > 0, record initial stock
+    if (numQty !== null && numQty > 0) {
+      const branchId = req.user.branch_id || 1;
+      const batchNum = `INIT-${createdMed.id}`;
+
+      const stockRes = await client.query(`
+        INSERT INTO medicine_stock (
+          medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+        ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+        ON CONFLICT (medicine_id, batch_number) 
+        DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+        RETURNING *
+      `, [createdMed.id, batchNum, numQty, branchId]);
+
+      await client.query(`
+        INSERT INTO stock_transactions (
+          medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+        ) VALUES ($1, 'in', $2, $3, 'Initial stock on formulary creation', $4, $5)
+      `, [createdMed.id, numQty, batchNum, req.user.user_id, branchId]);
+
+      createdMed.initial_stock = stockRes.rows[0];
+      createdMed.quantity = numQty;
+    }
+
+    await client.query('COMMIT');
+
+    res.locals.auditEntry = { 
+      module: 'Pharmacy Master', 
+      action: 'Create Medicine Master Item', 
+      recordId: createdMed.id, 
+      newValue: createdMed 
+    };
+    return res.status(201).json(formatResponse(true, createdMed, 'Medicine added to pharmacy formulary successfully'));
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('createMedicine error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
@@ -2108,6 +2229,7 @@ module.exports = {
   getClarifications,
   closeClarification,
   getMedicines,
+  getNextMedicineSerial,
   createMedicine,
   updateMedicine,
   getMedicineStockDetail,
