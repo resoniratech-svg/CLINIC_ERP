@@ -139,7 +139,7 @@ async function setDoctorTarget(req, res) {
 
     const numEnquiry = Math.max(0, parseFloat(enquiry_target || 0));
     const numUnit = Math.max(0, parseFloat(unit_target || 0));
-    const numReferral = Math.max(0, parseInt(referral_target || 0));
+    const numReferral = Math.max(0, parseFloat(referral_target || 0));
     const numRevenue = parseFloat(revenue_target) > 0 ? parseFloat(revenue_target) : (numEnquiry + numUnit);
 
     // Fetch existing target for audit diff
@@ -191,22 +191,55 @@ async function getDoctorPerformance(req, res) {
              COALESCE(dt.unit_target, 0) as unit_target,
              COALESCE(dt.referral_target, 0) as referral_target,
              COALESCE(dt.revenue_target, 0) as revenue_target,
-             COALESCE(SUM(p.amount), 0) as achieved_revenue
+             COALESCE(rev.enquiry_achieved, 0) as enquiry_achieved,
+             COALESCE(rev.direct_unit_achieved, 0) as direct_unit_achieved,
+             COALESCE(rev.referral_achieved, 0) as referral_achieved,
+             COALESCE(rev.total_achieved, 0) as achieved_revenue
       FROM doctors d
       JOIN users u ON d.user_id = u.user_id
       LEFT JOIN branches br ON d.branch_id = br.branch_id
       LEFT JOIN doctor_targets dt ON d.doctor_id = dt.doctor_id AND dt.month = $2 AND dt.year = $3
-      LEFT JOIN bills b ON d.doctor_id = b.doctor_id
-      LEFT JOIN payments p ON b.bill_id = p.bill_id AND p.status = 'success' AND EXTRACT(MONTH FROM p.payment_date) = $2 AND EXTRACT(YEAR FROM p.payment_date) = $3
+      LEFT JOIN (
+        SELECT 
+          b.doctor_id,
+          COALESCE(SUM(CASE 
+            WHEN (EXISTS (SELECT 1 FROM referrals r WHERE r.patient_id = pt.patient_id) OR COALESCE(pt.source, '') ILIKE '%referral%') 
+            THEN p.amount ELSE 0 END), 0) as referral_achieved,
+          COALESCE(SUM(CASE 
+            WHEN NOT (EXISTS (SELECT 1 FROM referrals r WHERE r.patient_id = pt.patient_id) OR COALESCE(pt.source, '') ILIKE '%referral%') AND pt.patient_type = 'new' 
+            THEN p.amount ELSE 0 END), 0) as enquiry_achieved,
+          COALESCE(SUM(CASE 
+            WHEN NOT (EXISTS (SELECT 1 FROM referrals r WHERE r.patient_id = pt.patient_id) OR COALESCE(pt.source, '') ILIKE '%referral%') AND pt.patient_type != 'new' 
+            THEN p.amount ELSE 0 END), 0) as direct_unit_achieved,
+          COALESCE(SUM(p.amount), 0) as total_achieved
+        FROM payments p
+        JOIN bills b ON p.bill_id = b.bill_id
+        JOIN patients pt ON b.patient_id = pt.patient_id
+        WHERE p.status = 'success'
+          AND EXTRACT(MONTH FROM p.payment_date) = $2
+          AND EXTRACT(YEAR FROM p.payment_date) = $3
+        GROUP BY b.doctor_id
+      ) rev ON d.doctor_id = rev.doctor_id
       WHERE d.branch_id = $1
-      GROUP BY d.doctor_id, d.doctor_code, u.employee_id, u.full_name, d.qualification, d.specialization, d.status, br.branch_name, br.branch_code, dt.enquiry_target, dt.unit_target, dt.referral_target, dt.revenue_target
       ORDER BY d.doctor_id ASC
     `;
 
     const result = await db.query(query, [branchId, targetMonth, targetYear]);
     const performanceList = result.rows.map(r => {
-      const target = parseFloat(r.revenue_target) || (parseFloat(r.enquiry_target) + parseFloat(r.unit_target));
-      const achieved = parseFloat(r.achieved_revenue);
+      const enquiryTarget = parseFloat(r.enquiry_target);
+      const unitTarget = parseFloat(r.unit_target);
+      const referralTarget = parseFloat(r.referral_target);
+      const revenueTarget = parseFloat(r.revenue_target) || (enquiryTarget + unitTarget);
+
+      const enquiryAchieved = parseFloat(r.enquiry_achieved);
+      const directUnitAchieved = parseFloat(r.direct_unit_achieved);
+      const referralAchieved = parseFloat(r.referral_achieved);
+
+      // Business Rule: Referral revenue contributes to Unit Target Achievement
+      const unitAchieved = directUnitAchieved + referralAchieved;
+      // Total revenue achieved = Enquiry + Unit (referral counted once inside unit)
+      const achievedRevenue = enquiryAchieved + unitAchieved;
+
       return {
         doctor_id: r.doctor_id,
         doctor_code: r.doctor_code || `DOC-${r.employee_id || r.doctor_id}`,
@@ -219,12 +252,19 @@ async function getDoctorPerformance(req, res) {
         branch_code: r.branch_code || 'KRM001',
         month: targetMonth,
         year: targetYear,
-        enquiry_target: parseFloat(r.enquiry_target),
-        unit_target: parseFloat(r.unit_target),
-        referral_target: parseInt(r.referral_target),
-        revenue_target: target,
-        achieved_revenue: achieved,
-        achievement_pct: target > 0 ? parseFloat(((achieved / target) * 100).toFixed(2)) : 0
+        enquiry_target: enquiryTarget,
+        enquiry_achieved: enquiryAchieved,
+        enquiry_pct: enquiryTarget > 0 ? parseFloat(((enquiryAchieved / enquiryTarget) * 100).toFixed(2)) : 0,
+        unit_target: unitTarget,
+        direct_unit_achieved: directUnitAchieved,
+        referral_target: referralTarget,
+        referral_achieved: referralAchieved,
+        referral_pct: referralTarget > 0 ? parseFloat(((referralAchieved / referralTarget) * 100).toFixed(2)) : 0,
+        unit_achieved: unitAchieved,
+        unit_pct: unitTarget > 0 ? parseFloat(((unitAchieved / unitTarget) * 100).toFixed(2)) : 0,
+        revenue_target: revenueTarget,
+        achieved_revenue: achievedRevenue,
+        achievement_pct: revenueTarget > 0 ? parseFloat(((achievedRevenue / revenueTarget) * 100).toFixed(2)) : 0
       };
     });
 

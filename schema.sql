@@ -325,7 +325,7 @@ CREATE TABLE IF NOT EXISTS doctor_targets (
     year            INTEGER NOT NULL,
     enquiry_target  NUMERIC(12,2) DEFAULT 0,
     unit_target     NUMERIC(12,2) DEFAULT 0,
-    referral_target INTEGER DEFAULT 0,
+    referral_target NUMERIC(12,2) DEFAULT 0,
     revenue_target  NUMERIC(12,2) DEFAULT 0,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

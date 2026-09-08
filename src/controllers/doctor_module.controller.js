@@ -65,12 +65,12 @@ async function getDashboard(req, res) {
     // Target achievement calculations
     let revTarget = 200000;
     let unitTarget = 300000;
-    let refTarget = 30;
+    let refTarget = 30000;
 
     if (targetRes.rows.length > 0) {
       revTarget = parseFloat(targetRes.rows[0].revenue_target || 200000);
       unitTarget = parseFloat(targetRes.rows[0].unit_target || 300000);
-      refTarget = parseInt(targetRes.rows[0].referral_target || 30);
+      refTarget = parseFloat(targetRes.rows[0].referral_target || 30000);
     }
 
     // Revenue achieved (consultation bills completed for doctor)
@@ -1406,7 +1406,7 @@ async function getMyTargets(req, res) {
       hasTargets = true;
       revTarget = parseFloat(targetRes.rows[0].revenue_target || 0);
       unitTarget = parseFloat(targetRes.rows[0].unit_target || 0);
-      refTarget = parseInt(targetRes.rows[0].referral_target || 0);
+      refTarget = parseFloat(targetRes.rows[0].referral_target || 0);
     }
 
     const revAchievedRes = await db.query(`
@@ -1421,12 +1421,19 @@ async function getMyTargets(req, res) {
 
     const revAchieved = parseFloat(revAchievedRes.rows[0].total_revenue || 0);
     const unitAchieved = revAchieved;
-    const refAchievedRes = await db.query(`
-      SELECT COUNT(*) as referrals FROM appointments
-      WHERE ($1::integer IS NULL OR doctor_id = $1) AND appointment_type = 'new'
-        AND EXTRACT(MONTH FROM appointment_date) = $2 AND EXTRACT(YEAR FROM appointment_date) = $3
+
+    // Monetary referral revenue achieved
+    const refRevRes = await db.query(`
+      SELECT COALESCE(SUM(p.amount), 0) as total
+      FROM payments p
+      JOIN bills b ON p.bill_id = b.bill_id
+      JOIN patients pt ON b.patient_id = pt.patient_id
+      WHERE ($1::integer IS NULL OR b.doctor_id = $1)
+        AND p.status = 'success'
+        AND (EXISTS (SELECT 1 FROM referrals r WHERE r.patient_id = pt.patient_id) OR COALESCE(pt.source, '') ILIKE '%referral%')
+        AND EXTRACT(MONTH FROM p.payment_date) = $2 AND EXTRACT(YEAR FROM p.payment_date) = $3
     `, [doctorFilterId, targetMonth, targetYear]);
-    const refAchieved = parseInt(refAchievedRes.rows[0].referrals || 0);
+    const refAchieved = parseFloat(refRevRes.rows[0].total || 0);
 
     return res.json(formatResponse(true, {
       has_targets: hasTargets,
