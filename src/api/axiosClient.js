@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+const rawBaseURL = import.meta.env.VITE_API_URL || 'https://wecare-wecare-backend.n1logh.easypanel.host/api/v1';
+const baseURL = rawBaseURL.startsWith('http://89.116.236.138')
+  ? rawBaseURL.replace(/^http:\/\/89\.116\.236\.138:5000/, 'https://wecare-wecare-backend.n1logh.easypanel.host')
+  : rawBaseURL;
+
 const axiosClient = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api/v1',
+  baseURL,
   headers: {
     'Content-Type': 'application/json',
   },
