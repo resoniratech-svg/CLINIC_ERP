@@ -49,7 +49,7 @@ export const DoctorPerformancePage = () => {
   const [docForm, setDocForm] = useState({
     enquiry_target: 50000,
     unit_target: 75000,
-    referral_target: 25,
+    referral_target: 25000,
     revenue_target: 150000,
   });
   const [savingTarget, setSavingTarget] = useState(false);
@@ -97,7 +97,7 @@ export const DoctorPerformancePage = () => {
         year,
         enquiry_target: parseFloat(docForm.enquiry_target) || 0,
         unit_target: parseFloat(docForm.unit_target) || 0,
-        referral_target: parseInt(docForm.referral_target) || 0,
+        referral_target: parseFloat(docForm.referral_target) || 0,
         revenue_target: parseFloat(docForm.revenue_target) || 0,
       });
 
@@ -135,7 +135,7 @@ export const DoctorPerformancePage = () => {
         year,
         enquiry_target: parseFloat(editForm.enquiry_target) || 0,
         unit_target: parseFloat(editForm.unit_target) || 0,
-        referral_target: parseInt(editForm.referral_target) || 0,
+        referral_target: parseFloat(editForm.referral_target) || 0,
         revenue_target: parseFloat(editForm.revenue_target) || 0,
       });
 
@@ -498,14 +498,16 @@ export const DoctorPerformancePage = () => {
             </div>
 
             <div>
-              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Referral Quota</label>
+              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Referral Quota (₹)</label>
               <input
                 type="number"
                 min={0}
+                step="any"
                 value={docForm.referral_target}
-                onChange={(e) => setDocForm({ ...docForm, referral_target: parseInt(e.target.value) || 0 })}
+                onChange={(e) => setDocForm({ ...docForm, referral_target: parseFloat(e.target.value) || 0 })}
                 className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
+              <p className="text-[10px] text-slate-400 mt-0.5">Contributes toward Unit Target achievement</p>
             </div>
 
             <button
@@ -594,7 +596,7 @@ export const DoctorPerformancePage = () => {
                   Referral Quota
                 </span>
                 <span className="text-sm font-black font-mono text-amber-950">
-                  {viewingDoc.referral_target || 0}
+                  {formatCurrency(viewingDoc.referral_target)}
                 </span>
               </div>
             </div>
@@ -607,19 +609,50 @@ export const DoctorPerformancePage = () => {
               </div>
               <div className="divide-y divide-slate-100 p-2 text-xs">
                 <div className="flex justify-between py-2 px-2">
-                  <span className="text-slate-600">New Enquiry Revenue Quota</span>
+                  <div>
+                    <span className="text-slate-600 font-medium">New Enquiry Revenue Quota</span>
+                    {viewingDoc.enquiry_achieved !== undefined && (
+                      <span className="block text-[11px] text-slate-400">
+                        Achieved: {formatCurrency(viewingDoc.enquiry_achieved)} ({viewingDoc.enquiry_pct || 0}%)
+                      </span>
+                    )}
+                  </div>
                   <span className="font-mono font-bold text-slate-800">{formatCurrency(viewingDoc.enquiry_target)}</span>
                 </div>
                 <div className="flex justify-between py-2 px-2">
-                  <span className="text-slate-600">Unit / Renewal Quota</span>
+                  <div>
+                    <span className="text-slate-600 font-medium">Unit / Renewal Quota</span>
+                    {viewingDoc.unit_achieved !== undefined && (
+                      <span className="block text-[11px] text-slate-400">
+                        Achieved: {formatCurrency(viewingDoc.unit_achieved)} (Direct Unit: {formatCurrency(viewingDoc.direct_unit_achieved || 0)} + Referral: {formatCurrency(viewingDoc.referral_achieved || 0)})
+                      </span>
+                    )}
+                  </div>
                   <span className="font-mono font-bold text-slate-800">{formatCurrency(viewingDoc.unit_target)}</span>
                 </div>
                 <div className="flex justify-between py-2 px-2">
-                  <span className="text-slate-600">Patient Referral Quota</span>
-                  <span className="font-mono font-bold text-slate-800">{viewingDoc.referral_target || 0} Referrals</span>
+                  <div>
+                    <span className="text-slate-600 font-medium">Patient Referral Quota</span>
+                    <span className="block text-[10px] text-amber-600 font-medium">
+                      Contributes under Unit Target achievement
+                    </span>
+                    {viewingDoc.referral_achieved !== undefined && (
+                      <span className="block text-[11px] text-slate-400">
+                        Referral Revenue Achieved: {formatCurrency(viewingDoc.referral_achieved)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="font-mono font-bold text-slate-800">{formatCurrency(viewingDoc.referral_target)}</span>
                 </div>
                 <div className="flex justify-between py-2 px-2 bg-slate-50/80 font-bold rounded-xl">
-                  <span className="text-slate-900">Total Assigned Revenue Quota</span>
+                  <div>
+                    <span className="text-slate-900">Total Assigned Revenue Quota</span>
+                    {viewingDoc.achieved_revenue !== undefined && (
+                      <span className="block text-[11px] text-emerald-600 font-medium">
+                        Total Achieved: {formatCurrency(viewingDoc.achieved_revenue)} ({viewingDoc.achievement_pct || 0}%)
+                      </span>
+                    )}
+                  </div>
                   <span className="font-mono text-blue-700">{formatCurrency(viewingDoc.revenue_target)}</span>
                 </div>
               </div>
@@ -711,15 +744,17 @@ export const DoctorPerformancePage = () => {
 
             <div>
               <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
-                Referral Quota (Count)
+                Referral Quota (₹)
               </label>
               <input
                 type="number"
                 min={0}
+                step="any"
                 value={editForm.referral_target}
-                onChange={(e) => setEditForm({ ...editForm, referral_target: parseInt(e.target.value) || 0 })}
+                onChange={(e) => setEditForm({ ...editForm, referral_target: parseFloat(e.target.value) || 0 })}
                 className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
+              <p className="text-[10px] text-slate-400 mt-0.5">Contributes toward Unit Target achievement</p>
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
