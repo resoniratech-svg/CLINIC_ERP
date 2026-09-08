@@ -518,7 +518,8 @@ CREATE TABLE IF NOT EXISTS medicine_master (
     manufacturer    VARCHAR(150),
     reorder_level   INTEGER DEFAULT 10,
     status          user_status NOT NULL DEFAULT 'active',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS medicine_stock (

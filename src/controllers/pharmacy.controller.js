@@ -860,23 +860,30 @@ async function getNextMedicineSerial(req, res) {
 async function getMedicines(req, res) {
   try {
     const { search, category, status } = req.query;
-    let query = `SELECT * FROM medicine_master WHERE 1=1`;
+    let query = `
+      SELECT mm.*,
+             (SELECT SUM(ms.quantity) FROM medicine_stock ms WHERE ms.medicine_id = mm.id) as quantity
+      FROM medicine_master mm
+      WHERE 1=1
+    `;
     const params = [];
 
     if (category) {
       params.push(category);
-      query += ` AND category = $${params.length}`;
+      query += ` AND mm.category = $${params.length}`;
     }
     if (status) {
       params.push(status);
-      query += ` AND status = $${params.length}`;
+      query += ` AND mm.status = $${params.length}`;
+    } else {
+      query += ` AND mm.status != 'deleted'`;
     }
     if (search) {
       params.push(`%${search}%`);
-      query += ` AND (medicine_name ILIKE $${params.length} OR generic_name ILIKE $${params.length} OR serial_number ILIKE $${params.length} OR strength ILIKE $${params.length})`;
+      query += ` AND (mm.medicine_name ILIKE $${params.length} OR mm.generic_name ILIKE $${params.length} OR mm.serial_number ILIKE $${params.length} OR mm.strength ILIKE $${params.length})`;
     }
 
-    query += ` ORDER BY id DESC`;
+    query += ` ORDER BY mm.updated_at DESC NULLS LAST, mm.id DESC`;
     const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Medicine master list retrieved successfully'));
   } catch (err) {
@@ -922,31 +929,85 @@ async function createMedicine(req, res) {
       }
     }
 
-    // Duplicate check: prevent duplicate medicine name + potency
+    // Duplicate check: if duplicate exists, MERGE instead of erroring
     const dupCheck = await client.query(
       `SELECT id, serial_number, medicine_name, strength 
        FROM medicine_master 
        WHERE LOWER(TRIM(medicine_name)) = LOWER(TRIM($1)) 
          AND LOWER(TRIM(strength)) = LOWER(TRIM($2)) 
-         AND status != 'deleted'`,
+         AND status != 'deleted'
+       ORDER BY id ASC
+       LIMIT 1`,
       [medicine_name.trim(), medStrength]
     );
+
     if (dupCheck.rows.length > 0) {
-      await client.query('ROLLBACK');
-      return res.status(409).json(formatResponse(
-        false,
-        null,
-        `Medicine "${medicine_name.trim()}" (${medStrength}) already exists in formulary with Serial Number ${dupCheck.rows[0].serial_number || `#${dupCheck.rows[0].id}`}.`
-      ));
+      const existingMed = dupCheck.rows[0];
+      const branchId = req.user?.branch_id || 1;
+
+      // Add incoming quantity to existing medicine's stock if provided
+      if (numQty !== null && numQty > 0) {
+        const batchNum = `INIT-${existingMed.id}`;
+
+        await client.query(`
+          INSERT INTO medicine_stock (
+            medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+          ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+          ON CONFLICT (medicine_id, batch_number) 
+          DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+        `, [existingMed.id, batchNum, numQty, branchId]);
+
+        await client.query(`
+          INSERT INTO stock_transactions (
+            medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+          ) VALUES ($1, 'in', $2, $3, 'Quantity added via duplicate medicine formulary entry', $4, $5)
+        `, [existingMed.id, numQty, batchNum, req.user?.user_id, branchId]);
+      }
+
+      // Touch updated_at so it moves to top of list
+      const updateRes = await client.query(`
+        UPDATE medicine_master
+        SET updated_at = now()
+        WHERE id = $1
+        RETURNING *
+      `, [existingMed.id]);
+
+      // Calculate total current stock quantity
+      const qtyRes = await client.query(
+        `SELECT SUM(quantity) as quantity FROM medicine_stock WHERE medicine_id = $1`,
+        [existingMed.id]
+      );
+      const totalQty = qtyRes.rows[0]?.quantity !== null ? parseInt(qtyRes.rows[0]?.quantity, 10) : null;
+
+      const mergedRecord = {
+        ...updateRes.rows[0],
+        quantity: totalQty,
+        merged: true
+      };
+
+      await client.query('COMMIT');
+
+      res.locals.auditEntry = { 
+        module: 'Pharmacy Master', 
+        action: 'Merge Medicine Master Item', 
+        recordId: existingMed.id, 
+        newValue: mergedRecord 
+      };
+
+      const msg = numQty !== null && numQty > 0
+        ? `Medicine "${existingMed.medicine_name}" (${existingMed.strength}) already exists with Serial Number ${existingMed.serial_number}. Added ${numQty} to existing quantity (Total: ${totalQty}).`
+        : `Medicine "${existingMed.medicine_name}" (${existingMed.strength}) already exists with Serial Number ${existingMed.serial_number}. Formulary record moved to top.`;
+
+      return res.status(200).json(formatResponse(true, mergedRecord, msg));
     }
 
-    // Generate atomic sequential serial number
+    // Generate atomic sequential serial number for new medicine
     const serialNumber = await generateMedicineSerial(client);
 
     const result = await client.query(`
       INSERT INTO medicine_master (
-        serial_number, medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+        serial_number, medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', now())
       RETURNING *
     `, [
       serialNumber,
@@ -964,7 +1025,7 @@ async function createMedicine(req, res) {
 
     // If optional quantity is provided and > 0, record initial stock
     if (numQty !== null && numQty > 0) {
-      const branchId = req.user.branch_id || 1;
+      const branchId = req.user?.branch_id || 1;
       const batchNum = `INIT-${createdMed.id}`;
 
       const stockRes = await client.query(`
@@ -980,10 +1041,12 @@ async function createMedicine(req, res) {
         INSERT INTO stock_transactions (
           medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
         ) VALUES ($1, 'in', $2, $3, 'Initial stock on formulary creation', $4, $5)
-      `, [createdMed.id, numQty, batchNum, req.user.user_id, branchId]);
+      `, [createdMed.id, numQty, batchNum, req.user?.user_id, branchId]);
 
       createdMed.initial_stock = stockRes.rows[0];
       createdMed.quantity = numQty;
+    } else {
+      createdMed.quantity = null;
     }
 
     await client.query('COMMIT');
@@ -1005,33 +1068,290 @@ async function createMedicine(req, res) {
 }
 
 async function updateMedicine(req, res) {
+  const client = await db.pool.connect();
   try {
-    const medId = parseInt(req.params.id);
-    const { medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status } = req.body;
+    const medId = parseInt(req.params.id, 10);
+    const { 
+      medicine_name, 
+      strength, 
+      potency, 
+      quantity, 
+      generic_name, 
+      medicine_type, 
+      unit, 
+      category, 
+      manufacturer, 
+      reorder_level, 
+      status 
+    } = req.body;
 
-    const result = await db.query(`
+    await client.query('BEGIN');
+
+    // 1. Fetch current medicine
+    const currentRes = await client.query(`SELECT * FROM medicine_master WHERE id = $1`, [medId]);
+    if (currentRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(formatResponse(false, null, 'Medicine not found'));
+    }
+    const current = currentRes.rows[0];
+
+    const newName = (medicine_name !== undefined && medicine_name !== null ? medicine_name : current.medicine_name).trim();
+    const newStrength = ((strength || potency) !== undefined && (strength || potency) !== null ? (strength || potency) : current.strength).trim();
+
+    if (!newName) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Medicine Name cannot be empty'));
+    }
+    if (!newStrength) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Potency / Strength cannot be empty'));
+    }
+
+    let parsedQty = undefined;
+    if (quantity !== undefined && quantity !== null && quantity !== '') {
+      const q = parseInt(quantity, 10);
+      if (isNaN(q) || q < 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Quantity must be a valid non-negative number'));
+      }
+      parsedQty = q;
+    }
+
+    const branchId = req.user?.branch_id || 1;
+
+    // 2. Check collision with ANOTHER active medicine in the formulary
+    const collisionCheck = await client.query(
+      `SELECT * FROM medicine_master 
+       WHERE LOWER(TRIM(medicine_name)) = LOWER(TRIM($1)) 
+         AND LOWER(TRIM(strength)) = LOWER(TRIM($2)) 
+         AND id != $3 
+         AND status != 'deleted'
+       ORDER BY id ASC
+       LIMIT 1`,
+      [newName, newStrength, medId]
+    );
+
+    // CASE A: COLLISION DETECTED -> MERGE CURRENT (SOURCE) INTO EXISTING TARGET
+    if (collisionCheck.rows.length > 0) {
+      const targetMed = collisionCheck.rows[0];
+      const sourceId = current.id;
+      const targetId = targetMed.id;
+
+      // Handle stock migration from source to target
+      const sourceStocks = await client.query(
+        `SELECT * FROM medicine_stock WHERE medicine_id = $1`,
+        [sourceId]
+      );
+
+      for (const sStock of sourceStocks.rows) {
+        const targetStockCheck = await client.query(
+          `SELECT id, quantity FROM medicine_stock WHERE medicine_id = $1 AND batch_number = $2`,
+          [targetId, sStock.batch_number]
+        );
+
+        if (targetStockCheck.rows.length > 0) {
+          // Combine stock into target batch
+          await client.query(
+            `UPDATE medicine_stock SET quantity = quantity + $1, updated_at = now() WHERE id = $2`,
+            [sStock.quantity, targetStockCheck.rows[0].id]
+          );
+          await client.query(`DELETE FROM medicine_stock WHERE id = $1`, [sStock.id]);
+        } else {
+          // Point batch directly to target medicine
+          await client.query(
+            `UPDATE medicine_stock SET medicine_id = $1 WHERE id = $2`,
+            [targetId, sStock.id]
+          );
+        }
+      }
+
+      // Re-link all related records across historical tables safely
+      await client.query(`UPDATE prescription_items SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
+      await client.query(`UPDATE stock_transactions SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
+      await client.query(`UPDATE medicine_returns SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
+      await client.query(`UPDATE stock_adjustments SET medicine_id = $1 WHERE medicine_id = $2`, [targetId, sourceId]);
+
+      // If user provided a specific quantity on the edit form, adjust target stock to match
+      if (parsedQty !== undefined) {
+        const curStockRes = await client.query(
+          `SELECT COALESCE(SUM(quantity), 0) as total FROM medicine_stock WHERE medicine_id = $1`,
+          [targetId]
+        );
+        const curStock = parseInt(curStockRes.rows[0].total, 10);
+        const diff = parsedQty - curStock;
+
+        if (diff !== 0) {
+          const batchNum = `INIT-${targetId}`;
+          if (diff > 0) {
+            await client.query(`
+              INSERT INTO medicine_stock (
+                medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+              ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+              ON CONFLICT (medicine_id, batch_number)
+              DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+            `, [targetId, batchNum, diff, branchId]);
+
+            await client.query(`
+              INSERT INTO stock_transactions (
+                medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+              ) VALUES ($1, 'in', $2, $3, 'Quantity adjusted during medicine collision merge', $4, $5)
+            `, [targetId, diff, batchNum, req.user?.user_id, branchId]);
+          } else {
+            // Deduct diff (abs) from existing batch
+            const deduct = Math.abs(diff);
+            await client.query(`
+              UPDATE medicine_stock 
+              SET quantity = GREATEST(0, quantity - $1), updated_at = now() 
+              WHERE medicine_id = $2 AND quantity > 0
+              ORDER BY id DESC
+              LIMIT 1
+            `, [deduct, targetId]);
+
+            await client.query(`
+              INSERT INTO stock_transactions (
+                medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+              ) VALUES ($1, 'out', $2, $3, 'Quantity adjusted during medicine collision merge', $4, $5)
+            `, [targetId, deduct, batchNum, req.user?.user_id, branchId]);
+          }
+        }
+      }
+
+      // Soft delete the duplicate source medicine
+      await client.query(
+        `UPDATE medicine_master SET status = 'deleted', updated_at = now() WHERE id = $1`,
+        [sourceId]
+      );
+
+      // Touch target medicine timestamp to move to top of the list
+      const targetUpdateRes = await client.query(
+        `UPDATE medicine_master SET updated_at = now() WHERE id = $1 RETURNING *`,
+        [targetId]
+      );
+
+      // Get target total quantity
+      const targetQtyRes = await client.query(
+        `SELECT SUM(quantity) as quantity FROM medicine_stock WHERE medicine_id = $1`,
+        [targetId]
+      );
+      const finalTargetQty = targetQtyRes.rows[0]?.quantity !== null ? parseInt(targetQtyRes.rows[0]?.quantity, 10) : null;
+
+      const mergedResult = {
+        ...targetUpdateRes.rows[0],
+        quantity: finalTargetQty,
+        merged: true,
+        previous_serial: current.serial_number
+      };
+
+      await client.query('COMMIT');
+
+      res.locals.auditEntry = { 
+        module: 'Pharmacy Master', 
+        action: 'Collision Merge Medicine Item', 
+        recordId: targetId, 
+        newValue: mergedResult 
+      };
+
+      return res.json(formatResponse(
+        true, 
+        mergedResult, 
+        `Medicine merged into existing "${targetMed.medicine_name}" (${targetMed.strength}) with Serial Number ${targetMed.serial_number}. Records and quantities consolidated.`
+      ));
+    }
+
+    // CASE B: NO COLLISION -> NORMAL UPDATE (Preserves serial_number, touches updated_at)
+    const updateMasterRes = await client.query(`
       UPDATE medicine_master
-      SET medicine_name = COALESCE($1, medicine_name),
-          generic_name = COALESCE($2, generic_name),
-          medicine_type = COALESCE($3, medicine_type),
-          strength = COALESCE($4, strength),
+      SET medicine_name = $1,
+          strength = $2,
+          generic_name = COALESCE($3, generic_name),
+          medicine_type = COALESCE($4, medicine_type),
           unit = COALESCE($5, unit),
           category = COALESCE($6, category),
           manufacturer = COALESCE($7, manufacturer),
           reorder_level = COALESCE($8, reorder_level),
-          status = COALESCE($9, status)
-      WHERE id = $10 RETURNING *
-    `, [medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status, medId]);
+          status = COALESCE($9, status),
+          updated_at = now()
+      WHERE id = $10 
+      RETURNING *
+    `, [
+      newName, 
+      newStrength, 
+      generic_name !== undefined ? (generic_name ? generic_name.trim() : null) : current.generic_name, 
+      medicine_type || current.medicine_type, 
+      unit || current.unit, 
+      category || current.category, 
+      manufacturer !== undefined ? (manufacturer ? manufacturer.trim() : null) : current.manufacturer, 
+      reorder_level !== undefined ? parseInt(reorder_level, 10) : current.reorder_level, 
+      status || current.status, 
+      medId
+    ]);
 
-    if (result.rows.length === 0) {
-      return res.status(404).json(formatResponse(false, null, 'Medicine not found'));
+    const updatedMed = updateMasterRes.rows[0];
+
+    // Handle quantity update if provided
+    if (parsedQty !== undefined) {
+      const curStockRes = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0) as total FROM medicine_stock WHERE medicine_id = $1`,
+        [medId]
+      );
+      const curStock = parseInt(curStockRes.rows[0].total, 10);
+      const diff = parsedQty - curStock;
+
+      if (diff !== 0) {
+        const batchNum = `INIT-${medId}`;
+        if (diff > 0) {
+          await client.query(`
+            INSERT INTO medicine_stock (
+              medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+            ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+            ON CONFLICT (medicine_id, batch_number)
+            DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+          `, [medId, batchNum, diff, branchId]);
+
+          await client.query(`
+            INSERT INTO stock_transactions (
+              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+            ) VALUES ($1, 'in', $2, $3, 'Quantity updated via formulary edit', $4, $5)
+          `, [medId, diff, batchNum, req.user?.user_id, branchId]);
+        } else {
+          const deduct = Math.abs(diff);
+          await client.query(`
+            UPDATE medicine_stock 
+            SET quantity = GREATEST(0, quantity - $1), updated_at = now() 
+            WHERE medicine_id = $2 AND quantity > 0
+          `, [deduct, medId]);
+
+          await client.query(`
+            INSERT INTO stock_transactions (
+              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+            ) VALUES ($1, 'out', $2, $3, 'Quantity updated via formulary edit', $4, $5)
+          `, [medId, deduct, batchNum, req.user?.user_id, branchId]);
+        }
+      }
     }
 
-    res.locals.auditEntry = { module: 'Pharmacy Master', action: 'Update Medicine Master Item', recordId: medId, newValue: result.rows[0] };
-    return res.json(formatResponse(true, result.rows[0], 'Medicine updated successfully'));
+    const finalQtyRes = await client.query(
+      `SELECT SUM(quantity) as quantity FROM medicine_stock WHERE medicine_id = $1`,
+      [medId]
+    );
+    updatedMed.quantity = finalQtyRes.rows[0]?.quantity !== null ? parseInt(finalQtyRes.rows[0]?.quantity, 10) : null;
+
+    await client.query('COMMIT');
+
+    res.locals.auditEntry = { 
+      module: 'Pharmacy Master', 
+      action: 'Update Medicine Master Item', 
+      recordId: medId, 
+      newValue: updatedMed 
+    };
+
+    return res.json(formatResponse(true, updatedMed, 'Medicine updated successfully'));
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('updateMedicine error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
@@ -1243,25 +1563,23 @@ async function previewMedicineImport(req, res) {
 
     const { headerResolution, dataRows } = parseResult;
     const totalRows = dataRows.length;
-    let validRows = 0;
     let invalidRows = 0;
-    let duplicateRows = 0;
+    let mergedCount = 0;
+    let newCount = 0;
 
     const rowIssues = [];
-    const validItems = [];
+    const validItemsMap = new Map();
 
     // Load existing active medicines from DB
     const dbMedsRes = await db.query(
-      `SELECT LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
+      `SELECT id, LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
        FROM medicine_master 
        WHERE status != 'deleted'`
     );
     const existingDbMap = new Map();
     for (const m of dbMedsRes.rows) {
-      existingDbMap.set(`${m.name}|${m.strength}`, m.serial_number);
+      existingDbMap.set(`${m.name}|${m.strength}`, m);
     }
-
-    const inMemoryTracker = new Map();
 
     for (const item of dataRows) {
       const { rowNum, sourceSerial, medicineName, potency, quantityStr } = item;
@@ -1318,10 +1636,15 @@ async function previewMedicineImport(req, res) {
         parsedQty = num;
       }
 
-      // 4. Duplicate check against existing DB
-      const medKey = `${medicineName.toLowerCase()}|${potency.toLowerCase()}`;
-      if (existingDbMap.has(medKey)) {
-        duplicateRows++;
+      const medKey = `${medicineName.toLowerCase().trim()}|${potency.toLowerCase().trim()}`;
+
+      // 4. Intra-file duplicate check: aggregate into first occurrence
+      if (validItemsMap.has(medKey)) {
+        const existingItem = validItemsMap.get(medKey);
+        if (parsedQty !== null && parsedQty > 0) {
+          existingItem.quantity = (existingItem.quantity || 0) + parsedQty;
+        }
+        mergedCount++;
         rowIssues.push({
           row: rowNum,
           source_serial: sourceSerial || null,
@@ -1329,44 +1652,57 @@ async function previewMedicineImport(req, res) {
           potency: potency,
           quantity: parsedQty,
           status: 'duplicate',
-          reason: `Medicine already exists in formulary (${existingDbMap.get(medKey) || 'active'})`
+          reason: `Aggregated with row ${existingItem.row} in file (combined total quantity: ${existingItem.quantity || 0})`
         });
         continue;
       }
 
-      // 5. In-file duplicate check
-      if (inMemoryTracker.has(medKey)) {
-        duplicateRows++;
+      // 5. Existing DB check: mark for merge or create
+      const dbMatch = existingDbMap.get(medKey);
+      if (dbMatch) {
+        mergedCount++;
+        validItemsMap.set(medKey, {
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName.trim(),
+          strength: potency.trim(),
+          quantity: parsedQty,
+          action: 'merge',
+          existing_id: dbMatch.id,
+          existing_serial: dbMatch.serial_number
+        });
         rowIssues.push({
           row: rowNum,
           source_serial: sourceSerial || null,
           medicine_name: medicineName,
           potency: potency,
           quantity: parsedQty,
-          status: 'duplicate',
-          reason: `Duplicate row in uploaded file (matches row ${inMemoryTracker.get(medKey)})`
+          status: 'will_merge',
+          reason: `Matches existing formulary item (${dbMatch.serial_number}). Stock will be merged.`
         });
-        continue;
+      } else {
+        newCount++;
+        validItemsMap.set(medKey, {
+          row: rowNum,
+          source_serial: sourceSerial || null,
+          medicine_name: medicineName.trim(),
+          strength: potency.trim(),
+          quantity: parsedQty,
+          action: 'create'
+        });
       }
-      inMemoryTracker.set(medKey, rowNum);
-
-      // Passed all checks
-      validRows++;
-      validItems.push({
-        row: rowNum,
-        source_serial: sourceSerial || null,
-        medicine_name: medicineName,
-        strength: potency,
-        quantity: parsedQty
-      });
     }
+
+    const validItems = Array.from(validItemsMap.values());
 
     return res.json(formatResponse(true, {
       file_name: fileName,
       total_rows: totalRows,
-      valid_rows: validRows,
+      valid_rows: validItems.length,
+      new_items_count: newCount,
+      merged_count: mergedCount,
+      duplicate_rows: mergedCount,
       invalid_rows: invalidRows,
-      duplicate_rows: duplicateRows,
       detected_columns: {
         serial: headerResolution.detectedColumns.serial || null,
         medicine_name: headerResolution.detectedColumns.medicine_name,
@@ -1388,7 +1724,6 @@ async function confirmMedicineImport(req, res) {
     let itemsToImport = [];
     let fileName = req.body.file_name || 'excel_import.xlsx';
     let rowIssues = [];
-    let initialDuplicateCount = 0;
     let initialInvalidCount = 0;
 
     let file = req.file;
@@ -1405,27 +1740,13 @@ async function confirmMedicineImport(req, res) {
       const parseResult = parseMedicineWorkbook(buffer);
       const { dataRows } = parseResult;
 
-      // Validate data rows
-      const dbMeds = await client.query(
-        `SELECT LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
-         FROM medicine_master WHERE status != 'deleted'`
-      );
-      const existingDb = new Map();
-      for (const m of dbMeds.rows) {
-        existingDb.set(`${m.name}|${m.strength}`, m.serial_number);
-      }
-      const inMem = new Map();
+      const inMemMap = new Map();
 
       for (const itm of dataRows) {
         const { rowNum, sourceSerial, medicineName, potency, quantityStr } = itm;
-        if (!medicineName) {
+        if (!medicineName || !potency) {
           initialInvalidCount++;
-          rowIssues.push({ row: rowNum, reason: 'Medicine Name is missing' });
-          continue;
-        }
-        if (!potency) {
-          initialInvalidCount++;
-          rowIssues.push({ row: rowNum, reason: 'Potency is missing' });
+          rowIssues.push({ row: rowNum, reason: 'Medicine Name or Potency missing' });
           continue;
         }
         let pQty = null;
@@ -1438,31 +1759,27 @@ async function confirmMedicineImport(req, res) {
           }
           pQty = num;
         }
-        const k = `${medicineName.toLowerCase()}|${potency.toLowerCase()}`;
-        if (existingDb.has(k)) {
-          initialDuplicateCount++;
-          rowIssues.push({ row: rowNum, reason: `Medicine already exists (${existingDb.get(k)})` });
+        const k = `${medicineName.toLowerCase().trim()}|${potency.toLowerCase().trim()}`;
+        if (inMemMap.has(k)) {
+          const prev = inMemMap.get(k);
+          if (pQty !== null && pQty > 0) {
+            prev.quantity = (prev.quantity || 0) + pQty;
+          }
           continue;
         }
-        if (inMem.has(k)) {
-          initialDuplicateCount++;
-          rowIssues.push({ row: rowNum, reason: `Duplicate row in file (matches row ${inMem.get(k)})` });
-          continue;
-        }
-        inMem.set(k, rowNum);
-        itemsToImport.push({
+        inMemMap.set(k, {
           row: rowNum,
           source_serial: sourceSerial || null,
-          medicine_name: medicineName,
-          strength: potency,
+          medicine_name: medicineName.trim(),
+          strength: potency.trim(),
           quantity: pQty
         });
       }
+      itemsToImport = Array.from(inMemMap.values());
     } else if (Array.isArray(req.body.items)) {
       itemsToImport = req.body.items;
       rowIssues = Array.isArray(req.body.row_issues) ? req.body.row_issues : [];
-      initialDuplicateCount = parseInt(req.body.duplicate_rows || 0);
-      initialInvalidCount = parseInt(req.body.invalid_rows || 0);
+      initialInvalidCount = parseInt(req.body.invalid_rows || 0, 10);
     } else {
       return res.status(400).json(formatResponse(false, null, 'No items or file payload provided for import'));
     }
@@ -1473,23 +1790,23 @@ async function confirmMedicineImport(req, res) {
 
     await client.query('BEGIN');
 
-    // Fetch existing medicines in DB inside transaction to avoid concurrency conflicts
+    // Fetch existing medicines in DB inside transaction
     const currentDbRes = await client.query(
-      `SELECT LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
+      `SELECT id, LOWER(TRIM(medicine_name)) as name, LOWER(TRIM(strength)) as strength, serial_number
        FROM medicine_master
        WHERE status != 'deleted'`
     );
-    const activeDbSet = new Map();
+    const activeDbMap = new Map();
     for (const m of currentDbRes.rows) {
-      activeDbSet.set(`${m.name}|${m.strength}`, m.serial_number);
+      activeDbMap.set(`${m.name}|${m.strength}`, m);
     }
 
-    const branchId = req.user.branch_id || 1;
+    const branchId = req.user?.branch_id || 1;
     let successfullyImported = 0;
-    let skippedDuplicates = initialDuplicateCount;
+    let successfullyMerged = 0;
     let invalidCount = initialInvalidCount;
     const importedMedicines = [];
-    const details = [...rowIssues];
+    const details = [];
 
     for (const item of itemsToImport) {
       const medName = String(item.medicine_name || '').trim();
@@ -1523,30 +1840,60 @@ async function confirmMedicineImport(req, res) {
       }
 
       const key = `${medName.toLowerCase()}|${potency.toLowerCase()}`;
-      if (activeDbSet.has(key)) {
-        skippedDuplicates++;
+      const existingMatch = activeDbMap.get(key);
+
+      // CASE 1: MATCHES EXISTING DB MEDICINE -> MERGE STOCK & TOUCH TIMESTAMP
+      if (existingMatch) {
+        if (qty !== null && qty > 0) {
+          const batchNum = `INIT-${existingMatch.id}`;
+          await client.query(`
+            INSERT INTO medicine_stock (
+              medicine_id, batch_number, expiry_date, quantity, branch_id, received_date
+            ) VALUES ($1, $2, CURRENT_DATE + INTERVAL '2 years', $3, $4, CURRENT_DATE)
+            ON CONFLICT (medicine_id, batch_number)
+            DO UPDATE SET quantity = medicine_stock.quantity + $3, updated_at = now()
+          `, [existingMatch.id, batchNum, qty, branchId]);
+
+          await client.query(`
+            INSERT INTO stock_transactions (
+              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+            ) VALUES ($1, 'in', $2, $3, 'Quantity added via formulary Excel import merge', $4, $5)
+          `, [existingMatch.id, qty, batchNum, req.user?.user_id, branchId]);
+        }
+
+        // Touch updated_at so it moves to top of list
+        await client.query(`
+          UPDATE medicine_master
+          SET updated_at = now()
+          WHERE id = $1
+        `, [existingMatch.id]);
+
+        successfullyMerged++;
         details.push({
           row: item.row,
+          source_serial: item.source_serial || null,
           medicine_name: medName,
           potency: potency,
-          status: 'skipped',
-          reason: `Medicine already exists in formulary (${activeDbSet.get(key) || 'active'})`
+          serial_number: existingMatch.serial_number,
+          quantity: qty,
+          status: 'merged',
+          reason: `Merged into existing formulary item (${existingMatch.serial_number})`
         });
         continue;
       }
 
-      // Generate unique serial number using the application's existing generator
+      // CASE 2: NEW MEDICINE -> GENERATE SERIAL & INSERT
       const serialNumber = await generateMedicineSerial(client);
 
       const insRes = await client.query(`
         INSERT INTO medicine_master (
-          serial_number, medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status
-        ) VALUES ($1, $2, null, 'dilution', $3, 'pcs', 'General', null, 10, 'active')
+          serial_number, medicine_name, generic_name, medicine_type, strength, unit, category, manufacturer, reorder_level, status, updated_at
+        ) VALUES ($1, $2, null, 'dilution', $3, 'pcs', 'General', null, 10, 'active', now())
         RETURNING *
       `, [serialNumber, medName, potency]);
 
       const createdMed = insRes.rows[0];
-      activeDbSet.set(key, serialNumber);
+      activeDbMap.set(key, createdMed);
 
       // Create opening stock if qty > 0
       if (qty !== null && qty > 0) {
@@ -1563,9 +1910,11 @@ async function confirmMedicineImport(req, res) {
           INSERT INTO stock_transactions (
             medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
           ) VALUES ($1, 'in', $2, $3, 'Initial stock on formulary import', $4, $5)
-        `, [createdMed.id, qty, batchNum, req.user.user_id, branchId]);
+        `, [createdMed.id, qty, batchNum, req.user?.user_id, branchId]);
 
         createdMed.quantity = qty;
+      } else {
+        createdMed.quantity = null;
       }
 
       successfullyImported++;
@@ -1590,15 +1939,16 @@ async function confirmMedicineImport(req, res) {
       newValue: {
         file_name: fileName,
         imported: successfullyImported,
-        skipped: skippedDuplicates,
+        merged: successfullyMerged,
         invalid: invalidCount
       }
     };
 
     return res.status(201).json(formatResponse(true, {
-      total_processed: itemsToImport.length + initialDuplicateCount + initialInvalidCount,
+      total_processed: itemsToImport.length + invalidCount,
       successfully_imported: successfullyImported,
-      skipped_duplicates: skippedDuplicates,
+      successfully_merged: successfullyMerged,
+      skipped_duplicates: 0,
       invalid_rows: invalidCount,
       imported_medicines: importedMedicines,
       details
