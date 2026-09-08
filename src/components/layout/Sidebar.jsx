@@ -97,10 +97,10 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile, isOpen, onClose }) => {
           <div className="bg-slate-50/80 border border-slate-200 rounded-xl p-2.5 flex items-center justify-between">
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Branch</span>
-              <p className="text-xs font-bold text-slate-800 truncate">Karimnagar Main</p>
+              <p className="text-xs font-bold text-slate-800 truncate">{user?.branch_name || 'Karimnagar Main'}</p>
             </div>
             <span className="bg-blue-100 text-blue-800 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded">
-              KRM001
+              {user?.branch_code || 'KRM001'}
             </span>
           </div>
         </div>

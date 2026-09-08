@@ -21,9 +21,9 @@ export const Header = ({ onToggleSidebar }) => {
         {/* Brand & Branch Indicator */}
         <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50/70 border border-blue-200/80 text-blue-900 text-xs font-semibold">
           <img src="/assets/wecare_logo.png" alt="WeCare" className="w-4 h-4 object-contain" />
-          <span className="font-bold text-slate-800">Karimnagar Main Branch</span>
+          <span className="font-bold text-slate-800">{user?.branch_name ? user.branch_name : 'Karimnagar Main Branch'}</span>
           <span className="text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold">
-            KRM001
+            {user?.branch_code || 'KRM001'}
           </span>
         </div>
       </div>

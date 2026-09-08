@@ -4,6 +4,9 @@ export const authApi = {
   login: (credentials) => axiosClient.post('/auth/login', credentials),
   logout: () => axiosClient.post('/auth/logout'),
   changePassword: (data) => axiosClient.post('/auth/change-password', data),
+  getProfile: () => axiosClient.get('/settings/profile'),
+  updateProfile: (data) => axiosClient.put('/settings/profile', data),
+  getBranches: () => axiosClient.get('/settings/branches'),
   forgotPassword: (data) =>
     axiosClient.post(
       '/auth/forgot-password',
@@ -164,6 +167,9 @@ export const settingsApi = {
   updateHospitalSettings: (data) => axiosClient.put('/settings/hospital', data),
   getMasterData: (type) => axiosClient.get(`/settings/masters/${type}`),
   addMasterData: (type, data) => axiosClient.post(`/settings/masters/${type}`, data),
+  getProfile: () => axiosClient.get('/settings/profile'),
+  updateProfile: (data) => axiosClient.put('/settings/profile', data),
+  getBranches: () => axiosClient.get('/settings/branches'),
 };
 
 export const receptionistApi = {

@@ -43,13 +43,17 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const updateUser = (updatedFields) => {
+  const updateUser = (updatedFields, newToken) => {
     setUser((prev) => {
-      if (!prev) return prev;
+      if (!prev) return updatedFields;
       const next = { ...prev, ...updatedFields };
       localStorage.setItem('clinic_user', JSON.stringify(next));
       return next;
     });
+    if (newToken) {
+      setToken(newToken);
+      localStorage.setItem('clinic_token', newToken);
+    }
   };
 
   const isSuperAdmin = user?.role === 'super_admin';
