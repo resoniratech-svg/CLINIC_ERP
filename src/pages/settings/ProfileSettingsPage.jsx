@@ -13,7 +13,7 @@ export const ProfileSettingsPage = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [branches, setBranches] = useState([]);
-  const [loadingBranches, setLoadingBranches] = useState(false);
+  const [loadingInitial, setLoadingInitial] = useState(!user && !profileData);
 
   const [editForm, setEditForm] = useState({
     full_name: '',
@@ -31,6 +31,13 @@ export const ProfileSettingsPage = () => {
   });
   const [submittingPassword, setSubmittingPassword] = useState(false);
 
+  // Sync profileData when auth user becomes available
+  useEffect(() => {
+    if (user && !profileData) {
+      setProfileData(user);
+    }
+  }, [user, profileData]);
+
   // Fetch fresh profile and branches on mount
   useEffect(() => {
     let isMounted = true;
@@ -43,17 +50,19 @@ export const ProfileSettingsPage = () => {
         ]);
 
         if (isMounted) {
-          if (profRes?.success && profRes.data) {
-            setProfileData(profRes.data);
+          const profileObj = profRes?.data?.user || profRes?.data;
+          if (profRes?.success && profileObj) {
+            setProfileData(profileObj);
             setEditForm({
-              full_name: profRes.data.full_name || '',
-              username: profRes.data.username || '',
-              mobile_number: profRes.data.mobile_number || '',
-              branch_id: profRes.data.branch_id || 1,
-              department: profRes.data.department || 'Administration',
+              full_name: profileObj.full_name || '',
+              username: profileObj.username || '',
+              mobile_number: profileObj.mobile_number || '',
+              branch_id: profileObj.branch_id || 1,
+              department: profileObj.department || 'Administration',
             });
-            updateUser(profRes.data);
+            if (updateUser) updateUser(profileObj);
           } else if (user) {
+            setProfileData(user);
             setEditForm({
               full_name: user.full_name || '',
               username: user.username || '',
@@ -63,7 +72,7 @@ export const ProfileSettingsPage = () => {
             });
           }
 
-          if (branchRes?.success && branchRes.data) {
+          if (branchRes?.success && Array.isArray(branchRes.data)) {
             setBranches(branchRes.data);
           } else {
             // Fallback default branches if fetch empty
@@ -76,6 +85,10 @@ export const ProfileSettingsPage = () => {
         }
       } catch (err) {
         console.error('Failed to load profile settings data:', err);
+      } finally {
+        if (isMounted) {
+          setLoadingInitial(false);
+        }
       }
     };
 
@@ -208,13 +221,24 @@ export const ProfileSettingsPage = () => {
     }
   };
 
-  const displayUser = profileData || user;
-  const currentBranch = branches.find((b) => b.branch_id === displayUser?.branch_id);
+  const displayUser = profileData || user || {};
+  const currentBranch = Array.isArray(branches) ? branches.find((b) => b?.branch_id === displayUser?.branch_id) : null;
   const branchDisplayName = currentBranch
     ? `${currentBranch.branch_name} (${currentBranch.branch_code})`
     : displayUser?.branch_name
     ? `${displayUser.branch_name} (${displayUser.branch_code || 'KRM001'})`
     : 'Karimnagar Main (KRM001)';
+
+  if (loadingInitial && !profileData && !user) {
+    return (
+      <div className="min-h-[400px] flex items-center justify-center">
+        <div className="flex items-center gap-2 text-slate-500 font-medium text-xs">
+          <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+          <span>Loading Profile Settings...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -594,10 +618,10 @@ export const ProfileSettingsPage = () => {
             <div className="pt-3 flex justify-end">
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submittingPassword}
                 className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md shadow-blue-500/20 text-xs transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
               >
-                {submitting ? (
+                {submittingPassword ? (
                   <>
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     <span>Updating Password...</span>

@@ -20,8 +20,10 @@ import {
   Calendar,
   Sparkles
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 
 export const Sidebar = ({ isMobileOpen, onCloseMobile, isOpen, onClose }) => {
+  const { user } = useAuth();
   const location = useLocation();
   const handleClose = onCloseMobile || onClose;
   const mobileVisible = isMobileOpen !== undefined ? isMobileOpen : isOpen;
