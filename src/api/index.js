@@ -101,7 +101,12 @@ export const pharmacyApi = {
   createMedicine: (data) => axiosClient.post('/pharmacy/medicines', data),
   updateMedicine: (id, data) => axiosClient.put(`/pharmacy/medicines/${id}`, data),
   getMedicineStockDetail: (id) => axiosClient.get(`/pharmacy/medicines/${id}/stock`),
-  previewMedicineImport: (data, config) => axiosClient.post('/pharmacy/medicines/import/preview', data, config),
+  previewMedicineImport: (data) =>
+    axiosClient.post('/pharmacy/medicines/import/preview', data, {
+      headers: {
+        'Content-Type': undefined,
+      },
+    }),
   confirmMedicineImport: (data) => axiosClient.post('/pharmacy/medicines/import/confirm', data),
 
   // 5. Stock & Excel Import

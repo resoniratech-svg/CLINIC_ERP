@@ -23,6 +23,7 @@ export const MedicineMasterPage = () => {
   const [previewData, setPreviewData] = useState(null);
   const [importingMedicines, setImportingMedicines] = useState(false);
   const [importResult, setImportResult] = useState(null);
+  const fileInputRef = React.useRef(null);
 
   // Add Medicine Modal
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -64,6 +65,9 @@ export const MedicineMasterPage = () => {
     setSelectedFile(null);
     setPreviewData(null);
     setImportResult(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     setIsImportModalOpen(true);
   };
 
@@ -71,23 +75,40 @@ export const MedicineMasterPage = () => {
     setIsImportModalOpen(false);
     setSelectedFile(null);
     setPreviewData(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
     if (importResult && importResult.successfully_imported > 0) {
       fetchMedicines();
     }
     setImportResult(null);
   };
 
+  const handleProcessFile = (file) => {
+    if (!file) return;
+    const ext = (file.name || '').split('.').pop().toLowerCase();
+    if (ext !== 'xlsx' && ext !== 'xls') {
+      showToast('Please select a valid Excel (.xlsx or .xls) file', 'warning');
+      return;
+    }
+    setSelectedFile(file);
+    setPreviewData(null);
+    setImportResult(null);
+  };
+
   const handleFileChange = (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      const ext = file.name.split('.').pop().toLowerCase();
-      if (ext !== 'xlsx' && ext !== 'xls') {
-        showToast('Please select a valid Excel (.xlsx or .xls) file', 'warning');
-        return;
-      }
-      setSelectedFile(file);
-      setPreviewData(null);
-      setImportResult(null);
+      handleProcessFile(file);
+    }
+  };
+
+  const handleRemoveFile = () => {
+    setSelectedFile(null);
+    setPreviewData(null);
+    setImportResult(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
     }
   };
 
@@ -561,8 +582,21 @@ export const MedicineMasterPage = () => {
                 <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
                   Choose Excel File (.xlsx / .xls) *
                 </label>
-                <div className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-2xl p-5 text-center transition-colors bg-slate-50/50">
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const file = e.dataTransfer?.files?.[0];
+                    if (file) handleProcessFile(file);
+                  }}
+                  className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-2xl p-5 text-center transition-colors bg-slate-50/50"
+                >
                   <input
+                    ref={fileInputRef}
                     type="file"
                     id="medicine-excel-upload"
                     accept=".xlsx, .xls"
@@ -591,10 +625,7 @@ export const MedicineMasterPage = () => {
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedFile(null);
-                        setPreviewData(null);
-                      }}
+                      onClick={handleRemoveFile}
                       className="text-slate-400 hover:text-red-500 p-1 rounded-lg cursor-pointer transition-colors"
                       title="Remove file"
                     >
