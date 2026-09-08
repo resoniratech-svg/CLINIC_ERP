@@ -9,7 +9,7 @@ async function getUsers(req, res) {
       SELECT u.user_id, u.employee_id, u.full_name, u.mobile_number, u.email, u.gender,
              u.username, u.department, u.designation, u.role, u.status, u.last_login_at, u.created_at
       FROM users u
-      WHERE u.branch_id = $1
+      WHERE u.branch_id = $1 AND u.status != 'deleted'
     `;
     const params = [req.user.branch_id || 1];
 
@@ -44,7 +44,7 @@ async function getUserById(req, res) {
     const userRes = await db.query(
       `SELECT user_id, employee_id, full_name, mobile_number, email, gender, date_of_joining,
               username, department, designation, reporting_manager_id, branch_id, role, status, must_change_password, last_login_at, created_at
-       FROM users WHERE user_id = $1`,
+       FROM users WHERE user_id = $1 AND status != 'deleted'`,
       [userId]
     );
 
@@ -319,6 +319,177 @@ async function deleteUser(req, res) {
       return res.status(400).json(formatResponse(false, null, 'Primary Root Administrator account cannot be deleted'));
     }
 
+    // ==========================================
+    // 1. DOCTOR ROLE DELETION WORKFLOW
+    // ==========================================
+    if (targetUser.role === 'doctor') {
+      const docRes = await db.query(`SELECT doctor_id, doctor_code, status FROM doctors WHERE user_id = $1`, [userId]);
+      const doctor = docRes.rows[0];
+
+      if (doctor) {
+        const doctorId = doctor.doctor_id;
+
+        // Step A: Check for ACTIVE blocking clinical / operational records
+        // Any appointment not finished/cancelled
+        const apptCheck = await db.query(`
+          SELECT COUNT(*) FROM appointments
+          WHERE doctor_id = $1
+            AND status NOT IN ('completed', 'cancelled', 'no_show', 'doctor_completed', 'pro_pending', 'pro_completed', 'pharmacy_pending', 'dispensed')
+        `, [doctorId]);
+        const activeApptCount = parseInt(apptCheck.rows[0]?.count || 0);
+
+        // Active treatment plans
+        let activeTreatmentsCount = 0;
+        try {
+          const tpCheck = await db.query(`
+            SELECT COUNT(*) FROM treatment_plans WHERE doctor_id = $1 AND status = 'active'
+          `, [doctorId]);
+          activeTreatmentsCount = parseInt(tpCheck.rows[0]?.count || 0);
+        } catch (e) {}
+
+        // Pending renewals / followups
+        let pendingRenewalsCount = 0;
+        try {
+          const renCheck = await db.query(`
+            SELECT COUNT(*) FROM renewals WHERE doctor_id = $1 AND status = 'pending'
+          `, [doctorId]);
+          pendingRenewalsCount = parseInt(renCheck.rows[0]?.count || 0);
+        } catch (e) {}
+
+        // Active / pending packages
+        let activePackagesCount = 0;
+        try {
+          const pkgCheck = await db.query(`
+            SELECT COUNT(*) FROM packages WHERE doctor_id = $1 AND status IN ('pending', 'active')
+          `, [doctorId]);
+          activePackagesCount = parseInt(pkgCheck.rows[0]?.count || 0);
+        } catch (e) {}
+
+        // Pending doctor leaves
+        let pendingLeavesCount = 0;
+        try {
+          const leaveCheck = await db.query(`
+            SELECT COUNT(*) FROM doctor_leaves WHERE doctor_id = $1 AND status = 'pending'
+          `, [doctorId]);
+          pendingLeavesCount = parseInt(leaveCheck.rows[0]?.count || 0);
+        } catch (e) {}
+
+        // Draft consultations
+        let draftConsultCount = 0;
+        try {
+          const draftCheck = await db.query(`
+            SELECT COUNT(*) FROM consultations WHERE doctor_id = $1 AND status = 'draft'
+          `, [doctorId]);
+          draftConsultCount = parseInt(draftCheck.rows[0]?.count || 0);
+        } catch (e) {}
+
+        const activeBlockers = [];
+        if (activeApptCount > 0) activeBlockers.push(`${activeApptCount} active/scheduled appointment(s)`);
+        if (activeTreatmentsCount > 0) activeBlockers.push(`${activeTreatmentsCount} active treatment plan(s)`);
+        if (pendingRenewalsCount > 0) activeBlockers.push(`${pendingRenewalsCount} pending renewal/followup(s)`);
+        if (activePackagesCount > 0) activeBlockers.push(`${activePackagesCount} active package(s)`);
+        if (draftConsultCount > 0) activeBlockers.push(`${draftConsultCount} draft consultation(s)`);
+        if (pendingLeavesCount > 0) activeBlockers.push(`${pendingLeavesCount} pending leave request(s)`);
+
+        if (activeBlockers.length > 0) {
+          return res.status(400).json(formatResponse(
+            false,
+            null,
+            `Cannot delete doctor "${targetUser.full_name}" because they have active linked connections in the database (${activeBlockers.join(', ')}). Please clear or transfer their records first before deleting.`
+          ));
+        }
+
+        // Step B: Check if doctor has permanent historical records (completed appointments, consultations, prescriptions, bills, doctor transfers)
+        const histCheck = await db.query(`
+          SELECT
+            (SELECT COUNT(*) FROM consultations WHERE doctor_id = $1) as consult_count,
+            (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = $1) as presc_count,
+            (SELECT COUNT(*) FROM appointments WHERE doctor_id = $1) as appt_count,
+            (SELECT COUNT(*) FROM bills WHERE doctor_id = $1 OR created_by = $2) as bill_count,
+            (SELECT COUNT(*) FROM payments WHERE received_by = $2) as payment_count,
+            (SELECT COUNT(*) FROM doctor_transfers WHERE from_doctor_id = $1 OR to_doctor_id = $1) as transfer_count
+        `, [doctorId, userId]);
+        const h = histCheck.rows[0];
+        const hasHistory = (
+          parseInt(h.consult_count || 0) > 0 ||
+          parseInt(h.presc_count || 0) > 0 ||
+          parseInt(h.appt_count || 0) > 0 ||
+          parseInt(h.bill_count || 0) > 0 ||
+          parseInt(h.payment_count || 0) > 0 ||
+          parseInt(h.transfer_count || 0) > 0
+        );
+
+        await client.query('BEGIN');
+
+        // Clean up auxiliary tables
+        try {
+          await client.query(`DELETE FROM doctor_targets WHERE doctor_id = $1`, [doctorId]);
+        } catch (e) {}
+        try {
+          await client.query(`DELETE FROM consultation_fees WHERE doctor_id = $1`, [doctorId]);
+        } catch (e) {}
+        try {
+          await client.query(`DELETE FROM doctor_leaves WHERE doctor_id = $1`, [doctorId]);
+        } catch (e) {}
+
+        if (hasHistory) {
+          // Soft-delete / archive: maintain relational integrity & medical audit trail
+          const docCodeSuffix = `_del_${doctorId}`;
+          const userSuffix = `_del_${userId}`;
+          const newDocCode = (doctor.doctor_code.length + docCodeSuffix.length <= 30)
+            ? `${doctor.doctor_code}${docCodeSuffix}`
+            : `${doctor.doctor_code.slice(0, 30 - docCodeSuffix.length)}${docCodeSuffix}`;
+          const newEmpId = (targetUser.employee_id.length + userSuffix.length <= 30)
+            ? `${targetUser.employee_id}${userSuffix}`
+            : `${targetUser.employee_id.slice(0, 30 - userSuffix.length)}${userSuffix}`;
+          const newUsername = (targetUser.username.length + userSuffix.length <= 50)
+            ? `${targetUser.username}${userSuffix}`
+            : `${targetUser.username.slice(0, 50 - userSuffix.length)}${userSuffix}`;
+
+          await client.query(`
+            UPDATE doctors
+            SET status = 'deleted',
+                doctor_code = $1,
+                updated_at = now()
+            WHERE doctor_id = $2
+          `, [newDocCode, doctorId]);
+
+          await client.query(`
+            UPDATE users
+            SET status = 'deleted',
+                username = $1,
+                employee_id = $2,
+                updated_at = now()
+            WHERE user_id = $3
+          `, [newUsername, newEmpId, userId]);
+        } else {
+          // Hard delete
+          try {
+            await client.query(`DELETE FROM doctor_transfers WHERE from_doctor_id = $1 OR to_doctor_id = $1`, [doctorId]);
+          } catch (e) {}
+          await client.query(`DELETE FROM doctors WHERE doctor_id = $1`, [doctorId]);
+          await client.query(`DELETE FROM password_reset_requests WHERE user_id = $1`, [userId]);
+          await client.query(`DELETE FROM login_logs WHERE user_id = $1`, [userId]);
+          await client.query(`DELETE FROM audit_logs WHERE user_id = $1`, [userId]);
+          await client.query(`DELETE FROM users WHERE user_id = $1`, [userId]);
+        }
+
+        await client.query('COMMIT');
+
+        res.locals.auditEntry = {
+          module: 'User Management',
+          action: 'Delete User',
+          recordId: userId,
+          oldValue: { username: targetUser.username, employee_id: targetUser.employee_id, full_name: targetUser.full_name, role: targetUser.role }
+        };
+
+        return res.json(formatResponse(true, null, `Doctor ${targetUser.full_name} (@${targetUser.username}) deleted successfully`));
+      }
+    }
+
+    // ==========================================
+    // 2. NON-DOCTOR ROLES DELETION WORKFLOW
+    // ==========================================
     // Safely check feedback_complaints if table exists
     let feedbackCount = 0;
     try {
@@ -331,14 +502,13 @@ async function deleteUser(req, res) {
       feedbackCount = 0;
     }
 
-    // Check if user or doctor has permanent historical clinical, appointment, or financial records
+    // Check if user has active or historical financial/operational records
     const checkRecords = await db.query(`
       SELECT
         (SELECT COUNT(*) FROM bills WHERE created_by = $1) as bill_count,
         (SELECT COUNT(*) FROM payments WHERE received_by = $1) as payment_count,
-        (SELECT COUNT(*) FROM appointments WHERE created_by = $1 OR doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as appt_count,
-        (SELECT COUNT(*) FROM consultations WHERE vitals_recorded_by = $1 OR doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as consult_count,
-        (SELECT COUNT(*) FROM prescriptions WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)) as presc_count,
+        (SELECT COUNT(*) FROM appointments WHERE created_by = $1) as appt_count,
+        (SELECT COUNT(*) FROM consultations WHERE vitals_recorded_by = $1) as consult_count,
         (SELECT COUNT(*) FROM leads WHERE assigned_receptionist_id = $1 OR lead_created_by_user_id = $1) as lead_count,
         (SELECT COUNT(*) FROM crm_followups WHERE assigned_to = $1) as followup_count
     `, [userId]);
@@ -349,7 +519,6 @@ async function deleteUser(req, res) {
       parseInt(stats.payment_count || 0) > 0 ||
       parseInt(stats.appt_count || 0) > 0 ||
       parseInt(stats.consult_count || 0) > 0 ||
-      parseInt(stats.presc_count || 0) > 0 ||
       parseInt(stats.lead_count || 0) > 0 ||
       parseInt(stats.followup_count || 0) > 0 ||
       feedbackCount > 0
@@ -374,14 +543,6 @@ async function deleteUser(req, res) {
       await client.query(`DELETE FROM pharmacy_permissions WHERE user_id = $1`, [userId]);
     } else if (targetUser.role === 'executive') {
       await client.query(`DELETE FROM executives WHERE user_id = $1`, [userId]);
-    } else if (targetUser.role === 'doctor') {
-      try {
-        await client.query(`DELETE FROM doctor_leaves WHERE doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
-      } catch (e) {}
-      try {
-        await client.query(`DELETE FROM doctor_transfers WHERE from_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1) OR to_doctor_id IN (SELECT doctor_id FROM doctors WHERE user_id = $1)`, [userId]);
-      } catch (e) {}
-      await client.query(`DELETE FROM doctors WHERE user_id = $1`, [userId]);
     }
 
     await client.query(`DELETE FROM password_reset_requests WHERE user_id = $1`, [userId]);

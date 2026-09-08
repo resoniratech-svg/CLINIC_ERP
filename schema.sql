@@ -11,8 +11,9 @@ DO $$ BEGIN
         CREATE TYPE user_role AS ENUM ('super_admin','receptionist','doctor','pro_manager','executive','pharmacy');
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
-        CREATE TYPE user_status AS ENUM ('active','inactive','suspended');
+        CREATE TYPE user_status AS ENUM ('active','inactive','suspended','deleted');
     END IF;
+    ALTER TYPE user_status ADD VALUE IF NOT EXISTS 'deleted';
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gender_type') THEN
         CREATE TYPE gender_type AS ENUM ('male','female','other');
     END IF;

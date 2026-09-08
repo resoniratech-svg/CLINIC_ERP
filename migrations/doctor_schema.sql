@@ -12,6 +12,7 @@ ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'pro_pending';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'pro_completed';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'pharmacy_pending';
 ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'dispensed';
+ALTER TYPE user_status ADD VALUE IF NOT EXISTS 'deleted';
 
 -- 2. ENUM TYPES FOR CLINICAL ENCOUNTERS
 DO $$ BEGIN
