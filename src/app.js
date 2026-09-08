@@ -13,6 +13,9 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(auditLogger);
 
 // Base route check
+app.get('/', (req, res) => {
+  res.json({ status: 'OK', message: 'Hospital ERP Backend API is running' });
+});
 app.get('/api/v1/health', (req, res) => {
   res.json({ status: 'OK', message: 'Hospital ERP Backend API is running' });
 });
