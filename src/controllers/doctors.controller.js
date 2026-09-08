@@ -8,7 +8,7 @@ async function getDoctors(req, res) {
       SELECT d.*, u.full_name, u.mobile_number, u.email, u.employee_id, u.status as user_status
       FROM doctors d
       JOIN users u ON d.user_id = u.user_id
-      WHERE d.branch_id = $1 AND d.status != 'deleted' AND u.status != 'deleted'
+      WHERE d.branch_id = $1 AND d.status::text != 'deleted' AND u.status::text != 'deleted'
     `;
     const params = [req.user.branch_id || 1];
 
@@ -27,7 +27,7 @@ async function getDoctors(req, res) {
     return res.json(formatResponse(true, result.rows, 'Doctors retrieved successfully'));
   } catch (err) {
     console.error('getDoctors error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
   }
 }
 

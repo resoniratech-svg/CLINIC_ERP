@@ -9,7 +9,7 @@ async function getUsers(req, res) {
       SELECT u.user_id, u.employee_id, u.full_name, u.mobile_number, u.email, u.gender,
              u.username, u.department, u.designation, u.role, u.status, u.last_login_at, u.created_at
       FROM users u
-      WHERE u.branch_id = $1 AND u.status != 'deleted'
+      WHERE u.branch_id = $1 AND u.status::text != 'deleted'
     `;
     const params = [req.user.branch_id || 1];
 
@@ -34,7 +34,7 @@ async function getUsers(req, res) {
     return res.json(formatResponse(true, result.rows, 'Users retrieved successfully'));
   } catch (err) {
     console.error('getUsers error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
   }
 }
 
@@ -44,7 +44,7 @@ async function getUserById(req, res) {
     const userRes = await db.query(
       `SELECT user_id, employee_id, full_name, mobile_number, email, gender, date_of_joining,
               username, department, designation, reporting_manager_id, branch_id, role, status, must_change_password, last_login_at, created_at
-       FROM users WHERE user_id = $1 AND status != 'deleted'`,
+       FROM users WHERE user_id = $1 AND status::text != 'deleted'`,
       [userId]
     );
 
