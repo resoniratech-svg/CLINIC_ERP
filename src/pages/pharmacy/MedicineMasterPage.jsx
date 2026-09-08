@@ -18,15 +18,35 @@ export const MedicineMasterPage = () => {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [formData, setFormData] = useState({
     medicine_name: '',
-    generic_name: '',
-    medicine_type: 'dilution',
-    strength: '30C',
-    unit: 'bottle',
-    category: 'Homeopathic Dilution',
-    manufacturer: 'Dr. Reckeweg',
-    reorder_level: 20,
+    strength: '',
+    quantity: '',
   });
+  const [nextSerial, setNextSerial] = useState('');
+  const [loadingSerial, setLoadingSerial] = useState(false);
   const [savingAdd, setSavingAdd] = useState(false);
+
+  const handleOpenAddModal = async () => {
+    setFormData({
+      medicine_name: '',
+      strength: '',
+      quantity: '',
+    });
+    setNextSerial('Loading...');
+    setLoadingSerial(true);
+    setIsAddModalOpen(true);
+    try {
+      const res = await pharmacyApi.getNextMedicineSerial();
+      if (res.success && res.data?.serial_number) {
+        setNextSerial(res.data.serial_number);
+      } else {
+        setNextSerial('AUTOMATICALLY GENERATED');
+      }
+    } catch (e) {
+      setNextSerial('AUTOMATICALLY GENERATED');
+    } finally {
+      setLoadingSerial(false);
+    }
+  };
 
   // Edit Medicine Modal
   const [editingMed, setEditingMed] = useState(null);
@@ -70,29 +90,33 @@ export const MedicineMasterPage = () => {
   const handleAddSubmit = async (e) => {
     e.preventDefault();
     if (!formData.medicine_name.trim()) {
-      showToast('Medicine name is required', 'warning');
+      showToast('Medicine Name is required', 'warning');
+      return;
+    }
+    if (!formData.strength.trim()) {
+      showToast('Potency / Strength is required', 'warning');
+      return;
+    }
+    if (formData.quantity !== '' && parseInt(formData.quantity) < 0) {
+      showToast('Quantity cannot be negative', 'warning');
       return;
     }
 
     setSavingAdd(true);
     try {
       const res = await pharmacyApi.createMedicine({
-        ...formData,
-        reorder_level: parseInt(formData.reorder_level) || 10,
+        medicine_name: formData.medicine_name.trim(),
+        strength: formData.strength.trim(),
+        quantity: formData.quantity !== '' ? parseInt(formData.quantity) : undefined,
       });
 
       if (res.success) {
-        showToast('Medicine added to master formulary catalog', 'success');
+        showToast(`Medicine added to formulary: ${res.data?.serial_number || res.data?.medicine_name}`, 'success');
         setIsAddModalOpen(false);
         setFormData({
           medicine_name: '',
-          generic_name: '',
-          medicine_type: 'dilution',
-          strength: '30C',
-          unit: 'bottle',
-          category: 'Homeopathic Dilution',
-          manufacturer: 'Dr. Reckeweg',
-          reorder_level: 20,
+          strength: '',
+          quantity: '',
         });
         fetchMedicines();
       }
@@ -195,7 +219,7 @@ export const MedicineMasterPage = () => {
         </div>
 
         <button
-          onClick={() => setIsAddModalOpen(true)}
+          onClick={handleOpenAddModal}
           className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/20 transition-all cursor-pointer shrink-0"
         >
           <Plus className="w-4 h-4" />
@@ -273,7 +297,14 @@ export const MedicineMasterPage = () => {
                   <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="py-3.5 px-4 font-bold text-slate-900">
                       <div>{m.medicine_name}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">ID #{m.id}</div>
+                      <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1.5 mt-0.5">
+                        {m.serial_number && (
+                          <span className="font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                            {m.serial_number}
+                          </span>
+                        )}
+                        <span>ID #{m.id}</span>
+                      </div>
                     </td>
                     <td className="py-3.5 px-4 text-slate-600 font-medium">{m.generic_name || '—'}</td>
                     <td className="py-3.5 px-4 font-mono font-semibold text-blue-700">{m.strength || '—'}</td>
@@ -324,7 +355,7 @@ export const MedicineMasterPage = () => {
         )}
       </div>
 
-      {/* Modal: Add Medicine */}
+      {/* Modal: Add Medicine to Pharmacy Formulary */}
       <Modal
         isOpen={isAddModalOpen}
         onClose={() => setIsAddModalOpen(false)}
@@ -333,7 +364,9 @@ export const MedicineMasterPage = () => {
       >
         <form onSubmit={handleAddSubmit} className="space-y-4 text-xs text-slate-700">
           <div>
-            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Medicine Name *</label>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Medicine Name *
+            </label>
             <input
               type="text"
               required
@@ -345,72 +378,47 @@ export const MedicineMasterPage = () => {
           </div>
 
           <div>
-            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Generic / Scientific Name</label>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Potency / Strength *
+            </label>
             <input
               type="text"
-              value={formData.generic_name}
-              onChange={(e) => setFormData({ ...formData, generic_name: e.target.value })}
-              placeholder="e.g. Leopard's Bane"
-              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              required
+              value={formData.strength}
+              onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
+              placeholder="e.g. 30C, 200C, 1M, Q"
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
             />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Potency / Strength</label>
-              <input
-                type="text"
-                value={formData.strength}
-                onChange={(e) => setFormData({ ...formData, strength: e.target.value })}
-                placeholder="e.g. 200C"
-                className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Dispensing Unit</label>
-              <input
-                type="text"
-                value={formData.unit}
-                onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
-                placeholder="e.g. bottle, pcs, tabs"
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Category</label>
-              <input
-                type="text"
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                placeholder="e.g. Homeopathic Dilution"
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Reorder Threshold</label>
-              <input
-                type="number"
-                value={formData.reorder_level}
-                onChange={(e) => setFormData({ ...formData, reorder_level: e.target.value })}
-                className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
           </div>
 
           <div>
-            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">Manufacturer</label>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Quantity (Optional)
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={formData.quantity}
+              onChange={(e) => setFormData({ ...formData, quantity: e.target.value })}
+              placeholder="e.g. 100 (leave empty if no initial stock)"
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Serial Number
+            </label>
             <input
               type="text"
-              value={formData.manufacturer}
-              onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value })}
-              placeholder="e.g. Dr. Reckeweg / SBL"
-              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              readOnly
+              disabled
+              value={nextSerial || 'AUTOMATICALLY GENERATED'}
+              className="w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border border-slate-200 bg-slate-100 text-slate-600 cursor-not-allowed select-none"
             />
+            <p className="text-[10px] text-slate-400 mt-1">
+              AUTOMATICALLY GENERATED — READ ONLY
+            </p>
           </div>
 
           <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-200">
@@ -424,9 +432,9 @@ export const MedicineMasterPage = () => {
             <button
               type="submit"
               disabled={savingAdd}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-xs disabled:opacity-50 cursor-pointer"
+              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-xs disabled:opacity-50 cursor-pointer"
             >
-              {savingAdd ? 'Adding...' : 'Save to Formulary'}
+              {savingAdd ? 'Saving to Formulary...' : 'Save to Formulary'}
             </button>
           </div>
         </form>
@@ -560,6 +568,10 @@ export const MedicineMasterPage = () => {
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase">Medicine Name</span>
               <div className="font-bold text-slate-900 text-sm">{viewingMed?.medicine_name}</div>
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase">Serial Number</span>
+              <div className="font-mono font-bold text-blue-700">{viewingMed?.serial_number || `MED-${String(viewingMed?.id || 0).padStart(5, '0')}`}</div>
             </div>
             <div>
               <span className="text-[10px] font-bold text-slate-400 uppercase">Generic / Scientific</span>

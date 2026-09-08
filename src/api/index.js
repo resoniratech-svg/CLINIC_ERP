@@ -97,6 +97,7 @@ export const pharmacyApi = {
 
   // 4. Inventory & Medicine Master
   getMedicines: (params) => axiosClient.get('/pharmacy/medicines', { params }),
+  getNextMedicineSerial: () => axiosClient.get('/pharmacy/medicines/next-serial'),
   createMedicine: (data) => axiosClient.post('/pharmacy/medicines', data),
   updateMedicine: (id, data) => axiosClient.put(`/pharmacy/medicines/${id}`, data),
   getMedicineStockDetail: (id) => axiosClient.get(`/pharmacy/medicines/${id}/stock`),
