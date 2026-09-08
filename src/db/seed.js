@@ -377,17 +377,20 @@ async function seed() {
     ON CONFLICT (id) DO NOTHING;
   `);
 
+  const defaultStaffRes = await db.query(`SELECT user_id FROM users WHERE role IN ('pharmacy', 'super_admin') LIMIT 1`);
+  const defaultStaffId = defaultStaffRes.rows.length > 0 ? defaultStaffRes.rows[0].user_id : (docId || 1);
+
   await db.query(`
     INSERT INTO prescription_clarifications (id, prescription_id, prescription_item_id, patient_id, raised_by, issue_type, description, priority, status, branch_id)
-    VALUES (1, 1, 1, 1, 1345, 'substitution_request', 'Paracetamol 500mg unavailable, requesting substitution', 'high', 'open', 1)
+    VALUES (1, 1, 1, 1, $1, 'substitution_request', 'Paracetamol 500mg unavailable, requesting substitution', 'high', 'open', 1)
     ON CONFLICT (id) DO NOTHING;
-  `);
+  `, [defaultStaffId]);
 
   await db.query(`
     INSERT INTO stock_adjustments (id, stock_id, medicine_id, system_quantity, physical_quantity, difference, reason, requires_approval, approval_status, performed_by, branch_id)
-    VALUES (1, 1, 1, 100, 80, -20, 'Physical audit count discrepancy', true, 'pending', 1345, 1)
+    VALUES (1, 1, 1, 100, 80, -20, 'Physical audit count discrepancy', true, 'pending', $1, 1)
     ON CONFLICT (id) DO NOTHING;
-  `);
+  `, [defaultStaffId]);
 
   // Seed Prescription 516 & Item 601 (Paracetamol 500mg) for PRO Review & Modification
   await db.query(`
