@@ -1,7 +1,18 @@
+const fs = require('fs');
+const path = require('path');
 const db = require('./index');
 const bcrypt = require('bcryptjs');
 
 async function seed() {
+  console.log('Checking and initializing database schema...');
+  const schemaPath = path.join(__dirname, '../../schema.sql');
+  if (fs.existsSync(schemaPath)) {
+    console.log('Applying schema.sql...');
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    await db.query(schemaSql);
+    console.log('Schema applied successfully.');
+  }
+
   console.log('Seeding database...');
 
   // Ensure default branch
