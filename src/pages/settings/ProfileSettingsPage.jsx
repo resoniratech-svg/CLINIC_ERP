@@ -20,6 +20,8 @@ export const ProfileSettingsPage = () => {
     username: '',
     mobile_number: '',
     branch_id: 1,
+    branch_name: '',
+    branch_code: '',
     department: '',
   });
 
@@ -51,36 +53,40 @@ export const ProfileSettingsPage = () => {
 
         if (isMounted) {
           const profileObj = profRes?.data?.user || profRes?.data;
+          const branchList = (branchRes?.success && Array.isArray(branchRes.data))
+            ? branchRes.data
+            : [
+                { branch_id: 1, branch_name: 'Karimnagar Main Branch', branch_code: 'KRM001' },
+                { branch_id: 2, branch_name: 'Isolation Branch 2', branch_code: 'ISO2' },
+                { branch_id: 3, branch_name: 'Hyderabad Main Branch', branch_code: 'HYD001' },
+              ];
+          setBranches(branchList);
+
           if (profRes?.success && profileObj) {
             setProfileData(profileObj);
+            const activeBranchInfo = branchList.find((b) => b.branch_id === profileObj.branch_id);
             setEditForm({
               full_name: profileObj.full_name || '',
               username: profileObj.username || '',
               mobile_number: profileObj.mobile_number || '',
               branch_id: profileObj.branch_id || 1,
+              branch_name: activeBranchInfo?.branch_name || profileObj.branch_name || 'Hyderabad Main Branch',
+              branch_code: activeBranchInfo?.branch_code || profileObj.branch_code || 'HYD001',
               department: profileObj.department || 'Administration',
             });
             if (updateUser) updateUser(profileObj);
           } else if (user) {
             setProfileData(user);
+            const activeBranchInfo = branchList.find((b) => b.branch_id === user.branch_id);
             setEditForm({
               full_name: user.full_name || '',
               username: user.username || '',
               mobile_number: user.mobile_number || '',
               branch_id: user.branch_id || 1,
+              branch_name: activeBranchInfo?.branch_name || user.branch_name || 'Hyderabad Main Branch',
+              branch_code: activeBranchInfo?.branch_code || user.branch_code || 'HYD001',
               department: user.department || 'Administration',
             });
-          }
-
-          if (branchRes?.success && Array.isArray(branchRes.data)) {
-            setBranches(branchRes.data);
-          } else {
-            // Fallback default branches if fetch empty
-            setBranches([
-              { branch_id: 1, branch_name: 'Karimnagar Main Branch', branch_code: 'KRM001' },
-              { branch_id: 2, branch_name: 'Isolation Branch 2', branch_code: 'ISO2' },
-              { branch_id: 3, branch_name: 'Hyderabad Main Branch', branch_code: 'HYD001' },
-            ]);
           }
         }
       } catch (err) {
@@ -99,11 +105,14 @@ export const ProfileSettingsPage = () => {
   // Enter edit mode
   const handleStartEdit = () => {
     const current = profileData || user;
+    const branchInfo = Array.isArray(branches) ? branches.find((b) => b.branch_id === current?.branch_id) : null;
     setEditForm({
       full_name: current?.full_name || '',
       username: current?.username || '',
       mobile_number: current?.mobile_number || '',
       branch_id: current?.branch_id || 1,
+      branch_name: branchInfo?.branch_name || current?.branch_name || 'Hyderabad Main Branch',
+      branch_code: branchInfo?.branch_code || current?.branch_code || 'HYD001',
       department: current?.department || 'Administration',
     });
     setIsEditing(true);
@@ -112,11 +121,14 @@ export const ProfileSettingsPage = () => {
   // Cancel edit mode
   const handleCancelEdit = () => {
     const current = profileData || user;
+    const branchInfo = Array.isArray(branches) ? branches.find((b) => b.branch_id === current?.branch_id) : null;
     setEditForm({
       full_name: current?.full_name || '',
       username: current?.username || '',
       mobile_number: current?.mobile_number || '',
       branch_id: current?.branch_id || 1,
+      branch_name: branchInfo?.branch_name || current?.branch_name || 'Hyderabad Main Branch',
+      branch_code: branchInfo?.branch_code || current?.branch_code || 'HYD001',
       department: current?.department || 'Administration',
     });
     setIsEditing(false);
@@ -150,6 +162,11 @@ export const ProfileSettingsPage = () => {
       }
     }
 
+    if (!editForm.branch_name.trim()) {
+      showToast('Branch Name is required', 'warning');
+      return;
+    }
+
     setSavingProfile(true);
     try {
       const payload = {
@@ -157,6 +174,7 @@ export const ProfileSettingsPage = () => {
         username: cleanUsername,
         mobile_number: editForm.mobile_number.trim() || null,
         branch_id: editForm.branch_id,
+        branch_name: editForm.branch_name.trim(),
         department: editForm.department.trim() || null,
       };
 
@@ -165,11 +183,19 @@ export const ProfileSettingsPage = () => {
       if (res.success && res.data) {
         const updatedUser = res.data.user;
         const refreshedToken = res.data.token;
+        const updatedBranch = res.data.branch;
 
         setProfileData(updatedUser);
         updateUser(updatedUser, refreshedToken);
+
+        if (updatedBranch) {
+          setBranches((prev) =>
+            prev.map((b) => (b.branch_id === updatedBranch.branch_id ? { ...b, ...updatedBranch } : b))
+          );
+        }
+
         setIsEditing(false);
-        showToast(res.message || 'Profile updated successfully', 'success');
+        showToast(res.message || 'Profile and branch details updated successfully', 'success');
       } else {
         showToast(res.message || 'Failed to update profile', 'error');
       }
@@ -317,7 +343,19 @@ export const ProfileSettingsPage = () => {
 
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400 font-medium">Assigned Branch</span>
-                  <span className="font-bold text-slate-800">{branchDisplayName}</span>
+                  <span className="font-bold text-slate-800">{currentBranch?.branch_name || displayUser?.branch_name || 'Hyderabad Main Branch'}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 font-medium">Branch Code</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-[11px]">
+                      {currentBranch?.branch_code || displayUser?.branch_code || 'HYD001'}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
+                      READ ONLY
+                    </span>
+                  </div>
                 </div>
 
                 <div className="flex justify-between items-center">
@@ -434,23 +472,37 @@ export const ProfileSettingsPage = () => {
                 />
               </div>
 
-              {/* Assigned Branch */}
+              {/* Assigned Branch Name (Editable) */}
               <div>
                 <label className="block font-bold text-slate-800 text-[11px] uppercase mb-1">
-                  Assigned Branch *
+                  Assigned Branch Name *
                 </label>
-                <select
+                <input
+                  type="text"
                   required
-                  value={editForm.branch_id}
-                  onChange={(e) => setEditForm({ ...editForm, branch_id: parseInt(e.target.value, 10) })}
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold text-slate-900 cursor-pointer"
-                >
-                  {branches.map((b) => (
-                    <option key={b.branch_id} value={b.branch_id}>
-                      {b.branch_name} ({b.branch_code})
-                    </option>
-                  ))}
-                </select>
+                  value={editForm.branch_name}
+                  onChange={(e) => setEditForm({ ...editForm, branch_name: e.target.value })}
+                  placeholder="e.g. Hyderabad Central Branch"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold text-slate-900"
+                />
+              </div>
+
+              {/* Branch Code (Strictly Read Only) */}
+              <div>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block font-bold text-slate-500 text-[11px] uppercase">
+                    Branch Code
+                  </label>
+                  <span className="text-[10px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                    READ ONLY
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  disabled
+                  value={editForm.branch_code || currentBranch?.branch_code || displayUser?.branch_code || 'HYD001'}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-slate-100 font-mono font-bold text-slate-500 cursor-not-allowed"
+                />
               </div>
 
               {/* Department */}

@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { Modal } from '../../components/common/Modal';
 import { usersApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import { UserPlus, Loader2 } from 'lucide-react';
 
 export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
+  const { user } = useAuth();
   const [role, setRole] = useState('receptionist');
   const [formData, setFormData] = useState({
     full_name: '',
@@ -257,7 +259,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
               <input
                 type="text"
                 disabled
-                value="Karimnagar Main (KRM001)"
+                value={user?.branch_name ? `${user.branch_name} (${user.branch_code || 'HYD001'})` : 'Hyderabad Main Branch (HYD001)'}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-slate-100 text-slate-500 font-medium"
               />
             </div>

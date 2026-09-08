@@ -3,6 +3,7 @@ import { dashboardApi } from '../../api';
 import { StatCard } from '../../components/common/StatCard';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 import {
   Users,
   Calendar,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 
 export const SuperAdminDashboard = () => {
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
@@ -71,7 +73,9 @@ export const SuperAdminDashboard = () => {
             <span className="px-2.5 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-black uppercase tracking-wider">
               WeCare Homeopathy
             </span>
-            <span className="text-blue-200 text-xs font-semibold">Karimnagar Main Branch (KRM001)</span>
+            <span className="text-blue-200 text-xs font-semibold">
+              {user?.branch_name || 'Hyderabad Main Branch'} ({user?.branch_code || 'HYD001'})
+            </span>
           </div>
           <h1 className="text-2xl font-black tracking-tight text-white">
             Super Admin Operations Console
