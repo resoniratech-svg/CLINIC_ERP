@@ -18,6 +18,86 @@ const RECEPTIONIST_PERMISSION_LABELS = {
   due_management:          'Due Management',
 };
 
+// Safe empty baseline where every permission is unchecked (false)
+const EMPTY_RECEPTIONIST_PERMS = {
+  registration: false,
+  enquiry: false,
+  appointment: false,
+  checkin: false,
+  consultation_fee_billing: false,
+  payment_collection: false,
+  crm_calling: false,
+  followup: false,
+  renewal: false,
+  due_management: false,
+};
+
+/**
+ * normalizeReceptionistPermissions(perms, isLegacyFallback)
+ *
+ * Accurately extracts boolean permission states from diverse backend data shapes:
+ * - Direct object: { registration: true, enquiry: false, ... }
+ * - Dot-notation object: { "receptionist.registration": true, ... }
+ * - Array of strings: ["registration", "appointment"] or ["receptionist.registration", ...]
+ * - Array of objects: [{ name: "registration" }, { permission: "appointment" }]
+ *
+ * If perms is null/undefined:
+ *   - If isLegacyFallback is true (i.e. legacy user with no permissions row in DB),
+ *     we default to all true to preserve pre-existing accounts.
+ *   - Otherwise, returns all false (safe empty state).
+ */
+const normalizeReceptionistPermissions = (perms, isLegacyFallback = false) => {
+  if (!perms) {
+    if (isLegacyFallback) {
+      return {
+        registration: true,
+        enquiry: true,
+        appointment: true,
+        checkin: true,
+        consultation_fee_billing: true,
+        payment_collection: true,
+        crm_calling: true,
+        followup: true,
+        renewal: true,
+        due_management: true,
+      };
+    }
+    return { ...EMPTY_RECEPTIONIST_PERMS };
+  }
+
+  const result = { ...EMPTY_RECEPTIONIST_PERMS };
+
+  if (Array.isArray(perms)) {
+    const stringSet = new Set(
+      perms.map((p) => {
+        if (typeof p === 'string') return p.toLowerCase().trim();
+        if (p && typeof p === 'object') {
+          return (p.name || p.permission || p.key || p.id || '').toLowerCase().trim();
+        }
+        return '';
+      })
+    );
+    for (const key of Object.keys(EMPTY_RECEPTIONIST_PERMS)) {
+      const canonical = key.toLowerCase();
+      const dotNotation = `receptionist.${canonical}`;
+      result[key] = stringSet.has(canonical) || stringSet.has(dotNotation);
+    }
+    return result;
+  }
+
+  if (typeof perms === 'object') {
+    for (const key of Object.keys(EMPTY_RECEPTIONIST_PERMS)) {
+      const canonical = key.toLowerCase();
+      const dotNotation = `receptionist.${canonical}`;
+      const val = perms[key] !== undefined ? perms[key] : perms[dotNotation];
+      result[key] = val === true || val === 'true' || val === 1;
+    }
+    return result;
+  }
+
+  return result;
+};
+
 export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
   const [formData, setFormData] = useState({
     full_name: '',
@@ -29,19 +109,9 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
     status: 'active',
   });
 
-  // Receptionist granular permissions (only shown/used when role === 'receptionist')
-  const [receptionistPerms, setReceptionistPerms] = useState({
-    registration: true,
-    enquiry: true,
-    appointment: true,
-    checkin: true,
-    consultation_fee_billing: true,
-    payment_collection: true,
-    crm_calling: true,
-    followup: true,
-    renewal: true,
-    due_management: true,
-  });
+  // Receptionist granular permissions initialized to all false (never default all true)
+  const [receptionistPerms, setReceptionistPerms] = useState(EMPTY_RECEPTIONIST_PERMS);
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [departmentsList, setDepartmentsList] = useState([]);
@@ -49,46 +119,88 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
 
   useEffect(() => {
     settingsApi.getMasterData('departments', { status: 'active' })
-      .then(res => { if (res?.success && Array.isArray(res.data)) setDepartmentsList(res.data); })
+      .then((res) => {
+        if (res?.success && Array.isArray(res.data)) setDepartmentsList(res.data);
+      })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    if (user) {
+    if (!isOpen || !user) {
       setFormData({
-        full_name: user.full_name || '',
-        mobile_number: user.mobile_number || '',
-        email: user.email || '',
-        gender: user.gender || 'male',
-        department: user.department || '',
-        designation: user.designation || '',
-        status: user.status || 'active',
+        full_name: '',
+        mobile_number: '',
+        email: '',
+        gender: 'male',
+        department: '',
+        designation: '',
+        status: 'active',
       });
-
-      // Populate receptionist permissions from the user object if available
-      if (user.role === 'receptionist' && user.permissions) {
-        setReceptionistPerms({
-          registration:            user.permissions.registration            ?? true,
-          enquiry:                 user.permissions.enquiry                 ?? true,
-          appointment:             user.permissions.appointment             ?? true,
-          checkin:                 user.permissions.checkin                 ?? true,
-          consultation_fee_billing:user.permissions.consultation_fee_billing?? true,
-          payment_collection:      user.permissions.payment_collection      ?? true,
-          crm_calling:             user.permissions.crm_calling             ?? true,
-          followup:                user.permissions.followup                ?? true,
-          renewal:                 user.permissions.renewal                 ?? true,
-          due_management:          user.permissions.due_management          ?? true,
-        });
-      } else if (user.role === 'receptionist') {
-        // Default to all true if no permissions row yet (legacy user)
-        setReceptionistPerms({
-          registration: true, enquiry: true, appointment: true, checkin: true,
-          consultation_fee_billing: true, payment_collection: true, crm_calling: true,
-          followup: true, renewal: true, due_management: true,
-        });
-      }
+      setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
+      setPermissionsLoading(false);
+      return;
     }
-  }, [user]);
+
+    // Immediately populate personal & organization fields from prop
+    setFormData({
+      full_name: user.full_name || '',
+      mobile_number: user.mobile_number || '',
+      email: user.email || '',
+      gender: user.gender || 'male',
+      department: user.department || '',
+      designation: user.designation || '',
+      status: user.status || 'active',
+    });
+
+    if (user.role === 'receptionist') {
+      // Step A: Immediately apply permissions from user prop if present (no stale state leak)
+      if (user.permissions !== undefined && user.permissions !== null) {
+        setReceptionistPerms(normalizeReceptionistPermissions(user.permissions, false));
+      } else {
+        setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
+      }
+
+      // Step B: Asynchronously fetch latest authoritative permissions from backend
+      setPermissionsLoading(true);
+      let isMounted = true;
+
+      usersApi.getUserById(user.user_id)
+        .then((res) => {
+          if (!isMounted) return;
+          if (res?.success && res.data) {
+            const fetchedUser = res.data;
+            setFormData((prev) => ({
+              ...prev,
+              full_name: fetchedUser.full_name || prev.full_name,
+              mobile_number: fetchedUser.mobile_number || prev.mobile_number,
+              email: fetchedUser.email !== undefined ? (fetchedUser.email || '') : prev.email,
+              gender: fetchedUser.gender || prev.gender,
+              department: fetchedUser.department || prev.department,
+              designation: fetchedUser.designation || prev.designation,
+              status: fetchedUser.status || prev.status,
+            }));
+
+            // If permissions is strictly null, it is an older legacy user
+            // If it is an object, normalize exact booleans (unselected permissions stay false!)
+            const isLegacy = fetchedUser.permissions === null || fetchedUser.permissions === undefined;
+            setReceptionistPerms(normalizeReceptionistPermissions(fetchedUser.permissions, isLegacy));
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to load fresh user permissions in EditUserModal:', err);
+        })
+        .finally(() => {
+          if (isMounted) setPermissionsLoading(false);
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
+      setPermissionsLoading(false);
+    }
+  }, [isOpen, user?.user_id]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -109,7 +221,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         status: formData.status,
       };
 
-      // Include permissions in the payload when editing a receptionist
+      // Include accurate permissions in the payload when editing a receptionist
       if (user.role === 'receptionist') {
         payload.permissions = receptionistPerms;
       }
@@ -218,7 +330,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
               />
               <datalist id="edit-user-departments-datalist">
-                {departmentsList.map(d => (
+                {departmentsList.map((d) => (
                   <option key={d.id || d.name} value={d.name} />
                 ))}
               </datalist>
@@ -253,19 +365,37 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         {/* Receptionist Granular Permissions — shown only for receptionist role */}
         {user.role === 'receptionist' && (
           <div className="pt-2 border-t border-slate-100 space-y-3">
-            <div className="flex items-center gap-2">
-              <Shield className="w-3.5 h-3.5 text-blue-600" />
-              <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">Receptionist Granular Permissions</h4>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Shield className="w-3.5 h-3.5 text-blue-600" />
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                  Receptionist Granular Permissions
+                </h4>
+              </div>
+              {permissionsLoading && (
+                <span className="flex items-center gap-1.5 text-[11px] text-blue-600 font-medium">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Loading saved permissions...
+                </span>
+              )}
             </div>
-            <div className="bg-blue-50/50 p-3.5 rounded-2xl border border-blue-200/70">
+
+            <div
+              className={`bg-blue-50/50 p-3.5 rounded-2xl border border-blue-200/70 transition-opacity ${
+                permissionsLoading ? 'opacity-60 pointer-events-none' : ''
+              }`}
+            >
               <div className="grid grid-cols-2 gap-2.5 text-xs text-slate-700">
                 {Object.entries(RECEPTIONIST_PERMISSION_LABELS).map(([key, label]) => (
                   <label key={key} className="flex items-center gap-2 cursor-pointer">
                     <input
                       type="checkbox"
+                      disabled={permissionsLoading}
                       checked={receptionistPerms[key] === true}
-                      onChange={(e) => setReceptionistPerms({ ...receptionistPerms, [key]: e.target.checked })}
-                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                      onChange={(e) =>
+                        setReceptionistPerms((prev) => ({ ...prev, [key]: e.target.checked }))
+                      }
+                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 disabled:opacity-50 cursor-pointer"
                     />
                     <span className="text-[11px] font-medium">{label}</span>
                   </label>
@@ -289,7 +419,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
           </button>
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || permissionsLoading}
             className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-md shadow-blue-500/20 transition-all disabled:opacity-50 cursor-pointer"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Edit3 className="w-4 h-4" />}
