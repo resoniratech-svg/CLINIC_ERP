@@ -119,7 +119,34 @@ async function getMasterData(req, res) {
       return res.status(404).json(formatResponse(false, null, `Master data type '${type}' not found`));
     }
 
-    const result = await db.query(`SELECT * FROM ${tableName} ORDER BY id ASC`);
+    const { status, q } = req.query;
+    let query = '';
+    const params = [];
+
+    if (tableName === 'master_villages') {
+      query = `
+        SELECT v.*, m.name as mandal_name
+        FROM master_villages v
+        LEFT JOIN master_mandals m ON v.mandal_id = m.id
+        WHERE 1=1
+      `;
+    } else {
+      query = `SELECT * FROM ${tableName} WHERE 1=1`;
+    }
+
+    if (status) {
+      params.push(status);
+      query += ` AND ${tableName === 'master_villages' ? 'v.' : ''}status = $${params.length}`;
+    }
+
+    if (q && q.trim()) {
+      params.push(`%${q.trim()}%`);
+      query += ` AND ${tableName === 'master_villages' ? 'v.' : ''}name ILIKE $${params.length}`;
+    }
+
+    query += ` ORDER BY ${tableName === 'master_villages' ? 'v.' : ''}name ASC, ${tableName === 'master_villages' ? 'v.' : ''}id ASC`;
+
+    const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, `Master ${type} retrieved successfully`));
   } catch (err) {
     console.error('getMasterData error:', err);
@@ -135,7 +162,7 @@ async function addMasterData(req, res) {
       return res.status(404).json(formatResponse(false, null, `Master data type '${type}' not found`));
     }
 
-    const { name } = req.body;
+    const { name, mandal_id } = req.body;
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json(formatResponse(false, null, 'name is required'));
     }
@@ -151,15 +178,127 @@ async function addMasterData(req, res) {
       return res.status(400).json(formatResponse(false, null, `Entry '${trimmedName}' already exists in ${type}`));
     }
 
-    const result = await db.query(`
-      INSERT INTO ${tableName} (name) VALUES ($1) RETURNING *
-    `, [trimmedName]);
+    let result;
+    if (tableName === 'master_villages' && mandal_id) {
+      result = await db.query(`
+        INSERT INTO master_villages (name, mandal_id, status) VALUES ($1, $2, 'active') RETURNING *
+      `, [trimmedName, mandal_id]);
+    } else {
+      result = await db.query(`
+        INSERT INTO ${tableName} (name, status) VALUES ($1, 'active') RETURNING *
+      `, [trimmedName]);
+    }
 
-    const created = result.rows[0] || { name: trimmedName };
+    const created = result.rows[0] || { name: trimmedName, status: 'active' };
     res.locals.auditEntry = { module: 'Master Data', action: `Add Master ${type}`, newValue: created };
     return res.status(201).json(formatResponse(true, created, `Master ${type} entry added successfully`));
   } catch (err) {
     console.error('addMasterData error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function updateMasterData(req, res) {
+  try {
+    const type = req.params.type;
+    const id = parseInt(req.params.id, 10);
+    const tableName = masterTableMap[type];
+    if (!tableName) {
+      return res.status(404).json(formatResponse(false, null, `Master data type '${type}' not found`));
+    }
+    if (!id || isNaN(id)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid ID is required'));
+    }
+
+    const { name, mandal_id } = req.body;
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json(formatResponse(false, null, 'name is required'));
+    }
+
+    const trimmedName = name.trim();
+
+    // Check existence
+    const current = await db.query(`SELECT * FROM ${tableName} WHERE id = $1`, [id]);
+    if (current.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Master entry not found'));
+    }
+
+    // Check duplicate (case-insensitive) across other rows
+    const duplicate = await db.query(
+      `SELECT * FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND id != $2`,
+      [trimmedName, id]
+    );
+    if (duplicate.rows.length > 0) {
+      return res.status(400).json(formatResponse(false, null, `Entry '${trimmedName}' already exists in ${type}`));
+    }
+
+    let result;
+    if (tableName === 'master_villages' && mandal_id !== undefined) {
+      result = await db.query(`
+        UPDATE master_villages
+        SET name = $1, mandal_id = $2
+        WHERE id = $3
+        RETURNING *
+      `, [trimmedName, mandal_id || null, id]);
+    } else {
+      result = await db.query(`
+        UPDATE ${tableName}
+        SET name = $1
+        WHERE id = $2
+        RETURNING *
+      `, [trimmedName, id]);
+    }
+
+    const updated = result.rows[0];
+    res.locals.auditEntry = {
+      module: 'Master Data',
+      action: `Update Master ${type}`,
+      recordId: id,
+      oldValue: current.rows[0],
+      newValue: updated
+    };
+    return res.json(formatResponse(true, updated, `Master ${type} entry updated successfully`));
+  } catch (err) {
+    console.error('updateMasterData error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function toggleMasterDataStatus(req, res) {
+  try {
+    const type = req.params.type;
+    const id = parseInt(req.params.id, 10);
+    const tableName = masterTableMap[type];
+    if (!tableName) {
+      return res.status(404).json(formatResponse(false, null, `Master data type '${type}' not found`));
+    }
+    if (!id || isNaN(id)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid ID is required'));
+    }
+
+    const current = await db.query(`SELECT * FROM ${tableName} WHERE id = $1`, [id]);
+    if (current.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Master entry not found'));
+    }
+
+    const currentStatus = current.rows[0].status || 'active';
+    const newStatus = req.body.status || (currentStatus === 'active' ? 'inactive' : 'active');
+
+    const result = await db.query(`
+      UPDATE ${tableName} SET status = $1 WHERE id = $2 RETURNING *
+    `, [newStatus, id]);
+
+    const updated = result.rows[0];
+    res.locals.auditEntry = {
+      module: 'Master Data',
+      action: `Toggle Master ${type} Status`,
+      recordId: id,
+      oldValue: current.rows[0],
+      newValue: updated
+    };
+    return res.json(formatResponse(true, updated, `Master ${type} status updated to '${newStatus}'`));
+  } catch (err) {
+    console.error('toggleMasterDataStatus error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -566,6 +705,8 @@ module.exports = {
   updateHospitalSettings,
   getMasterData,
   addMasterData,
+  updateMasterData,
+  toggleMasterDataStatus,
   getProfile,
   updateProfile,
   getBranches,

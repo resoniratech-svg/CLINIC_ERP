@@ -10,6 +10,8 @@ router.get('/hospital', authenticateToken, settingsController.getHospitalSetting
 router.put('/hospital', authenticateToken, authorizeRoles('super_admin'), settingsController.updateHospitalSettings);
 router.get('/masters/:type', authenticateToken, settingsController.getMasterData);
 router.post('/masters/:type', authenticateToken, authorizeRoles('super_admin'), settingsController.addMasterData);
+router.put('/masters/:type/:id', authenticateToken, authorizeRoles('super_admin'), settingsController.updateMasterData);
+router.patch('/masters/:type/:id/status', authenticateToken, authorizeRoles('super_admin'), settingsController.toggleMasterDataStatus);
 
 // Authenticated User Profile & Branches for Settings
 router.get('/profile', authenticateToken, settingsController.getProfile);

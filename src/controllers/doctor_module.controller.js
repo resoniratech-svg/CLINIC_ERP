@@ -506,9 +506,12 @@ async function searchDiagnoses(req, res) {
     const queryTerm = q ? `%${q}%` : '%';
 
     const result = await db.query(`
-      SELECT id, name, category FROM master_diagnoses
+      SELECT id, name, COALESCE(category, 'General') as category FROM master_diagnoses
       WHERE status = 'active' AND name ILIKE $1
-      ORDER BY name ASC LIMIT 20
+      UNION
+      SELECT id, name, 'Ailment' as category FROM master_ailments
+      WHERE status = 'active' AND name ILIKE $1
+      ORDER BY name ASC LIMIT 30
     `, [queryTerm]);
 
     return res.json(formatResponse(true, result.rows, 'Master diagnoses search retrieved successfully'));
