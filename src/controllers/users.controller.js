@@ -7,7 +7,34 @@ async function getUsers(req, res) {
     const { role, status, search } = req.query;
     let query = `
       SELECT u.user_id, u.employee_id, u.full_name, u.mobile_number, u.email, u.gender,
-             u.username, u.department, u.designation, u.role, u.status, u.last_login_at, u.created_at
+             u.username, u.department, u.designation, u.role, u.status, u.last_login_at, u.created_at,
+             CASE
+               WHEN u.role = 'receptionist' THEN (
+                 SELECT row_to_json(rp) FROM (
+                   SELECT registration, enquiry, appointment, checkin, consultation_fee_billing,
+                          payment_collection, crm_calling, followup, renewal, due_management
+                   FROM receptionist_permissions
+                   WHERE user_id = u.user_id
+                 ) rp
+               )
+               WHEN u.role = 'pro_manager' THEN (
+                 SELECT row_to_json(pp) FROM (
+                   SELECT counselling, billing, payment, due_collection, crm, followup,
+                          renewals, complaints, feedback, reports, accountant
+                   FROM pro_manager_permissions
+                   WHERE user_id = u.user_id
+                 ) pp
+               )
+               WHEN u.role = 'pharmacy' THEN (
+                 SELECT row_to_json(php) FROM (
+                   SELECT prescription_queue, dispensing, inventory, stock, batch, expiry,
+                          returns, stock_adjustment, stock_transactions
+                   FROM pharmacy_permissions
+                   WHERE user_id = u.user_id
+                 ) php
+               )
+               ELSE NULL
+             END as permissions
       FROM users u
       WHERE u.branch_id = $1 AND u.status::text != 'deleted'
     `;
