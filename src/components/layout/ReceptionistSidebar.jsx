@@ -22,7 +22,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 
 export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
 
   const [openSections, setOpenSections] = useState({
@@ -50,6 +50,26 @@ export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
         ? 'text-blue-700 font-bold bg-blue-50/80 border-l-2 border-blue-600 pl-2.5'
         : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50'
     }`;
+
+  // Compute which top-level sections are permitted at all
+  const canRegistration    = hasPermission('registration');
+  const canRenewal         = hasPermission('renewal');
+  const canEnquiry         = hasPermission('enquiry');
+  const canAppointment     = hasPermission('appointment');
+  const canCheckin         = hasPermission('checkin');
+  const canBilling         = hasPermission('consultation_fee_billing');
+  const canDueManagement   = hasPermission('due_management');
+  const canCrmCalling      = hasPermission('crm_calling');
+  const canFollowup        = hasPermission('followup');
+
+  // Registration section is visible if either registration OR renewal is permitted
+  const showRegistrationSection = canRegistration || canRenewal;
+  // Enquiries section is visible if enquiry is permitted
+  const showEnquiriesSection = canEnquiry;
+  // Billing section is visible if billing OR due management is permitted
+  const showBillingSection = canBilling || canDueManagement;
+  // CRM section is visible if crm_calling is permitted
+  const showCrmSection = canCrmCalling;
 
   return (
     <>
@@ -102,71 +122,79 @@ export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
 
         {/* Navigation Items (Scrollable) */}
         <nav className="flex-1 overflow-y-auto p-3 space-y-1 text-xs">
-          {/* Dashboard */}
+          {/* Dashboard — always visible */}
           <NavLink to="/receptionist/dashboard" className={navLinkClasses} onClick={onCloseMobile}>
             <LayoutDashboard className="w-4 h-4" />
             <span>Reception Dashboard</span>
           </NavLink>
 
-          {/* Patient Registration Group */}
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => toggleSection('registration')}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <div className="flex items-center gap-2.5">
-                <UserPlus className="w-4 h-4 text-blue-600" />
-                <span>Patient Registration</span>
-              </div>
-              <ChevronDown
-                className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                  openSections.registration ? 'rotate-180 text-blue-600' : 'text-slate-400'
-                }`}
-              />
-            </button>
-            {openSections.registration && (
-              <div className="pl-6 pt-1 space-y-0.5">
-                <NavLink to="/receptionist/patients" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>👤 Patients</span>
-                </NavLink>
-                <NavLink to="/receptionist/renewals" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>🔄 Registration Renewals</span>
-                </NavLink>
-              </div>
-            )}
-          </div>
+          {/* Patient Registration Group — requires: registration OR renewal */}
+          {showRegistrationSection && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => toggleSection('registration')}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <UserPlus className="w-4 h-4 text-blue-600" />
+                  <span>Patient Registration</span>
+                </div>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                    openSections.registration ? 'rotate-180 text-blue-600' : 'text-slate-400'
+                  }`}
+                />
+              </button>
+              {openSections.registration && (
+                <div className="pl-6 pt-1 space-y-0.5">
+                  {canRegistration && (
+                    <NavLink to="/receptionist/patients" className={subNavLinkClasses} onClick={onCloseMobile}>
+                      <span>👤 Patients</span>
+                    </NavLink>
+                  )}
+                  {canRenewal && (
+                    <NavLink to="/receptionist/renewals" className={subNavLinkClasses} onClick={onCloseMobile}>
+                      <span>🔄 Registration Renewals</span>
+                    </NavLink>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* Enquiries & Leads Group */}
-          <div>
-            <button
-              type="button"
-              onClick={() => toggleSection('enquiries')}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <div className="flex items-center gap-2.5">
-                <HelpCircle className="w-4 h-4 text-sky-600" />
-                <span>Enquiries & Leads</span>
-              </div>
-              <ChevronDown
-                className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                  openSections.enquiries ? 'rotate-180 text-sky-600' : 'text-slate-400'
-                }`}
-              />
-            </button>
-            {openSections.enquiries && (
-              <div className="pl-6 pt-1 space-y-0.5">
-                <NavLink to="/receptionist/enquiries" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>Patient Enquiries</span>
-                </NavLink>
-                <NavLink to="/receptionist/leads" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>Executive Leads Queue</span>
-                </NavLink>
-              </div>
-            )}
-          </div>
+          {/* Enquiries & Leads Group — requires: enquiry */}
+          {showEnquiriesSection && (
+            <div>
+              <button
+                type="button"
+                onClick={() => toggleSection('enquiries')}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <HelpCircle className="w-4 h-4 text-sky-600" />
+                  <span>Enquiries & Leads</span>
+                </div>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                    openSections.enquiries ? 'rotate-180 text-sky-600' : 'text-slate-400'
+                  }`}
+                />
+              </button>
+              {openSections.enquiries && (
+                <div className="pl-6 pt-1 space-y-0.5">
+                  <NavLink to="/receptionist/enquiries" className={subNavLinkClasses} onClick={onCloseMobile}>
+                    <span>Patient Enquiries</span>
+                  </NavLink>
+                  <NavLink to="/receptionist/leads" className={subNavLinkClasses} onClick={onCloseMobile}>
+                    <span>Executive Leads Queue</span>
+                  </NavLink>
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* Referrals Group */}
+          {/* Referrals Group — visible to all receptionists (no separate permission) */}
           <div>
             <button
               type="button"
@@ -195,80 +223,94 @@ export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
             )}
           </div>
 
-          {/* Appointments */}
-          <NavLink to="/receptionist/appointments" className={navLinkClasses} onClick={onCloseMobile}>
-            <Calendar className="w-4 h-4" />
-            <span>Doctor Appointments</span>
-          </NavLink>
+          {/* Appointments — requires: appointment */}
+          {canAppointment && (
+            <NavLink to="/receptionist/appointments" className={navLinkClasses} onClick={onCloseMobile}>
+              <Calendar className="w-4 h-4" />
+              <span>Doctor Appointments</span>
+            </NavLink>
+          )}
 
-          {/* Check-in & Waiting Queue */}
-          <NavLink to="/receptionist/check-in" className={navLinkClasses} onClick={onCloseMobile}>
-            <UserCheck className="w-4 h-4" />
-            <span>Check-in & Waiting Queue</span>
-          </NavLink>
+          {/* Check-in & Waiting Queue — requires: checkin */}
+          {canCheckin && (
+            <NavLink to="/receptionist/check-in" className={navLinkClasses} onClick={onCloseMobile}>
+              <UserCheck className="w-4 h-4" />
+              <span>Check-in & Waiting Queue</span>
+            </NavLink>
+          )}
 
-          {/* Consultation Billing & Payments */}
-          <div>
-            <button
-              type="button"
-              onClick={() => toggleSection('billing')}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <div className="flex items-center gap-2.5">
-                <Receipt className="w-4 h-4 text-emerald-600" />
-                <span>Consultation Billing</span>
-              </div>
-              <ChevronDown
-                className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                  openSections.billing ? 'rotate-180 text-emerald-600' : 'text-slate-400'
-                }`}
-              />
-            </button>
-            {openSections.billing && (
-              <div className="pl-6 pt-1 space-y-0.5">
-                <NavLink to="/receptionist/billing" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>Consultation Bills</span>
-                </NavLink>
-                <NavLink to="/receptionist/due-patients" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>Due Patients & Collection</span>
-                </NavLink>
-              </div>
-            )}
-          </div>
+          {/* Consultation Billing & Payments — requires: consultation_fee_billing OR due_management */}
+          {showBillingSection && (
+            <div>
+              <button
+                type="button"
+                onClick={() => toggleSection('billing')}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Receipt className="w-4 h-4 text-emerald-600" />
+                  <span>Consultation Billing</span>
+                </div>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                    openSections.billing ? 'rotate-180 text-emerald-600' : 'text-slate-400'
+                  }`}
+                />
+              </button>
+              {openSections.billing && (
+                <div className="pl-6 pt-1 space-y-0.5">
+                  {canBilling && (
+                    <NavLink to="/receptionist/billing" className={subNavLinkClasses} onClick={onCloseMobile}>
+                      <span>Consultation Bills</span>
+                    </NavLink>
+                  )}
+                  {canDueManagement && (
+                    <NavLink to="/receptionist/due-patients" className={subNavLinkClasses} onClick={onCloseMobile}>
+                      <span>Due Patients & Collection</span>
+                    </NavLink>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* CRM & Calling */}
-          <div>
-            <button
-              type="button"
-              onClick={() => toggleSection('crm')}
-              className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              <div className="flex items-center gap-2.5">
-                <PhoneCall className="w-4 h-4 text-red-600" />
-                <span>CRM & Calling</span>
-              </div>
-              <ChevronDown
-                className={`w-3.5 h-3.5 transition-transform duration-200 ${
-                  openSections.crm ? 'rotate-180 text-red-600' : 'text-slate-400'
-                }`}
-              />
-            </button>
-            {openSections.crm && (
-              <div className="pl-6 pt-1 space-y-0.5">
-                <NavLink to="/receptionist/crm" className={subNavLinkClasses} onClick={onCloseMobile}>
-                  <span>My Calls & Follow-ups</span>
-                </NavLink>
-              </div>
-            )}
-          </div>
+          {/* CRM & Calling — requires: crm_calling */}
+          {showCrmSection && (
+            <div>
+              <button
+                type="button"
+                onClick={() => toggleSection('crm')}
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-50 transition-colors"
+              >
+                <div className="flex items-center gap-2.5">
+                  <PhoneCall className="w-4 h-4 text-red-600" />
+                  <span>CRM & Calling</span>
+                </div>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                    openSections.crm ? 'rotate-180 text-red-600' : 'text-slate-400'
+                  }`}
+                />
+              </button>
+              {openSections.crm && (
+                <div className="pl-6 pt-1 space-y-0.5">
+                  <NavLink to="/receptionist/crm" className={subNavLinkClasses} onClick={onCloseMobile}>
+                    <span>My Calls & Follow-ups</span>
+                  </NavLink>
+                </div>
+              )}
+            </div>
+          )}
 
-          {/* My Tasks */}
-          <NavLink to="/receptionist/tasks" className={navLinkClasses} onClick={onCloseMobile}>
-            <CheckSquare className="w-4 h-4" />
-            <span>My Daily Tasks</span>
-          </NavLink>
+          {/* My Tasks — requires: followup */}
+          {canFollowup && (
+            <NavLink to="/receptionist/tasks" className={navLinkClasses} onClick={onCloseMobile}>
+              <CheckSquare className="w-4 h-4" />
+              <span>My Daily Tasks</span>
+            </NavLink>
+          )}
 
-          {/* My Profile */}
+          {/* My Profile — always visible */}
           <NavLink to="/receptionist/profile" className={navLinkClasses} onClick={onCloseMobile}>
             <User className="w-4 h-4" />
             <span>My Profile & Password</span>

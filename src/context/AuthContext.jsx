@@ -56,10 +56,36 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  /**
+   * hasPermission(key)
+   *
+   * Returns true if the current user is allowed to access the given module.
+   *
+   * Rules:
+   *   - super_admin      → always true (unrestricted)
+   *   - receptionist     → checks user.permissions[key] === true
+   *   - all other roles  → always true (their access is controlled by role-level RBAC, not granular)
+   *
+   * @param {string} key - one of: registration, enquiry, appointment, checkin,
+   *   consultation_fee_billing, payment_collection, crm_calling, followup, renewal, due_management
+   * @returns {boolean}
+   */
+  const hasPermission = (key) => {
+    if (!user) return false;
+    if (user.role === 'super_admin') return true;
+    if (user.role === 'receptionist') {
+      // permissions must be an object with boolean values
+      if (!user.permissions || typeof user.permissions !== 'object') return false;
+      return user.permissions[key] === true;
+    }
+    // Other roles (doctor, pro_manager, executive, pharmacy) use role-level RBAC only
+    return true;
+  };
+
   const isSuperAdmin = user?.role === 'super_admin';
 
   return (
-    <AuthContext.Provider value={{ token, user, isSuperAdmin, loading, login, logout, updateUser }}>
+    <AuthContext.Provider value={{ token, user, isSuperAdmin, loading, login, logout, updateUser, hasPermission }}>
       {children}
     </AuthContext.Provider>
   );

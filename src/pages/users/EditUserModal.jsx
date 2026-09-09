@@ -4,6 +4,20 @@ import { usersApi, settingsApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import { UserCheck, Loader2, Edit3, Shield } from 'lucide-react';
 
+// Canonical receptionist permission labels matching CreateUserModal
+const RECEPTIONIST_PERMISSION_LABELS = {
+  registration:            'Registration',
+  enquiry:                 'Enquiry',
+  appointment:             'Appointment',
+  checkin:                 'Check-in',
+  consultation_fee_billing:'Consultation Fee Billing',
+  payment_collection:      'Payment Collection',
+  crm_calling:             'CRM Calling',
+  followup:                'Follow-up',
+  renewal:                 'Renewal',
+  due_management:          'Due Management',
+};
+
 export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
   const [formData, setFormData] = useState({
     full_name: '',
@@ -14,6 +28,21 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
     designation: '',
     status: 'active',
   });
+
+  // Receptionist granular permissions (only shown/used when role === 'receptionist')
+  const [receptionistPerms, setReceptionistPerms] = useState({
+    registration: true,
+    enquiry: true,
+    appointment: true,
+    checkin: true,
+    consultation_fee_billing: true,
+    payment_collection: true,
+    crm_calling: true,
+    followup: true,
+    renewal: true,
+    due_management: true,
+  });
+
   const [loading, setLoading] = useState(false);
   const [departmentsList, setDepartmentsList] = useState([]);
   const { showToast } = useToast();
@@ -35,6 +64,29 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         designation: user.designation || '',
         status: user.status || 'active',
       });
+
+      // Populate receptionist permissions from the user object if available
+      if (user.role === 'receptionist' && user.permissions) {
+        setReceptionistPerms({
+          registration:            user.permissions.registration            ?? true,
+          enquiry:                 user.permissions.enquiry                 ?? true,
+          appointment:             user.permissions.appointment             ?? true,
+          checkin:                 user.permissions.checkin                 ?? true,
+          consultation_fee_billing:user.permissions.consultation_fee_billing?? true,
+          payment_collection:      user.permissions.payment_collection      ?? true,
+          crm_calling:             user.permissions.crm_calling             ?? true,
+          followup:                user.permissions.followup                ?? true,
+          renewal:                 user.permissions.renewal                 ?? true,
+          due_management:          user.permissions.due_management          ?? true,
+        });
+      } else if (user.role === 'receptionist') {
+        // Default to all true if no permissions row yet (legacy user)
+        setReceptionistPerms({
+          registration: true, enquiry: true, appointment: true, checkin: true,
+          consultation_fee_billing: true, payment_collection: true, crm_calling: true,
+          followup: true, renewal: true, due_management: true,
+        });
+      }
     }
   }, [user]);
 
@@ -47,7 +99,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
 
     setLoading(true);
     try {
-      const res = await usersApi.updateUser(user.user_id, {
+      const payload = {
         full_name: formData.full_name.trim(),
         mobile_number: formData.mobile_number.trim(),
         email: formData.email.trim() || null,
@@ -55,7 +107,14 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         department: formData.department.trim() || null,
         designation: formData.designation.trim() || null,
         status: formData.status,
-      });
+      };
+
+      // Include permissions in the payload when editing a receptionist
+      if (user.role === 'receptionist') {
+        payload.permissions = receptionistPerms;
+      }
+
+      const res = await usersApi.updateUser(user.user_id, payload);
 
       if (res.success) {
         showToast(`Staff member ${formData.full_name} updated successfully`, 'success');
@@ -190,6 +249,34 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
             </div>
           </div>
         </div>
+
+        {/* Receptionist Granular Permissions — shown only for receptionist role */}
+        {user.role === 'receptionist' && (
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-blue-600" />
+              <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">Receptionist Granular Permissions</h4>
+            </div>
+            <div className="bg-blue-50/50 p-3.5 rounded-2xl border border-blue-200/70">
+              <div className="grid grid-cols-2 gap-2.5 text-xs text-slate-700">
+                {Object.entries(RECEPTIONIST_PERMISSION_LABELS).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={receptionistPerms[key] === true}
+                      onChange={(e) => setReceptionistPerms({ ...receptionistPerms, [key]: e.target.checked })}
+                      className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                    />
+                    <span className="text-[11px] font-medium">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2.5 text-[10px] text-blue-600 font-medium">
+                ⚠ The Receptionist must log out and log back in for permission changes to take effect.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Modal Actions */}
         <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-200">

@@ -2,6 +2,7 @@ import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
+import { PermissionGate } from './components/common/PermissionGate';
 
 // Layouts
 import { SuperAdminLayout } from './components/layout/SuperAdminLayout';
@@ -180,32 +181,84 @@ export default function App() {
             <Route index element={<Navigate to="/receptionist/dashboard" replace />} />
             <Route path="dashboard" element={<ReceptionistDashboard />} />
 
-            {/* Patient Registration */}
-            <Route path="patients" element={<PatientSearchPage />} />
-            <Route path="patients/register" element={<NewRegistrationPage />} />
-            <Route path="renewals" element={<RenewalsPage />} />
+            {/* Patient Registration — permission: registration */}
+            <Route path="patients" element={
+              <PermissionGate permission="registration">
+                <PatientSearchPage />
+              </PermissionGate>
+            } />
+            <Route path="patients/register" element={
+              <PermissionGate permission="registration">
+                <NewRegistrationPage />
+              </PermissionGate>
+            } />
 
-            {/* Enquiries & Leads */}
-            <Route path="enquiries" element={<EnquiriesPage />} />
-            <Route path="leads" element={<ExecutiveLeadsQueuePage />} />
+            {/* Renewals — permission: renewal */}
+            <Route path="renewals" element={
+              <PermissionGate permission="renewal">
+                <RenewalsPage />
+              </PermissionGate>
+            } />
 
-            {/* Referrals */}
+            {/* Enquiries & Leads — permission: enquiry */}
+            <Route path="enquiries" element={
+              <PermissionGate permission="enquiry">
+                <EnquiriesPage />
+              </PermissionGate>
+            } />
+            <Route path="leads" element={
+              <PermissionGate permission="enquiry">
+                <ExecutiveLeadsQueuePage />
+              </PermissionGate>
+            } />
+
+            {/* Referrals — no separate permission gate (tied to general receptionist access) */}
             <Route path="referrals/employee" element={<EmployeeReferralsPage />} />
             <Route path="referrals/patient" element={<PatientReferralsPage />} />
 
-            {/* Appointments */}
-            <Route path="appointments" element={<ReceptionistAppointmentsPage />} />
-            <Route path="check-in" element={<CheckinQueuePage />} />
+            {/* Appointments — permission: appointment */}
+            <Route path="appointments" element={
+              <PermissionGate permission="appointment">
+                <ReceptionistAppointmentsPage />
+              </PermissionGate>
+            } />
 
-            {/* Billing & Dues */}
-            <Route path="billing" element={<ConsultationBillingPage />} />
-            <Route path="due-patients" element={<DuePatientsPage />} />
+            {/* Check-in — permission: checkin */}
+            <Route path="check-in" element={
+              <PermissionGate permission="checkin">
+                <CheckinQueuePage />
+              </PermissionGate>
+            } />
 
-            {/* CRM & Tasks */}
-            <Route path="crm" element={<ReceptionistCrmPage />} />
-            <Route path="tasks" element={<MyTasksPage />} />
+            {/* Consultation Billing — permission: consultation_fee_billing */}
+            <Route path="billing" element={
+              <PermissionGate permission="consultation_fee_billing">
+                <ConsultationBillingPage />
+              </PermissionGate>
+            } />
 
-            {/* Profile */}
+            {/* Due Patients — permission: due_management */}
+            <Route path="due-patients" element={
+              <PermissionGate permission="due_management">
+                <DuePatientsPage />
+              </PermissionGate>
+            } />
+
+            {/* CRM — permission: crm_calling */}
+            <Route path="crm" element={
+              <PermissionGate permission="crm_calling">
+                <ReceptionistCrmPage />
+              </PermissionGate>
+            } />
+
+            {/* Tasks / Follow-ups — permission: followup */}
+            <Route path="tasks" element={
+              <PermissionGate permission="followup">
+                <MyTasksPage />
+              </PermissionGate>
+            } />
+
+            {/* Profile — always accessible */}
             <Route path="profile" element={<ReceptionistProfilePage />} />
           </Route>
 
