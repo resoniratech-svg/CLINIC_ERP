@@ -50,6 +50,31 @@ async function login(req, res) {
       VALUES ($1, $2, $3, $4, $5, $6, 'success') RETURNING id
     `, [user.user_id, user.role, ip, device, browser, user.branch_name]);
 
+    // Fetch granular permissions for receptionist role
+    let receptionistPermissions = null;
+    if (user.role === 'receptionist') {
+      const permRes = await db.query(
+        `SELECT registration, enquiry, appointment, checkin, consultation_fee_billing,
+                payment_collection, crm_calling, followup, renewal, due_management
+         FROM receptionist_permissions WHERE user_id = $1`,
+        [user.user_id]
+      );
+      if (permRes.rows.length > 0) {
+        receptionistPermissions = permRes.rows[0];
+      } else {
+        // Legacy receptionist without a permissions row — insert defaults (full access)
+        await db.query(
+          `INSERT INTO receptionist_permissions (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`,
+          [user.user_id]
+        );
+        receptionistPermissions = {
+          registration: true, enquiry: true, appointment: true, checkin: true,
+          consultation_fee_billing: true, payment_collection: true, crm_calling: true,
+          followup: true, renewal: true, due_management: true
+        };
+      }
+    }
+
     const payload = {
       user_id: user.user_id,
       employee_id: user.employee_id,
@@ -57,7 +82,9 @@ async function login(req, res) {
       username: user.username,
       role: user.role,
       branch_id: user.branch_id,
-      login_log_id: loginLogRes.rows[0].id
+      login_log_id: loginLogRes.rows[0].id,
+      // Embed permissions in JWT so backend middleware can verify without an extra DB query
+      ...(receptionistPermissions && { receptionist_permissions: receptionistPermissions })
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET || 'super_secret_jwt_key_123!', {
@@ -72,7 +99,9 @@ async function login(req, res) {
         full_name: user.full_name,
         role: user.role,
         branch_id: user.branch_id,
-        must_change_password: user.must_change_password
+        must_change_password: user.must_change_password,
+        // Include permissions in login response so the frontend AuthContext can store them
+        ...(receptionistPermissions && { permissions: receptionistPermissions })
       }
     }, 'Login successful'));
 

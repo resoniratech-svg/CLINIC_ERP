@@ -251,6 +251,41 @@ async function updateUser(req, res) {
       }
     }
 
+    // Update granular permissions if the user is a receptionist and permissions were provided
+    if (oldUser.role === 'receptionist' && req.body.permissions) {
+      const p = req.body.permissions;
+      await db.query(`
+        INSERT INTO receptionist_permissions (
+          user_id, registration, enquiry, appointment, checkin, consultation_fee_billing,
+          payment_collection, crm_calling, followup, renewal, due_management, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+        ON CONFLICT (user_id) DO UPDATE SET
+          registration = EXCLUDED.registration,
+          enquiry = EXCLUDED.enquiry,
+          appointment = EXCLUDED.appointment,
+          checkin = EXCLUDED.checkin,
+          consultation_fee_billing = EXCLUDED.consultation_fee_billing,
+          payment_collection = EXCLUDED.payment_collection,
+          crm_calling = EXCLUDED.crm_calling,
+          followup = EXCLUDED.followup,
+          renewal = EXCLUDED.renewal,
+          due_management = EXCLUDED.due_management,
+          updated_at = now()
+      `, [
+        userId,
+        p.registration !== undefined ? p.registration : true,
+        p.enquiry !== undefined ? p.enquiry : true,
+        p.appointment !== undefined ? p.appointment : true,
+        p.checkin !== undefined ? p.checkin : true,
+        p.consultation_fee_billing !== undefined ? p.consultation_fee_billing : true,
+        p.payment_collection !== undefined ? p.payment_collection : true,
+        p.crm_calling !== undefined ? p.crm_calling : true,
+        p.followup !== undefined ? p.followup : true,
+        p.renewal !== undefined ? p.renewal : true,
+        p.due_management !== undefined ? p.due_management : true
+      ]);
+    }
+
     res.locals.auditEntry = { module: 'User Management', action: 'Update User', recordId: userId, oldValue: oldUser, newValue: req.body };
     return res.json(formatResponse(true, null, 'User updated successfully'));
   } catch (err) {

@@ -2,75 +2,100 @@ const express = require('express');
 const router = express.Router();
 const receptionistController = require('../controllers/receptionist.controller');
 const { authenticateToken } = require('../middleware/auth');
-const { authorizeRoles, checkPermission } = require('../middleware/rbac');
+const { authorizeRoles, requireReceptionistPermission } = require('../middleware/rbac');
 
 // All Receptionist routes require authentication and Receptionist or Super Admin role
 router.use(authenticateToken);
 router.use(authorizeRoles('receptionist', 'super_admin'));
 
-// 3.2 Dashboard
+// ──────────────────────────────────────────────────────────────────────────────
+// Dashboard — always accessible (no granular permission required)
+// ──────────────────────────────────────────────────────────────────────────────
 router.get('/dashboard', receptionistController.getDashboard);
 
-// 3.3 Patient Search & 3.4 Overview
+// ──────────────────────────────────────────────────────────────────────────────
+// Patient Search & Overview — always accessible (read-only, no granular lock)
+// ──────────────────────────────────────────────────────────────────────────────
 router.get('/patients/search', receptionistController.searchPatients);
 router.get('/patients/:id/overview', receptionistController.getPatientOverview);
-
-// 3.5 New Patient Registration
-router.post('/patients/register', checkPermission('Registration'), receptionistController.registerPatient);
-router.post('/register-walkin', checkPermission('Registration'), receptionistController.registerPatient);
-router.post('/register', checkPermission('Registration'), receptionistController.registerPatient);
-
-// 3.6 Enquiries
-router.post('/enquiries', receptionistController.createEnquiry);
-router.get('/enquiries', receptionistController.getEnquiries);
-
-// 3.7 Referrals
-router.post('/referrals/employee', receptionistController.createEmployeeReferral);
-router.get('/referrals/employee', receptionistController.getEmployeeReferrals);
-router.post('/referrals/patient', receptionistController.createPatientReferral);
-router.get('/referrals/patient', receptionistController.getPatientReferrals);
+router.get('/patients/:id/invoices', receptionistController.getPatientInvoices);
+router.get('/doctors', receptionistController.getActiveDoctors);
 router.get('/employees', receptionistController.getEligibleEmployees);
 
-// 3.8 Executive Lead Queue
-router.get('/leads', receptionistController.getExecutiveLeads);
-router.post('/leads/:id/open', receptionistController.openExecutiveLead);
-router.post('/leads/:id/assign', receptionistController.assignExecutiveLeadDoctor);
+// ──────────────────────────────────────────────────────────────────────────────
+// Registration  →  permission: registration
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/patients/register', requireReceptionistPermission('registration'), receptionistController.registerPatient);
+router.post('/register-walkin',   requireReceptionistPermission('registration'), receptionistController.registerPatient);
+router.post('/register',          requireReceptionistPermission('registration'), receptionistController.registerPatient);
 
-// 3.9 Doctor Assignment
-router.get('/doctors', receptionistController.getActiveDoctors);
+// ──────────────────────────────────────────────────────────────────────────────
+// Enquiries  →  permission: enquiry
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/enquiries', requireReceptionistPermission('enquiry'), receptionistController.createEnquiry);
+router.get('/enquiries',  requireReceptionistPermission('enquiry'), receptionistController.getEnquiries);
 
-// 3.10 Appointments
-router.post('/appointments', receptionistController.createAppointment);
-router.get('/appointments', receptionistController.getAppointments);
-router.post('/appointments/:id/reschedule', receptionistController.rescheduleAppointment);
-router.post('/appointments/:id/cancel', receptionistController.cancelAppointment);
+// ──────────────────────────────────────────────────────────────────────────────
+// Referrals — tied to enquiry/registration scope; no separate permission
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/referrals/employee', receptionistController.createEmployeeReferral);
+router.get('/referrals/employee',  receptionistController.getEmployeeReferrals);
+router.post('/referrals/patient',  receptionistController.createPatientReferral);
+router.get('/referrals/patient',   receptionistController.getPatientReferrals);
 
-// 3.11 Consultation Fee Billing & Invoices
-router.post('/billing/bills', receptionistController.createConsultationBill);
-router.get('/billing/bills', receptionistController.getConsultationBills);
-router.get('/patients/:id/invoices', receptionistController.getPatientInvoices);
-router.get('/consultation-fee', receptionistController.getConsultationFee);
+// ──────────────────────────────────────────────────────────────────────────────
+// Executive Lead Queue — tied to enquiry scope
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/leads',              requireReceptionistPermission('enquiry'), receptionistController.getExecutiveLeads);
+router.post('/leads/:id/open',    requireReceptionistPermission('enquiry'), receptionistController.openExecutiveLead);
+router.post('/leads/:id/assign',  requireReceptionistPermission('enquiry'), receptionistController.assignExecutiveLeadDoctor);
 
-// 3.13 Check-in & Waiting Queue
-router.post('/appointments/:id/checkin', receptionistController.checkinAppointment);
-router.put('/appointments/:id/checkin', receptionistController.checkinAppointment);
-router.get('/checkin/waiting', receptionistController.getWaitingQueue);
+// ──────────────────────────────────────────────────────────────────────────────
+// Appointments  →  permission: appointment
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/appointments',                  requireReceptionistPermission('appointment'), receptionistController.createAppointment);
+router.get('/appointments',                   requireReceptionistPermission('appointment'), receptionistController.getAppointments);
+router.post('/appointments/:id/reschedule',   requireReceptionistPermission('appointment'), receptionistController.rescheduleAppointment);
+router.post('/appointments/:id/cancel',       requireReceptionistPermission('appointment'), receptionistController.cancelAppointment);
 
-// 3.14 Renewals
-router.post('/renewals', receptionistController.renewRegistration);
+// ──────────────────────────────────────────────────────────────────────────────
+// Check-in & Waiting Queue  →  permission: checkin
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/appointments/:id/checkin', requireReceptionistPermission('checkin'), receptionistController.checkinAppointment);
+router.put('/appointments/:id/checkin',  requireReceptionistPermission('checkin'), receptionistController.checkinAppointment);
+router.get('/checkin/waiting',           requireReceptionistPermission('checkin'), receptionistController.getWaitingQueue);
 
-// 3.15 Due Patients
-router.get('/due-patients', receptionistController.getDuePatients);
-router.post('/due-patients/:id/collect', receptionistController.collectDuePayment);
+// ──────────────────────────────────────────────────────────────────────────────
+// Consultation Fee & Billing  →  permission: consultation_fee_billing
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/billing/bills',   requireReceptionistPermission('consultation_fee_billing'), receptionistController.createConsultationBill);
+router.get('/billing/bills',    requireReceptionistPermission('consultation_fee_billing'), receptionistController.getConsultationBills);
+router.get('/consultation-fee', requireReceptionistPermission('consultation_fee_billing'), receptionistController.getConsultationFee);
 
-// 3.16 CRM Calls
-router.post('/crm/calls', receptionistController.logCallRecord);
-router.get('/crm/calls', receptionistController.getCallRecords);
+// ──────────────────────────────────────────────────────────────────────────────
+// Due Patients & Payment Collection  →  permission: due_management
+// (collecting payment also requires payment_collection — both checked)
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/due-patients',              requireReceptionistPermission('due_management'),    receptionistController.getDuePatients);
+router.post('/due-patients/:id/collect', requireReceptionistPermission('due_management'),    receptionistController.collectDuePayment);
 
-// 3.17 My Tasks
-router.get('/my-tasks', receptionistController.getMyTasks);
-router.post('/my-tasks/:call_id/complete', receptionistController.completeTask);
-router.post('/my-tasks/:call_id/reschedule', receptionistController.rescheduleTask);
-router.put('/my-tasks/:call_id/reschedule', receptionistController.rescheduleTask);
+// ──────────────────────────────────────────────────────────────────────────────
+// Renewals  →  permission: renewal
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/renewals', requireReceptionistPermission('renewal'), receptionistController.renewRegistration);
+
+// ──────────────────────────────────────────────────────────────────────────────
+// CRM Calls  →  permission: crm_calling
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/crm/calls', requireReceptionistPermission('crm_calling'), receptionistController.logCallRecord);
+router.get('/crm/calls',  requireReceptionistPermission('crm_calling'), receptionistController.getCallRecords);
+
+// ──────────────────────────────────────────────────────────────────────────────
+// My Tasks (follow-ups)  →  permission: followup
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/my-tasks',                        requireReceptionistPermission('followup'), receptionistController.getMyTasks);
+router.post('/my-tasks/:call_id/complete',     requireReceptionistPermission('followup'), receptionistController.completeTask);
+router.post('/my-tasks/:call_id/reschedule',   requireReceptionistPermission('followup'), receptionistController.rescheduleTask);
+router.put('/my-tasks/:call_id/reschedule',    requireReceptionistPermission('followup'), receptionistController.rescheduleTask);
 
 module.exports = router;
