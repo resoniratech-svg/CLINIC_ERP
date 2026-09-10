@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { receptionistApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -103,6 +103,37 @@ export const NewRegistrationPage = () => {
   const ptDropdownRef = useRef(null);
   const [searchingPt, setSearchingPt] = useState(false);
   const [ailmentsList, setAilmentsList] = useState([]);
+  const [isAilmentDropdownOpen, setIsAilmentDropdownOpen] = useState(false);
+  const [ailmentDropdownDirection, setAilmentDropdownDirection] = useState('down');
+  const [ailmentMaxHeight, setAilmentMaxHeight] = useState(260);
+  const ailmentDropdownRef = useRef(null);
+
+  const filteredAilments = useMemo(() => {
+    if (!formData.ailment_reason || !formData.ailment_reason.trim()) {
+      return ailmentsList;
+    }
+    const q = formData.ailment_reason.toLowerCase().trim();
+    return ailmentsList.filter((a) => (a.name || '').toLowerCase().includes(q));
+  }, [ailmentsList, formData.ailment_reason]);
+
+  const updateAilmentDropdownPosition = () => {
+    if (!ailmentDropdownRef.current) return;
+    const rect = ailmentDropdownRef.current.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const spaceBelow = viewportHeight - rect.bottom;
+    const spaceAbove = rect.top;
+
+    const dropdownPreferredHeight = 260;
+    const margin = 16;
+
+    if (spaceBelow < dropdownPreferredHeight && spaceAbove > spaceBelow) {
+      setAilmentDropdownDirection('up');
+      setAilmentMaxHeight(Math.max(120, Math.min(dropdownPreferredHeight, spaceAbove - margin)));
+    } else {
+      setAilmentDropdownDirection('down');
+      setAilmentMaxHeight(Math.max(120, Math.min(dropdownPreferredHeight, spaceBelow - margin)));
+    }
+  };
   const [villagesList, setVillagesList] = useState([]);
   const [mandalsList, setMandalsList] = useState([]);
   const [leadSourcesList, setLeadSourcesList] = useState([]);
@@ -199,10 +230,27 @@ export const NewRegistrationPage = () => {
       if (ptDropdownRef.current && !ptDropdownRef.current.contains(event.target)) {
         setIsPtDropdownOpen(false);
       }
+      if (ailmentDropdownRef.current && !ailmentDropdownRef.current.contains(event.target)) {
+        setIsAilmentDropdownOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!isAilmentDropdownOpen) return;
+    updateAilmentDropdownPosition();
+    const handleScrollOrResize = () => {
+      updateAilmentDropdownPosition();
+    };
+    window.addEventListener('scroll', handleScrollOrResize, { passive: true, capture: true });
+    window.addEventListener('resize', handleScrollOrResize, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScrollOrResize, { capture: true });
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [isAilmentDropdownOpen]);
 
   const handleSearchReferringPatient = async () => {
     if (!ptSearchTerm.trim()) {
@@ -529,23 +577,118 @@ export const NewRegistrationPage = () => {
             </div>
 
             {/* Reason for Visit */}
-            <div>
+            <div className="relative" ref={ailmentDropdownRef}>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                 Ailment / Reason for Visit (Optional)
               </label>
-              <input
-                type="text"
-                list="registered-ailments-datalist"
-                value={formData.ailment_reason}
-                onChange={(e) => setFormData({ ...formData, ailment_reason: e.target.value })}
-                placeholder="e.g. Fever, Bronchial Asthma, Allergy"
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-              <datalist id="registered-ailments-datalist">
-                {ailmentsList.map((a) => (
-                  <option key={a.id || a.name} value={a.name} />
-                ))}
-              </datalist>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={formData.ailment_reason}
+                  onFocus={() => {
+                    updateAilmentDropdownPosition();
+                    setIsAilmentDropdownOpen(true);
+                  }}
+                  onChange={(e) => {
+                    setFormData((prev) => ({ ...prev, ailment_reason: e.target.value }));
+                    updateAilmentDropdownPosition();
+                    setIsAilmentDropdownOpen(true);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setIsAilmentDropdownOpen(false);
+                    }
+                  }}
+                  placeholder="e.g. Fever, Bronchial Asthma, Allergy"
+                  className="w-full pl-3 pr-14 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all font-medium"
+                />
+
+                <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                  {formData.ailment_reason && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFormData((prev) => ({ ...prev, ailment_reason: '' }));
+                      }}
+                      className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer transition-colors"
+                      title="Clear ailment"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isAilmentDropdownOpen) {
+                        updateAilmentDropdownPosition();
+                        setIsAilmentDropdownOpen(true);
+                      } else {
+                        setIsAilmentDropdownOpen(false);
+                      }
+                    }}
+                    className="text-slate-400 hover:text-slate-600 p-1 rounded-md cursor-pointer transition-colors"
+                    tabIndex={-1}
+                    title="Toggle ailments list"
+                  >
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                        isAilmentDropdownOpen ? 'rotate-180 text-blue-600' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Viewport-aware Floating Ailment Dropdown */}
+              {isAilmentDropdownOpen && (
+                <div
+                  style={{ maxHeight: `${ailmentMaxHeight}px` }}
+                  className={`absolute left-0 right-0 w-full bg-white rounded-2xl border border-slate-200 shadow-xl overflow-y-auto z-50 divide-y divide-slate-100 ${
+                    ailmentDropdownDirection === 'up'
+                      ? 'bottom-full mb-1'
+                      : 'top-full mt-1'
+                  }`}
+                >
+                  {ailmentsList.length === 0 ? (
+                    <div className="p-3 text-center text-slate-400 text-xs">
+                      No registered ailments found in master data.
+                    </div>
+                  ) : filteredAilments.length === 0 ? (
+                    <div className="p-3 text-center text-slate-500 text-xs space-y-1">
+                      <div>No registered ailments matching "{formData.ailment_reason}".</div>
+                      <div className="text-[10px] text-slate-400">
+                        Click outside or keep typing to use this custom entry.
+                      </div>
+                    </div>
+                  ) : (
+                    filteredAilments.map((a) => {
+                      const isSelected =
+                        (formData.ailment_reason || '').trim().toLowerCase() ===
+                        (a.name || '').trim().toLowerCase();
+                      return (
+                        <div
+                          key={a.id || a.name}
+                          onClick={() => {
+                            setFormData((prev) => ({ ...prev, ailment_reason: a.name }));
+                            setIsAilmentDropdownOpen(false);
+                          }}
+                          className={`px-3.5 py-2.5 hover:bg-blue-50/80 cursor-pointer transition-colors flex items-center justify-between text-xs ${
+                            isSelected
+                              ? 'bg-blue-50 font-bold text-blue-900'
+                              : 'text-slate-700'
+                          }`}
+                        >
+                          <span className="truncate pr-2 font-medium">{a.name}</span>
+                          {isSelected && (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
             </div>
           </div>
 
