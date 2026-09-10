@@ -398,6 +398,7 @@ export const proApi = {
 export const couponsApi = {
   getCoupons: (params) => axiosClient.get('/coupons', { params }),
   getCouponById: (id) => axiosClient.get(`/coupons/${id}`),
+  getPatientCoupons: (patientId) => axiosClient.get(`/coupons/patient/${patientId}`),
   generateCode: (params) => axiosClient.get('/coupons/generate-code', { params }),
   createCoupon: (data) => axiosClient.post('/coupons', data),
   updateCoupon: (id, data) => axiosClient.put(`/coupons/${id}`, data),

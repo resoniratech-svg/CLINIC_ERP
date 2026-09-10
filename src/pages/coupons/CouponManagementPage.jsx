@@ -128,6 +128,17 @@ export const CouponManagementPage = () => {
     }
   };
 
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '—';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return String(dateStr).split('T')[0];
+      return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    } catch {
+      return String(dateStr);
+    }
+  };
+
   const getStatusBadge = (status) => {
     const config = {
       active: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' },
@@ -458,12 +469,12 @@ export const CouponManagementPage = () => {
 
                     {/* Valid From */}
                     <td className="p-3.5 text-slate-600 text-xs whitespace-nowrap">
-                      {c.valid_from}
+                      {formatDate(c.valid_from)}
                     </td>
 
                     {/* Valid Until */}
                     <td className="p-3.5 text-slate-600 text-xs whitespace-nowrap">
-                      {c.valid_until}
+                      {formatDate(c.valid_until)}
                     </td>
 
                     {/* Status */}

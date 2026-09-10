@@ -18,46 +18,76 @@ import {
 } from 'lucide-react';
 
 export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
+  const [currentCouponId, setCurrentCouponId] = useState(couponId);
   const [coupon, setCoupon] = useState(null);
+  const [patientWallet, setPatientWallet] = useState(null);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (isOpen && couponId) {
+    setCurrentCouponId(couponId);
+  }, [couponId]);
+
+  useEffect(() => {
+    if (isOpen && currentCouponId) {
       setLoading(true);
-      couponsApi.getCouponById(couponId)
-        .then((res) => {
+      couponsApi.getCouponById(currentCouponId)
+        .then(async (res) => {
           if (res.success && res.data) {
             setCoupon(res.data);
+            // Fetch patient's entire referral coupon wallet
+            if (res.data.referring_patient_id) {
+              try {
+                const walletRes = await couponsApi.getPatientCoupons(res.data.referring_patient_id);
+                if (walletRes.success && walletRes.data) {
+                  setPatientWallet(walletRes.data);
+                }
+              } catch (wErr) {
+                console.warn('Failed to fetch patient wallet:', wErr);
+              }
+            }
           }
         })
         .catch((err) => console.error('Failed to fetch coupon details:', err))
         .finally(() => setLoading(false));
     } else {
       setCoupon(null);
+      setPatientWallet(null);
     }
-  }, [isOpen, couponId]);
+  }, [isOpen, currentCouponId]);
 
-  const handleCopyCode = () => {
-    if (!coupon?.coupon_code) return;
-    navigator.clipboard.writeText(coupon.coupon_code);
-    setCopied(true);
+  const handleCopyCode = (codeToCopy = null) => {
+    const code = codeToCopy || coupon?.coupon_code;
+    if (!code) return;
+    navigator.clipboard.writeText(code);
+    setCopied(code);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const formatDate = (val) => {
+    if (!val) return '—';
+    try {
+      const d = new Date(val);
+      if (isNaN(d.getTime())) return String(val).split('T')[0];
+      return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+    } catch {
+      return String(val).split('T')[0];
+    }
   };
 
   const getStatusBadge = (status) => {
     const config = {
-      active: { bg: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' },
-      inactive: { bg: 'bg-slate-100 text-slate-600 border-slate-200', dot: 'bg-slate-400' },
-      redeemed: { bg: 'bg-purple-50 text-purple-700 border-purple-200', dot: 'bg-purple-500' },
-      expired: { bg: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
-      cancelled: { bg: 'bg-rose-50 text-rose-700 border-rose-200', dot: 'bg-rose-500' },
+      active: { label: 'AVAILABLE / ACTIVE', bg: 'bg-emerald-50 text-emerald-700 border-emerald-200', dot: 'bg-emerald-500' },
+      inactive: { label: 'INACTIVE', bg: 'bg-slate-100 text-slate-600 border-slate-200', dot: 'bg-slate-400' },
+      redeemed: { label: 'REDEEMED', bg: 'bg-purple-50 text-purple-700 border-purple-200', dot: 'bg-purple-500' },
+      expired: { label: 'EXPIRED', bg: 'bg-amber-50 text-amber-700 border-amber-200', dot: 'bg-amber-500' },
+      cancelled: { label: 'CANCELLED', bg: 'bg-rose-50 text-rose-700 border-rose-200', dot: 'bg-rose-500' },
     };
     const c = config[status] || config.inactive;
     return (
-      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border uppercase tracking-wider ${c.bg}`}>
+      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-black border uppercase tracking-wider ${c.bg}`}>
         <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
-        {status}
+        {c.label}
       </span>
     );
   };
@@ -67,15 +97,15 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
       isOpen={isOpen}
       onClose={onClose}
       title={coupon ? `Coupon: ${coupon.coupon_code}` : 'Coupon Details'}
-      maxWidth="max-w-2xl"
+      maxWidth="max-w-3xl"
     >
       {loading || !coupon ? (
         <div className="py-12 flex flex-col items-center justify-center gap-3">
           <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
-          <span className="text-xs text-slate-500 font-medium">Loading coupon details...</span>
+          <span className="text-xs text-slate-500 font-medium">Loading coupon details & wallet...</span>
         </div>
       ) : (
-        <div className="space-y-5 text-xs text-slate-700">
+        <div className="space-y-5 text-xs text-slate-700 max-h-[78vh] overflow-y-auto pr-1">
           {/* Header Card */}
           <div className="p-4 bg-gradient-to-r from-blue-50/80 via-indigo-50/50 to-white rounded-2xl border border-blue-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div>
@@ -85,15 +115,15 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
                 </span>
                 <button
                   type="button"
-                  onClick={handleCopyCode}
+                  onClick={() => handleCopyCode(coupon.coupon_code)}
                   className="p-1 hover:bg-white rounded-lg border border-slate-200 text-slate-500 hover:text-blue-600 transition-colors"
                   title="Copy coupon code"
                 >
-                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copied === coupon.coupon_code ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
               </div>
               <div className="text-[11px] text-slate-500 mt-0.5">
-                Created on {new Date(coupon.created_at).toLocaleDateString()} by {coupon.created_by_name || 'System Admin'}
+                Created on {formatDate(coupon.created_at)} by {coupon.created_by_name || 'System Admin'}
               </div>
             </div>
 
@@ -184,7 +214,7 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
                 Valid From
               </span>
               <span className="font-medium text-slate-800 text-xs mt-0.5 block">
-                {coupon.valid_from}
+                {formatDate(coupon.valid_from)}
               </span>
             </div>
 
@@ -193,10 +223,91 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
                 Valid Until
               </span>
               <span className="font-medium text-slate-800 text-xs mt-0.5 block">
-                {coupon.valid_until}
+                {formatDate(coupon.valid_until)}
               </span>
             </div>
           </div>
+
+          {/* Patient Referral Wallet (All Coupons owned by Patient A) */}
+          {patientWallet && patientWallet.coupons && (
+            <div className="bg-white p-4 rounded-2xl border border-blue-200 shadow-2xs space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                    <Ticket className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                      {patientWallet.patient.full_name}'s Referral Wallet ({patientWallet.coupons.length} Total)
+                    </h4>
+                    <p className="text-[10px] text-slate-400">
+                      Chronological history of all referral coupons owned by this patient (latest created first)
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5 text-[10px] font-bold">
+                  <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    {patientWallet.stats.active_eligible_coupons} Active
+                  </span>
+                  <span className="px-2 py-0.5 rounded-lg bg-purple-50 text-purple-700 border border-purple-200">
+                    {patientWallet.stats.redeemed_coupons} Redeemed
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2 max-h-56 overflow-y-auto pr-1 divide-y divide-slate-100">
+                {patientWallet.coupons.map((c, idx) => {
+                  const isCurrent = c.id === coupon.id;
+                  return (
+                    <div
+                      key={c.id}
+                      onClick={() => setCurrentCouponId(c.id)}
+                      className={`p-3 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        isCurrent 
+                          ? 'bg-blue-50/90 border border-blue-300 ring-2 ring-blue-500/20 shadow-xs' 
+                          : 'hover:bg-slate-50 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-[10px] font-mono font-bold text-slate-400 w-5">
+                          #{patientWallet.coupons.length - idx}
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-xs text-blue-900 bg-white px-1.5 py-0.5 rounded border border-blue-200">
+                              {c.coupon_code}
+                            </span>
+                            <span className="font-bold text-slate-800 text-xs">
+                              {c.discount_type === 'percentage' ? `${c.discount_value}%` : `₹${parseFloat(c.discount_value).toLocaleString('en-IN')}`}
+                            </span>
+                            {getStatusBadge(c.status)}
+                          </div>
+                          <div className="text-[11px] text-slate-500 mt-0.5">
+                            Referred: <span className="font-semibold text-slate-700">{c.referred_patient_name || 'Open Referral'}</span>
+                            <span className="mx-1.5 text-slate-300">•</span>
+                            <span>Created: {formatDate(c.created_at)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        {isCurrent ? (
+                          <span className="text-[10px] font-black text-blue-700 bg-blue-100/80 px-2 py-0.5 rounded-md uppercase tracking-wider">
+                            Viewing Now
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-semibold text-slate-400 hover:text-blue-600">
+                            Click to View →
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Remarks */}
           {coupon.remarks && (
@@ -211,12 +322,12 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
           {/* Redemption Audit Trail */}
           <div className="space-y-2 pt-2 border-t border-slate-100">
             <h4 className="text-[11px] font-bold text-slate-800 uppercase tracking-wider flex items-center justify-between">
-              <span>Redemption History ({coupon.redemptions?.length || 0})</span>
+              <span>Redemption Audit Details ({coupon.redemptions?.length || 0})</span>
             </h4>
 
             {!coupon.redemptions || coupon.redemptions.length === 0 ? (
               <div className="p-4 bg-slate-50 rounded-xl text-center text-slate-400 text-xs italic">
-                This coupon has not been redeemed yet.
+                This coupon has not been redeemed yet (Status: {coupon.status}).
               </div>
             ) : (
               <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
@@ -225,7 +336,7 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
                     <tr>
                       <th className="p-2.5">Redeemed At</th>
                       <th className="p-2.5">Patient</th>
-                      <th className="p-2.5">Bill ID</th>
+                      <th className="p-2.5">Bill Invoice</th>
                       <th className="p-2.5 text-right">Bill Amt</th>
                       <th className="p-2.5 text-right">Discount</th>
                       <th className="p-2.5 text-right">Final Payable</th>
@@ -236,21 +347,21 @@ export const CouponDetailsModal = ({ isOpen, onClose, couponId }) => {
                     {coupon.redemptions.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-50">
                         <td className="p-2.5 text-slate-600">
-                          {new Date(r.redeemed_at).toLocaleString()}
+                          {formatDate(r.redeemed_at)}
                         </td>
                         <td className="p-2.5 font-bold text-slate-900">
                           {r.patient_name || `Patient #${r.patient_id}`}
                         </td>
-                        <td className="p-2.5 font-mono text-slate-600">
-                          {r.bill_id ? `#${r.bill_id}` : 'Walk-in'}
+                        <td className="p-2.5 font-mono text-slate-600 font-bold">
+                          {r.bill_id ? `BILL #${r.bill_id}` : 'Counter Bill'}
                         </td>
-                        <td className="p-2.5 text-right text-slate-700">
+                        <td className="p-2.5 text-right text-slate-700 font-mono">
                           ₹{parseFloat(r.bill_amount).toLocaleString('en-IN')}
                         </td>
-                        <td className="p-2.5 text-right font-bold text-emerald-600">
+                        <td className="p-2.5 text-right font-bold text-emerald-600 font-mono">
                           -₹{parseFloat(r.discount_amount).toLocaleString('en-IN')}
                         </td>
-                        <td className="p-2.5 text-right font-bold text-slate-900">
+                        <td className="p-2.5 text-right font-bold text-slate-900 font-mono">
                           ₹{parseFloat(r.final_payable).toLocaleString('en-IN')}
                         </td>
                         <td className="p-2.5 text-slate-600">

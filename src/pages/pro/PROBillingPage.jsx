@@ -18,9 +18,10 @@ import {
   BarChart3,
   TrendingUp,
   Wallet,
-  CreditCard
+  CreditCard,
+  Ticket
 } from 'lucide-react';
-import { proApi, settingsApi } from '../../api';
+import { proApi, settingsApi, couponsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
@@ -69,6 +70,11 @@ export const PROBillingPage = () => {
   const [consultingDoctor, setConsultingDoctor] = useState(null);
   const [chargeTypesList, setChargeTypesList] = useState([]);
 
+  // Referral Reward Coupons state
+  const [patientCoupons, setPatientCoupons] = useState([]);
+  const [loadingCoupons, setLoadingCoupons] = useState(false);
+  const [selectedCoupon, setSelectedCoupon] = useState(null);
+
   // Fetch master charge types on mount
   useEffect(() => {
     settingsApi.getMasterData('charge_types', { status: 'active' })
@@ -96,6 +102,8 @@ export const PROBillingPage = () => {
       setAvailablePackages([]);
       setPrescribedTreatments([]);
       setConsultingDoctor(null);
+      setPatientCoupons([]);
+      setSelectedCoupon(null);
       return;
     }
 
@@ -137,6 +145,21 @@ export const PROBillingPage = () => {
         } catch {
           setAvailablePackages([]);
         }
+
+        // Also fetch referral reward coupons for this patient
+        setLoadingCoupons(true);
+        try {
+          const coupRes = await couponsApi.getPatientCoupons(pId);
+          if (coupRes.success && coupRes.data) {
+            setPatientCoupons(coupRes.data.coupons || []);
+          } else {
+            setPatientCoupons([]);
+          }
+        } catch {
+          setPatientCoupons([]);
+        } finally {
+          setLoadingCoupons(false);
+        }
       } else {
         setPatientLookup({
           loading: false,
@@ -146,6 +169,8 @@ export const PROBillingPage = () => {
         setAvailablePackages([]);
         setPrescribedTreatments([]);
         setConsultingDoctor(null);
+        setPatientCoupons([]);
+        setSelectedCoupon(null);
       }
     } catch (err) {
       const errMsg = err.response?.data?.message || err.message || 'Patient not found';
@@ -157,6 +182,8 @@ export const PROBillingPage = () => {
       setAvailablePackages([]);
       setPrescribedTreatments([]);
       setConsultingDoctor(null);
+      setPatientCoupons([]);
+      setSelectedCoupon(null);
     } finally {
       setLoadingPackages(false);
     }
@@ -293,11 +320,23 @@ export const PROBillingPage = () => {
     });
   };
 
-  // Calculate live preview subtotal
-  const previewSubtotal = form.items.reduce((sum, it) => sum + (parseFloat(it.unit_price || 0) * parseInt(it.quantity || 1)), 0);
-  const previewDiscount = Math.max(0, parseFloat(form.discount_amount || 0));
-  const previewTotal = Math.max(0, previewSubtotal - previewDiscount);
-  const isDiscountOverSubtotal = previewDiscount > previewSubtotal && previewSubtotal > 0;
+  // Recalculate discount whenever selected coupon or subtotal changes
+  useEffect(() => {
+    if (selectedCoupon) {
+      const val = parseFloat(selectedCoupon.discount_value || 0);
+      let calculated = 0;
+      if (selectedCoupon.discount_type === 'percentage') {
+        calculated = (previewSubtotal * val) / 100;
+        if (selectedCoupon.max_discount_limit && parseFloat(selectedCoupon.max_discount_limit) > 0) {
+          calculated = Math.min(calculated, parseFloat(selectedCoupon.max_discount_limit));
+        }
+      } else {
+        calculated = val;
+      }
+      const finalDiscount = Math.round(Math.min(calculated, previewSubtotal) * 100) / 100;
+      setForm(prev => ({ ...prev, discount_amount: String(finalDiscount) }));
+    }
+  }, [selectedCoupon, previewSubtotal]);
 
   const handleCreateBill = async (e) => {
     e.preventDefault();
@@ -372,14 +411,17 @@ export const PROBillingPage = () => {
           unit_price: parseFloat(it.unit_price || 0)
         })),
         discount_amount: discount,
-        package_id: form.package_id ? parseInt(form.package_id) : null
+        package_id: form.package_id ? parseInt(form.package_id) : null,
+        coupon_code: selectedCoupon ? selectedCoupon.coupon_code : undefined,
+        coupon_id: selectedCoupon ? selectedCoupon.id : undefined
       };
 
       const res = await proApi.createBill(payload);
 
       if (res.success) {
         const bill = res.data;
-        showToast(`Invoice ${bill?.bill_number || ''} created successfully for ${formatCurrency(bill?.final_amount || bill?.total_amount || 0)}!`, 'success');
+        const couponMsg = bill?.coupon_code ? ` (Referral Coupon ${bill.coupon_code} redeemed!)` : '';
+        showToast(`Invoice ${bill?.bill_number || ''} created successfully for ${formatCurrency(bill?.final_amount || bill?.total_amount || 0)}${couponMsg}!`, 'success');
         // Reset form & switch to pending bills
         setForm({
           patient_id: '',
@@ -389,6 +431,8 @@ export const PROBillingPage = () => {
           package_id: '',
           items: [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 2000 }]
         });
+        setSelectedCoupon(null);
+        setPatientCoupons([]);
         setPatientLookup({ loading: false, patient: null, error: null });
         setAvailablePackages([]);
         handleTabChange('pending');
@@ -753,6 +797,130 @@ export const PROBillingPage = () => {
             </div>
           </div>
 
+          {/* Dedicated Referral Reward Coupon Section */}
+          {form.patient_id && patientLookup.patient && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200">
+                    <Ticket className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                      <span>Referral Reward Coupon</span>
+                      {selectedCoupon && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider">
+                          Applied
+                        </span>
+                      )}
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Reward coupons earned by {patientLookup.patient.full_name} for introducing new patients
+                    </p>
+                  </div>
+                </div>
+
+                {patientCoupons.length > 0 && (
+                  <div className="text-right">
+                    <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-xl border border-blue-200">
+                      {patientCoupons.filter(c => c.eligible_for_use).length} of {patientCoupons.length} Available
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {loadingCoupons ? (
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-500 flex items-center gap-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                  <span>Checking patient coupon wallet...</span>
+                </div>
+              ) : patientCoupons.length === 0 ? (
+                <div className="p-3 bg-slate-50/70 rounded-xl border border-slate-200 text-xs text-slate-400 text-center">
+                  No referral reward coupons available for this patient.
+                </div>
+              ) : (
+                <div className="space-y-3 pt-1">
+                  {!selectedCoupon ? (
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1.5">
+                        Select Referral Coupon ▼
+                      </label>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const cId = parseInt(e.target.value, 10);
+                          const found = patientCoupons.find(c => c.id === cId);
+                          if (found) {
+                            if (!found.eligible_for_use) {
+                              showToast(`Coupon ${found.coupon_code} is ${found.ineligible_reason || 'not eligible for use'}`, 'warning');
+                              return;
+                            }
+                            setSelectedCoupon(found);
+                            showToast(`Referral coupon ${found.coupon_code} applied to bill!`, 'success');
+                          }
+                        }}
+                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium text-slate-800 cursor-pointer"
+                      >
+                        <option value="">-- Choose an eligible referral coupon --</option>
+                        {patientCoupons.map((c) => (
+                          <option
+                            key={c.id}
+                            value={c.id}
+                            disabled={!c.eligible_for_use}
+                          >
+                            {c.coupon_code} — Referred: {c.referred_patient_name || 'Open Referral'} — {c.discount_type === 'percentage' ? `${c.discount_value}%` : `₹${parseFloat(c.discount_value).toLocaleString('en-IN')}`} {!c.eligible_for_use ? `(${c.ineligible_reason})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Coupons are ordered latest referral first. Only one coupon can be applied per bill.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-xs">
+                          <CheckCircle className="w-4.5 h-4.5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-blue-900 text-xs bg-white px-2 py-0.5 rounded-lg border border-blue-200 shadow-2xs">
+                              {selectedCoupon.coupon_code}
+                            </span>
+                            <span className="text-xs font-black text-emerald-700">
+                              {selectedCoupon.discount_type === 'percentage' 
+                                ? `${selectedCoupon.discount_value}% OFF` 
+                                : `₹${parseFloat(selectedCoupon.discount_value).toLocaleString('en-IN')} OFF`}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-blue-800 mt-0.5">
+                            Referred: <span className="font-bold">{selectedCoupon.referred_patient_name || 'Open Referral'}</span>
+                            {selectedCoupon.referred_patient_uhid && (
+                              <span className="text-slate-500 ml-1 font-mono">({selectedCoupon.referred_patient_uhid})</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCoupon(null);
+                          setForm(prev => ({ ...prev, discount_amount: '0' }));
+                          showToast('Coupon removed from bill', 'info');
+                        }}
+                        className="px-3 py-1.5 text-xs font-bold text-red-600 hover:text-red-700 hover:bg-red-50 rounded-xl border border-red-200 transition-colors cursor-pointer flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Remove Coupon</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Server Error Alert */}
           {serverError && (
             <div className="p-3.5 bg-red-50 text-red-800 text-xs rounded-xl border border-red-200 flex items-center gap-2.5 font-bold">
@@ -762,28 +930,45 @@ export const PROBillingPage = () => {
           )}
 
           {/* Calculations Preview Summary */}
-          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 max-w-sm ml-auto space-y-2 text-xs">
+          <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 max-w-sm ml-auto space-y-2.5 text-xs">
             <div className="flex justify-between text-slate-600">
               <span>Subtotal:</span>
               <span className="font-mono font-bold">{formatCurrency(previewSubtotal)}</span>
             </div>
 
-            <div className="flex items-center justify-between text-slate-600">
-              <span>Discount Amount:</span>
-              <div className="w-28">
-                <input
-                  type="number"
-                  min="0"
-                  max={previewSubtotal}
-                  step="0.01"
-                  value={form.discount_amount}
-                  onChange={e => setForm({ ...form, discount_amount: e.target.value })}
-                  className={`w-full px-2 py-1 text-xs border rounded-lg text-right font-mono outline-none bg-white ${
-                    isDiscountOverSubtotal ? 'border-red-400 text-red-600' : 'border-slate-200 focus:border-[#1565C0]'
-                  }`}
-                />
+            {selectedCoupon ? (
+              <div className="flex items-center justify-between text-slate-700 bg-emerald-50/80 p-2.5 rounded-xl border border-emerald-200">
+                <div>
+                  <span className="font-bold text-emerald-800 flex items-center gap-1 text-xs">
+                    <Ticket className="w-3.5 h-3.5" />
+                    <span>Referral Discount:</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-600 font-mono block">
+                    {selectedCoupon.coupon_code} (Referred: {selectedCoupon.referred_patient_name || 'Referral'})
+                  </span>
+                </div>
+                <span className="font-mono font-black text-emerald-700 text-sm">
+                  -₹{previewDiscount.toLocaleString('en-IN')}
+                </span>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Discount Amount:</span>
+                <div className="w-28">
+                  <input
+                    type="number"
+                    min="0"
+                    max={previewSubtotal}
+                    step="0.01"
+                    value={form.discount_amount}
+                    onChange={e => setForm({ ...form, discount_amount: e.target.value })}
+                    className={`w-full px-2 py-1 text-xs border rounded-lg text-right font-mono outline-none bg-white ${
+                      isDiscountOverSubtotal ? 'border-red-400 text-red-600' : 'border-slate-200 focus:border-[#1565C0]'
+                    }`}
+                  />
+                </div>
+              </div>
+            )}
 
             {isDiscountOverSubtotal && (
               <div className="p-1.5 bg-red-50 text-red-700 text-[10px] rounded-lg border border-red-200 font-bold flex items-center gap-1">
