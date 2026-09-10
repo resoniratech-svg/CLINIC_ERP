@@ -8,7 +8,8 @@ const executiveController = require('../controllers/executive.controller');
 
 router.post('/inbound/search', authenticateToken, callCenterController.searchPatientInbound);
 router.post('/leads', authenticateToken, callCenterController.createLead);
-router.post('/outbound/import', authenticateToken, authorizeRoles('super_admin', 'pro_manager'), callCenterController.importOutboundLeads);
+router.post('/outbound/import', authenticateToken, authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.importOutboundLeads);
+router.post('/import', authenticateToken, authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.importOutboundLeads);
 router.get('/outbound/queue', authenticateToken, authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.getOutboundQueue);
 router.get('/queue', authenticateToken, authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.getOutboundQueue);
 router.get('/executive-incentives', authenticateToken, authorizeRoles('super_admin'), callCenterController.getExecutiveIncentives);

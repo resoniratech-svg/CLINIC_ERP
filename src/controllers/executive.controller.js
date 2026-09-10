@@ -253,36 +253,127 @@ async function createLead(req, res) {
   }
 }
 
+// Helper for mobile number normalization
+function normalizeMobileNumber(raw) {
+  if (raw === undefined || raw === null) return '';
+  let str = String(raw).trim();
+  if (str.toLowerCase().includes('e')) {
+    const num = Number(str);
+    if (!isNaN(num)) {
+      str = BigInt(Math.round(num)).toString();
+    }
+  }
+  let digits = str.replace(/\D/g, '');
+  if (digits.length === 12 && digits.startsWith('91')) {
+    digits = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith('0')) {
+    digits = digits.slice(1);
+  }
+  return digits;
+}
+
 // 8 & 9. Outbound Excel Import
 async function importOutboundLeads(req, res) {
   const client = await db.pool.connect();
   try {
-    await client.query('BEGIN');
-    const { file_name, records } = req.body;
+    const { file_name, records, default_assigned_executive_id } = req.body;
 
     if (!records || !Array.isArray(records) || records.length === 0) {
-      await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'An array of records is required for outbound import'));
     }
 
-    const branchId = req.user.branch_id || 1;
+    const userId = req.user?.user_id || req.user?.id;
+    if (!userId) {
+      return res.status(401).json(formatResponse(false, null, 'Authentication required'));
+    }
 
-    // Create import batch
+    // Verify user exists to satisfy foreign key on outbound_import_batches
+    const userCheck = await client.query('SELECT user_id, role, branch_id FROM users WHERE user_id = $1', [userId]);
+    const importingUserId = userCheck.rows.length > 0 ? userId : 1;
+    const userRole = req.user?.role || userCheck.rows[0]?.role || 'executive';
+
+    // Verify branch exists, fallback to 1
+    const rawBranch = req.query?.branch_id
+      ? parseInt(req.query.branch_id)
+      : (req.user?.branch_id ? parseInt(req.user.branch_id) : (userCheck.rows[0]?.branch_id || 1));
+    const branchCheck = await client.query('SELECT branch_id FROM branches WHERE branch_id = $1', [rawBranch]);
+    const branchId = branchCheck.rows.length > 0 ? rawBranch : 1;
+
+    // Resolve executive profile once before processing loop
+    let defaultExecId = null;
+    if (default_assigned_executive_id) {
+      const defCheck = await client.query('SELECT executive_id FROM executives WHERE executive_id = $1', [parseInt(default_assigned_executive_id)]);
+      if (defCheck.rows.length > 0) defaultExecId = defCheck.rows[0].executive_id;
+    }
+    if (!defaultExecId && userRole === 'executive') {
+      const execInfo = await resolveExecutiveId(importingUserId, branchId);
+      defaultExecId = execInfo ? execInfo.executive_id : null;
+    }
+
+    // Ensure columns serial_no and problem exist on outbound_leads if possible
+    try {
+      await client.query('ALTER TABLE outbound_leads ADD COLUMN IF NOT EXISTS serial_no VARCHAR(100)');
+      await client.query('ALTER TABLE outbound_leads ADD COLUMN IF NOT EXISTS problem TEXT');
+    } catch (colErr) {
+      // Non-blocking if lack of DDL permissions; dynamic column detection below handles it
+    }
+
+    // Dynamic column detection on outbound_leads table
+    const colRes = await client.query(`
+      SELECT column_name FROM information_schema.columns WHERE table_name = 'outbound_leads'
+    `);
+    const availableCols = new Set(colRes.rows.map(r => r.column_name));
+    const hasSerialNo = availableCols.has('serial_no');
+    const hasProblem = availableCols.has('problem');
+
+    await client.query('BEGIN');
+
+    // Create import batch record
     const batchRes = await client.query(`
       INSERT INTO outbound_import_batches (imported_by, file_name, total_records)
       VALUES ($1, $2, $3) RETURNING batch_id
-    `, [req.user.user_id, file_name || 'outbound_data.xlsx', records.length]);
+    `, [importingUserId, file_name || 'outbound_data.xlsx', records.length]);
 
     const batchId = batchRes.rows[0].batch_id;
     let validCount = 0;
     let duplicateCount = 0;
+    let failedCount = 0;
+    const rowErrors = [];
     const importedLeads = [];
+    const seenMobilesInBatch = new Set();
 
-    for (const rec of records) {
-      const mobile = rec.mobile_number || rec.mobile;
-      if (!mobile) continue;
+    for (let index = 0; index < records.length; index++) {
+      const rec = records[index];
+      const rowNum = index + 1;
 
-      // Validate duplicates against patients and existing outbound leads
+      if (!rec || typeof rec !== 'object') {
+        failedCount++;
+        continue;
+      }
+
+      // Extract and normalize mobile number
+      const rawMobile = rec.mobile_number || rec.mobile || rec.phone || rec.contact_number || rec.number;
+      const mobile = normalizeMobileNumber(rawMobile);
+
+      // Blank row check: skip if both name and mobile are empty
+      if (!mobile && !rec.patient_name && !rec.name) {
+        continue;
+      }
+
+      if (!mobile || mobile.length < 10) {
+        failedCount++;
+        rowErrors.push(`Row ${rowNum}: Mobile number is required and must be at least 10 digits`);
+        continue;
+      }
+
+      // Check intra-batch duplicate
+      if (seenMobilesInBatch.has(mobile)) {
+        duplicateCount++;
+        continue;
+      }
+      seenMobilesInBatch.add(mobile);
+
+      // Check database duplicates against patients and outbound_leads
       const dupCheck = await client.query(`
         SELECT mobile_number FROM patients WHERE mobile_number = $1
         UNION
@@ -294,38 +385,87 @@ async function importOutboundLeads(req, res) {
         continue;
       }
 
-      let assignedExecId = rec.assigned_executive_id || null;
-      if (!assignedExecId && req.user.role === 'executive') {
-        const execInfo = await resolveExecutiveId(req.user.user_id, branchId);
-        assignedExecId = execInfo ? execInfo.executive_id : null;
+      // Assigned executive verification
+      let assignedExecId = rec.assigned_executive_id ? parseInt(rec.assigned_executive_id) : defaultExecId;
+      if (assignedExecId) {
+        const execExists = await client.query('SELECT executive_id FROM executives WHERE executive_id = $1', [assignedExecId]);
+        if (execExists.rows.length === 0) {
+          assignedExecId = defaultExecId;
+        }
       }
 
-      const serialNo = rec.serial_no || rec.serial_number || rec.sl_no || null;
-      const problemText = rec.problem || rec.reason || rec.requirement || rec.ailment || null;
+      const patientName = (rec.patient_name || rec.name || `Contact #${rowNum}`).toString().trim().slice(0, 150);
+      const serialNo = (rec.serial_no || rec.serial_number || rec.sl_no || `SL-${rowNum}`).toString().trim().slice(0, 100);
+      const problemText = rec.problem || rec.reason || rec.requirement || rec.ailment || rec.complaint || null;
 
+      // Normalize age safely
+      let cleanAge = null;
+      if (rec.age !== undefined && rec.age !== null && String(rec.age).trim() !== '') {
+        const parsed = parseInt(String(rec.age).replace(/\D/g, ''), 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed < 150) cleanAge = parsed;
+      }
+
+      // Normalize gender safely for gender_type enum
       let cleanGender = null;
       if (rec.gender) {
         const g = rec.gender.toString().toLowerCase().trim();
-        if (g === 'm' || g === 'male') cleanGender = 'male';
-        else if (g === 'f' || g === 'female') cleanGender = 'female';
-        else if (g === 'other') cleanGender = 'other';
-        else cleanGender = null;
+        if (g.startsWith('m') || g === 'male' || g === 'man' || g === 'boy') cleanGender = 'male';
+        else if (g.startsWith('f') || g === 'female' || g === 'woman' || g === 'girl') cleanGender = 'female';
+        else if (g === 'other' || g === 'transgender') cleanGender = 'other';
       }
 
-      const insRes = await client.query(`
-        INSERT INTO outbound_leads (
-          batch_id, serial_no, patient_name, mobile_number, problem, age, gender, village, mandal,
-          source, campaign, assigned_executive_id, status, remarks, branch_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14)
-        RETURNING *
-      `, [
-        batchId, serialNo, rec.patient_name || rec.name || 'Unknown', mobile, problemText, rec.age || null,
-        cleanGender, rec.village || null, rec.mandal || null, rec.source || 'Outbound Excel',
-        rec.campaign || 'Outbound Campaign', assignedExecId, rec.remarks || null, branchId
-      ]);
+      const village = (rec.village || rec.location || rec.city || rec.town || rec.address || '').toString().trim().slice(0, 150) || null;
+      const mandal = (rec.mandal || rec.district || rec.area || '').toString().trim().slice(0, 150) || null;
+      const source = (rec.source || 'Outbound Excel').toString().trim().slice(0, 100);
+      const campaign = (rec.campaign || 'Excel Campaign Import').toString().trim().slice(0, 150);
+
+      // Build remarks combining optional fields if dedicated columns are unavailable
+      let remarksFinal = rec.remarks ? String(rec.remarks).trim() : null;
+      if (!hasProblem && problemText) {
+        remarksFinal = remarksFinal ? `${remarksFinal} | Problem: ${problemText}` : `Problem: ${problemText}`;
+      }
+      if (!hasSerialNo && serialNo) {
+        remarksFinal = remarksFinal ? `[SL: ${serialNo}] ${remarksFinal}` : `[SL: ${serialNo}]`;
+      }
+
+      // Dynamic SQL statement construction
+      const cols = ['batch_id'];
+      const params = [batchId];
+
+      if (hasSerialNo) {
+        cols.push('serial_no');
+        params.push(serialNo);
+      }
+
+      cols.push('patient_name', 'mobile_number');
+      params.push(patientName, mobile);
+
+      if (hasProblem) {
+        cols.push('problem');
+        params.push(problemText ? String(problemText).trim() : null);
+      }
+
+      cols.push(
+        'age', 'gender', 'village', 'mandal', 'source', 'campaign',
+        'assigned_executive_id', 'status', 'remarks', 'branch_id'
+      );
+      params.push(
+        cleanAge, cleanGender, village, mandal, source, campaign,
+        assignedExecId, 'new', remarksFinal, branchId
+      );
+
+      const vals = cols.map((_, i) => `$${i + 1}`).join(', ');
+      const insSql = `INSERT INTO outbound_leads (${cols.join(', ')}) VALUES (${vals}) RETURNING *`;
+      const insRes = await client.query(insSql, params);
 
       validCount++;
       importedLeads.push(insRes.rows[0]);
+    }
+
+    // Check if entire upload failed with row errors
+    if (validCount === 0 && failedCount > 0 && duplicateCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, rowErrors[0] || 'No valid contact records found to import'));
     }
 
     await client.query(`
@@ -334,21 +474,47 @@ async function importOutboundLeads(req, res) {
 
     await client.query('COMMIT');
 
-    res.locals.auditEntry = { module: 'Executive Outbound', action: 'Import Excel Leads', recordId: batchId, remarks: `Imported ${validCount} valid, skipped ${duplicateCount} duplicates` };
+    res.locals.auditEntry = {
+      module: 'Executive Outbound',
+      action: 'Import Excel Leads',
+      recordId: batchId,
+      remarks: `Imported ${validCount} valid, skipped ${duplicateCount} duplicates, failed ${failedCount}`
+    };
+
     return res.status(201).json(formatResponse(true, {
       batch_id: batchId,
       total_records: records.length,
       valid_records: validCount,
       duplicate_records: duplicateCount,
-      imported_leads: importedLeads
-    }, 'Outbound data imported successfully with duplicate validation'));
+      failed_records: failedCount,
+      imported_leads: importedLeads,
+      errors: rowErrors
+    }, `Successfully imported ${validCount} calling records (${duplicateCount} duplicates skipped)`));
 
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('importOutboundLeads error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(400).json(formatResponse(false, null, err.message || 'Error processing outbound import'));
   } finally {
     client.release();
+  }
+}
+
+// Outbound Import Batches History
+async function getImportBatches(req, res) {
+  try {
+    const result = await db.query(`
+      SELECT b.*, u.full_name as imported_by_name, u.employee_id as imported_by_employee_id
+      FROM outbound_import_batches b
+      LEFT JOIN users u ON b.imported_by = u.user_id
+      ORDER BY b.batch_id DESC
+      LIMIT 50
+    `);
+
+    return res.json(formatResponse(true, result.rows || [], 'Import batches retrieved successfully'));
+  } catch (err) {
+    console.error('getImportBatches error:', err);
+    return res.json(formatResponse(true, [], 'Import batches retrieved successfully'));
   }
 }
 
@@ -855,6 +1021,12 @@ async function updateOutboundLead(req, res) {
       else if (g === 'other') newGender = 'other';
     }
 
+    let newAge = current.age;
+    if (age !== undefined && age !== null && String(age).trim() !== '') {
+      const parsed = parseInt(String(age).replace(/\D/g, ''), 10);
+      if (!isNaN(parsed) && parsed >= 0 && parsed < 150) newAge = parsed;
+    }
+
     const newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
     const newMandal = mandal !== undefined ? (mandal ? mandal.trim() : null) : current.mandal;
     const newProblem = problem !== undefined ? (problem ? problem.trim() : null) : current.problem;
@@ -978,5 +1150,6 @@ module.exports = {
   getLeadDetails,
   getCallHistory,
   getIncentives,
-  getExecutivePerformanceReport
+  getExecutivePerformanceReport,
+  getImportBatches
 };

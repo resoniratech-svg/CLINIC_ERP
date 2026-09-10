@@ -18,8 +18,11 @@ router.post('/inbound/search', authorizeRoles('executive', 'super_admin'), execu
 router.post('/leads', authorizeRoles('executive', 'super_admin'), executiveController.createLead);
 router.put('/leads/:id', authorizeRoles('executive', 'super_admin'), executiveController.updateLead);
 
-// 8 & 9. Outbound Excel Import & Update
+// 8 & 9. Outbound Excel Import, Batches History & Update
 router.post('/outbound/import', authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.importOutboundLeads);
+router.post('/import', authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.importOutboundLeads);
+router.get('/outbound/batches', authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.getImportBatches);
+router.get('/batches', authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.getImportBatches);
 router.put('/outbound/leads/:id', authorizeRoles('executive', 'super_admin'), executiveController.updateOutboundLead);
 
 // 10. Outbound Queue

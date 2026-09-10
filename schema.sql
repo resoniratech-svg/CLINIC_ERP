@@ -250,8 +250,10 @@ CREATE TABLE IF NOT EXISTS outbound_import_batches (
 CREATE TABLE IF NOT EXISTS outbound_leads (
     id                  SERIAL PRIMARY KEY,
     batch_id            INTEGER REFERENCES outbound_import_batches(batch_id),
+    serial_no           VARCHAR(100),
     patient_name        VARCHAR(150),
     mobile_number       VARCHAR(15) NOT NULL,
+    problem             TEXT,
     age                 INTEGER,
     gender              gender_type,
     village             VARCHAR(150),
