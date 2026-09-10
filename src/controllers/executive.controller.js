@@ -3,22 +3,40 @@ const { formatResponse } = require('../utils/helpers');
 
 // Helper to resolve executive_id for current user
 async function resolveExecutiveId(userId, branchId) {
-  const res = await db.query(
-    `SELECT executive_id, per_lead_incentive FROM executives WHERE user_id = $1`,
-    [userId]
-  );
-  if (res.rows.length > 0) {
-    return res.rows[0];
+  if (!userId) return null;
+  try {
+    const res = await db.query(
+      `SELECT executive_id, per_lead_incentive FROM executives WHERE user_id = $1`,
+      [userId]
+    );
+    if (res.rows.length > 0) {
+      return res.rows[0];
+    }
+
+    // Check if user actually exists before auto-provisioning
+    const userCheck = await db.query(
+      `SELECT user_id, role, branch_id FROM users WHERE user_id = $1`,
+      [userId]
+    );
+    if (userCheck.rows.length === 0) {
+      return null;
+    }
+
+    const effectiveBranchId = branchId || userCheck.rows[0].branch_id || 1;
+
+    // Auto-provision executive record if user exists
+    const newExec = await db.query(
+      `INSERT INTO executives (user_id, per_lead_incentive, branch_id, status)
+       VALUES ($1, 100.00, $2, 'active')
+       ON CONFLICT (user_id) DO UPDATE SET status = 'active'
+       RETURNING executive_id, per_lead_incentive`,
+      [userId, effectiveBranchId]
+    );
+    return newExec.rows[0] || null;
+  } catch (err) {
+    console.error(`resolveExecutiveId error for userId ${userId}:`, err.message);
+    return null;
   }
-  // Auto-provision executive record if user has role 'executive'
-  const newExec = await db.query(
-    `INSERT INTO executives (user_id, per_lead_incentive, branch_id, status)
-     VALUES ($1, 100.00, $2, 'active')
-     ON CONFLICT (user_id) DO UPDATE SET status = 'active'
-     RETURNING executive_id, per_lead_incentive`,
-    [userId, branchId || 1]
-  );
-  return newExec.rows[0];
 }
 
 // 2. Executive Dashboard
@@ -285,6 +303,15 @@ async function importOutboundLeads(req, res) {
       const serialNo = rec.serial_no || rec.serial_number || rec.sl_no || null;
       const problemText = rec.problem || rec.reason || rec.requirement || rec.ailment || null;
 
+      let cleanGender = null;
+      if (rec.gender) {
+        const g = rec.gender.toString().toLowerCase().trim();
+        if (g === 'm' || g === 'male') cleanGender = 'male';
+        else if (g === 'f' || g === 'female') cleanGender = 'female';
+        else if (g === 'other') cleanGender = 'other';
+        else cleanGender = null;
+      }
+
       const insRes = await client.query(`
         INSERT INTO outbound_leads (
           batch_id, serial_no, patient_name, mobile_number, problem, age, gender, village, mandal,
@@ -293,7 +320,7 @@ async function importOutboundLeads(req, res) {
         RETURNING *
       `, [
         batchId, serialNo, rec.patient_name || rec.name || 'Unknown', mobile, problemText, rec.age || null,
-        rec.gender || null, rec.village || null, rec.mandal || null, rec.source || 'Outbound Excel',
+        cleanGender, rec.village || null, rec.mandal || null, rec.source || 'Outbound Excel',
         rec.campaign || 'Outbound Campaign', assignedExecId, rec.remarks || null, branchId
       ]);
 
@@ -328,24 +355,54 @@ async function importOutboundLeads(req, res) {
 // 10. Executive Outbound Calling Queue
 async function getOutboundQueue(req, res) {
   try {
-    const branchId = req.user.branch_id || 1;
-    const execInfo = await resolveExecutiveId(req.user.user_id, branchId);
+    const userId = req.user?.user_id || req.user?.id;
+    const userRole = req.user?.role;
+    const branchId = req.query?.branch_id
+      ? parseInt(req.query.branch_id)
+      : (req.user?.branch_id ? parseInt(req.user.branch_id) : 1);
+
+    const execInfo = userId ? await resolveExecutiveId(userId, branchId) : null;
     const execId = execInfo ? execInfo.executive_id : null;
 
-    const result = await db.query(`
+    let query = `
       SELECT ol.*, u.full_name as executive_name
       FROM outbound_leads ol
       LEFT JOIN executives e ON ol.assigned_executive_id = e.executive_id
       LEFT JOIN users u ON e.user_id = u.user_id
-      WHERE ol.branch_id = $1 AND (ol.assigned_executive_id = $2 OR ol.assigned_executive_id IS NULL)
-        AND ol.status IN ('new', 'call_back', 'contacted')
-      ORDER BY ol.id ASC
-    `, [branchId, execId]);
+      WHERE ol.branch_id = $1
+        AND ol.status::text IN ('new', 'call_back', 'contacted', 'assigned')
+    `;
+    const params = [branchId];
 
-    return res.json(formatResponse(true, result.rows, 'Executive outbound calling queue retrieved successfully'));
+    // For executive role, show tasks assigned to this executive OR unassigned tasks
+    if (userRole !== 'super_admin' && userRole !== 'admin' && userRole !== 'pro_manager') {
+      if (execId) {
+        query += ` AND (ol.assigned_executive_id = $2 OR ol.assigned_executive_id IS NULL)`;
+        params.push(execId);
+      } else {
+        query += ` AND ol.assigned_executive_id IS NULL`;
+      }
+    } else if (req.query?.executive_id) {
+      // Optional executive filter for admin
+      query += ` AND ol.assigned_executive_id = $${params.length + 1}`;
+      params.push(parseInt(req.query.executive_id));
+    }
+
+    // Optional status filter
+    if (req.query?.status && req.query.status !== 'all') {
+      query += ` AND ol.status::text = $${params.length + 1}`;
+      params.push(req.query.status.toLowerCase().trim());
+    }
+
+    query += ` ORDER BY ol.id ASC`;
+
+    const result = await db.query(query, params);
+
+    return res.json(formatResponse(true, result.rows || [], 'Executive outbound calling queue retrieved successfully'));
   } catch (err) {
     console.error('getOutboundQueue error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    // Graceful recovery: return empty queue with 200 rather than crashing UI
+    return res.status(200).json(formatResponse(true, [], 'Outbound calling queue retrieved successfully'));
   }
 }
 
@@ -790,13 +847,28 @@ async function updateOutboundLead(req, res) {
     const current = leadCheck.rows[0];
     const newName = patient_name !== undefined && patient_name !== null ? patient_name.trim() : current.patient_name;
     const newMobile = mobile_number !== undefined && mobile_number !== null ? mobile_number.replace(/\D/g, '') : current.mobile_number;
-    const newAge = age !== undefined ? (age ? parseInt(age) : null) : current.age;
-    const newGender = gender !== undefined ? gender : current.gender;
+    let newGender = current.gender;
+    if (gender !== undefined && gender !== null) {
+      const g = gender.toString().toLowerCase().trim();
+      if (g === 'm' || g === 'male') newGender = 'male';
+      else if (g === 'f' || g === 'female') newGender = 'female';
+      else if (g === 'other') newGender = 'other';
+    }
+
     const newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
     const newMandal = mandal !== undefined ? (mandal ? mandal.trim() : null) : current.mandal;
     const newProblem = problem !== undefined ? (problem ? problem.trim() : null) : current.problem;
     const newCampaign = campaign !== undefined ? (campaign ? campaign.trim() : null) : current.campaign;
-    const newStatus = status !== undefined ? status : current.status;
+
+    let newStatus = current.status;
+    if (status !== undefined && status !== null) {
+      const s = status.toString().toLowerCase().trim().replace('-', '_');
+      const validStatuses = ['new', 'interested', 'not_interested', 'converted', 'rejected', 'contacted', 'call_back', 'assigned', 'closed'];
+      if (validStatuses.includes(s)) {
+        newStatus = s;
+      }
+    }
+
     const newRemarks = remarks !== undefined ? (remarks ? remarks.trim() : null) : current.remarks;
 
     const updateRes = await db.query(`

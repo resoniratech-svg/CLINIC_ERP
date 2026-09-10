@@ -23,7 +23,8 @@ router.post('/outbound/import', authorizeRoles('executive', 'super_admin', 'pro_
 router.put('/outbound/leads/:id', authorizeRoles('executive', 'super_admin'), executiveController.updateOutboundLead);
 
 // 10. Outbound Queue
-router.get('/outbound/queue', authorizeRoles('executive', 'super_admin'), executiveController.getOutboundQueue);
+router.get('/outbound/queue', authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.getOutboundQueue);
+router.get('/queue', authorizeRoles('executive', 'super_admin', 'pro_manager'), executiveController.getOutboundQueue);
 
 // 11. Record & Update Call Outcome
 router.post('/calls/outcome', authorizeRoles('executive', 'super_admin'), executiveController.recordCallOutcome);

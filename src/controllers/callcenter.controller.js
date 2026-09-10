@@ -142,6 +142,15 @@ async function importOutboundLeads(req, res) {
         continue;
       }
 
+      let cleanGender = null;
+      if (rec.gender) {
+        const g = rec.gender.toString().toLowerCase().trim();
+        if (g === 'm' || g === 'male') cleanGender = 'male';
+        else if (g === 'f' || g === 'female') cleanGender = 'female';
+        else if (g === 'other') cleanGender = 'other';
+        else cleanGender = null;
+      }
+
       const insertRes = await client.query(`
         INSERT INTO outbound_leads (
           batch_id, patient_name, mobile_number, age, gender, village, mandal,
@@ -150,7 +159,7 @@ async function importOutboundLeads(req, res) {
         RETURNING *
       `, [
         batchId, rec.patient_name || rec.name || 'Unknown', mobile, rec.age || null,
-        rec.gender || null, rec.village || null, rec.mandal || null, rec.source || 'Outbound Excel',
+        cleanGender, rec.village || null, rec.mandal || null, rec.source || 'Outbound Excel',
         rec.campaign || 'Outbound Campaign', rec.assigned_executive_id || null, rec.remarks || null, branchId
       ]);
 
