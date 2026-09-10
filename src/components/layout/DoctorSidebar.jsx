@@ -12,12 +12,13 @@ import {
   CalendarOff,
   User,
   LogOut,
-  Building
+  Building,
+  Ticket
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const DoctorSidebar = ({ isMobileOpen, onCloseMobile }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
 
   const navLinkClasses = ({ isActive }) =>
     `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer ${
@@ -130,6 +131,14 @@ export const DoctorSidebar = ({ isMobileOpen, onCloseMobile }) => {
             <CalendarOff className="w-4 h-4" />
             <span>Leave Requests</span>
           </NavLink>
+
+          {/* Coupon Management — requires: coupon_management */}
+          {hasPermission('coupon_management') && (
+            <NavLink to="/doctor/coupons" className={navLinkClasses} onClick={onCloseMobile}>
+              <Ticket className="w-4 h-4" />
+              <span>Coupon Management</span>
+            </NavLink>
+          )}
 
           {/* 10. My Profile */}
           <NavLink to="/doctor/profile" className={navLinkClasses} onClick={onCloseMobile}>

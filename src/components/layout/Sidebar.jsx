@@ -18,7 +18,8 @@ import {
   Sliders,
   ChevronDown,
   Calendar,
-  Sparkles
+  Sparkles,
+  Ticket
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -296,6 +297,12 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile, isOpen, onClose }) => {
             <span>Reports & Analytics</span>
           </NavLink>
 
+          {/* Coupon Management */}
+          <NavLink to="/settings/coupons" onClick={handleClose} className={navLinkClasses}>
+            <Ticket className="w-4 h-4 text-pink-500" />
+            <span>Coupon Management</span>
+          </NavLink>
+
           {/* Settings & Governance */}
           <div>
             <button
@@ -323,6 +330,9 @@ export const Sidebar = ({ isMobileOpen, onCloseMobile, isOpen, onClose }) => {
                 </NavLink>
                 <NavLink to="/settings/hospital" onClick={handleClose} className={subNavLinkClasses}>
                   Hospital Master Registries
+                </NavLink>
+                <NavLink to="/settings/coupons" onClick={handleClose} className={subNavLinkClasses}>
+                  Coupon Management
                 </NavLink>
               </div>
             )}

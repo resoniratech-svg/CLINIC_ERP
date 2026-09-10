@@ -14,12 +14,13 @@ import {
   AlertTriangle,
   User,
   LogOut,
-  Building
+  Building,
+  Ticket
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const PROSidebar = ({ isMobileOpen, onCloseMobile }) => {
-  const { user, logout } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
 
   const navLinkClasses = ({ isActive }) =>
@@ -166,6 +167,18 @@ export const PROSidebar = ({ isMobileOpen, onCloseMobile }) => {
             />
             <span>Accountant</span>
           </NavLink>
+
+          {/* Coupon Management — requires: coupon_management */}
+          {hasPermission('coupon_management') && (
+            <NavLink
+              to="/pro/coupons"
+              onClick={onCloseMobile}
+              className={navLinkClasses}
+            >
+              <Ticket className="w-4 h-4 text-[#1565C0]" />
+              <span>Coupon Management</span>
+            </NavLink>
+          )}
 
           {/* CRM / Calling - Single Direct Module */}
           <NavLink

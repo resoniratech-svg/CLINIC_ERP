@@ -16,6 +16,7 @@ const RECEPTIONIST_PERMISSION_LABELS = {
   followup:                'Follow-up',
   renewal:                 'Renewal',
   due_management:          'Due Management',
+  coupon_management:       'Coupon Management',
 };
 
 // Safe empty baseline where every permission is unchecked (false)
@@ -30,71 +31,59 @@ const EMPTY_RECEPTIONIST_PERMS = {
   followup: false,
   renewal: false,
   due_management: false,
+  coupon_management: false,
+};
+
+const PRO_PERMISSION_LABELS = {
+  counselling:      'Counselling',
+  billing:          'Billing',
+  payment:          'Payment',
+  due_collection:   'Due Collection',
+  crm:              'CRM',
+  followup:         'Follow-up',
+  renewals:         'Renewals',
+  complaints:       'Complaints',
+  feedback:         'Feedback',
+  reports:          'Reports',
+  accountant:       'Accountant',
+  coupon_management:'Coupon Management',
+};
+
+const EMPTY_PRO_PERMS = {
+  counselling: false,
+  billing: false,
+  payment: false,
+  due_collection: false,
+  crm: false,
+  followup: false,
+  renewals: false,
+  complaints: false,
+  feedback: false,
+  reports: false,
+  accountant: false,
+  coupon_management: false,
+};
+
+const DOCTOR_PERMISSION_LABELS = {
+  coupon_management: 'Coupon Management',
+};
+
+const EMPTY_DOCTOR_PERMS = {
+  coupon_management: false,
 };
 
 /**
- * normalizeReceptionistPermissions(perms, isLegacyFallback)
- *
- * Accurately extracts boolean permission states from diverse backend data shapes:
- * - Direct object: { registration: true, enquiry: false, ... }
- * - Dot-notation object: { "receptionist.registration": true, ... }
- * - Array of strings: ["registration", "appointment"] or ["receptionist.registration", ...]
- * - Array of objects: [{ name: "registration" }, { permission: "appointment" }]
- *
- * If perms is null/undefined:
- *   - If isLegacyFallback is true (i.e. legacy user with no permissions row in DB),
- *     we default to all true to preserve pre-existing accounts.
- *   - Otherwise, returns all false (safe empty state).
+ * Generic normalizer for extracting boolean permission states from backend shapes
  */
-const normalizeReceptionistPermissions = (perms, isLegacyFallback = false) => {
-  if (!perms) {
-    if (isLegacyFallback) {
-      return {
-        registration: true,
-        enquiry: true,
-        appointment: true,
-        checkin: true,
-        consultation_fee_billing: true,
-        payment_collection: true,
-        crm_calling: true,
-        followup: true,
-        renewal: true,
-        due_management: true,
-      };
-    }
-    return { ...EMPTY_RECEPTIONIST_PERMS };
+const normalizePermissions = (perms, emptyTemplate) => {
+  if (!perms || typeof perms !== 'object') {
+    return { ...emptyTemplate };
   }
-
-  const result = { ...EMPTY_RECEPTIONIST_PERMS };
-
-  if (Array.isArray(perms)) {
-    const stringSet = new Set(
-      perms.map((p) => {
-        if (typeof p === 'string') return p.toLowerCase().trim();
-        if (p && typeof p === 'object') {
-          return (p.name || p.permission || p.key || p.id || '').toLowerCase().trim();
-        }
-        return '';
-      })
-    );
-    for (const key of Object.keys(EMPTY_RECEPTIONIST_PERMS)) {
-      const canonical = key.toLowerCase();
-      const dotNotation = `receptionist.${canonical}`;
-      result[key] = stringSet.has(canonical) || stringSet.has(dotNotation);
-    }
-    return result;
+  const result = { ...emptyTemplate };
+  for (const key of Object.keys(emptyTemplate)) {
+    const val = perms[key];
+    result[key] = val === true || val === 'true' || val === 1;
   }
-
-  if (typeof perms === 'object') {
-    for (const key of Object.keys(EMPTY_RECEPTIONIST_PERMS)) {
-      const canonical = key.toLowerCase();
-      const dotNotation = `receptionist.${canonical}`;
-      const val = perms[key] !== undefined ? perms[key] : perms[dotNotation];
-      result[key] = val === true || val === 'true' || val === 1;
-    }
-    return result;
-  }
-
   return result;
 };
 
@@ -109,8 +98,9 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
     status: 'active',
   });
 
-  // Receptionist granular permissions initialized to all false (never default all true)
   const [receptionistPerms, setReceptionistPerms] = useState(EMPTY_RECEPTIONIST_PERMS);
+  const [proPerms, setProPerms] = useState(EMPTY_PRO_PERMS);
+  const [doctorPerms, setDoctorPerms] = useState(EMPTY_DOCTOR_PERMS);
   const [permissionsLoading, setPermissionsLoading] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -137,6 +127,8 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         status: 'active',
       });
       setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
+      setProPerms({ ...EMPTY_PRO_PERMS });
+      setDoctorPerms({ ...EMPTY_DOCTOR_PERMS });
       setPermissionsLoading(false);
       return;
     }
@@ -152,12 +144,18 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
       status: user.status || 'active',
     });
 
-    if (user.role === 'receptionist') {
-      // Step A: Immediately apply permissions from user prop if present (no stale state leak)
-      if (user.permissions !== undefined && user.permissions !== null) {
-        setReceptionistPerms(normalizeReceptionistPermissions(user.permissions, false));
+    const isPermRole = ['receptionist', 'pro_manager', 'doctor'].includes(user.role);
+
+    if (isPermRole) {
+      // Step A: Immediately apply permissions from user prop if present
+      if (user.permissions && typeof user.permissions === 'object') {
+        if (user.role === 'receptionist') setReceptionistPerms(normalizePermissions(user.permissions, EMPTY_RECEPTIONIST_PERMS));
+        if (user.role === 'pro_manager') setProPerms(normalizePermissions(user.permissions, EMPTY_PRO_PERMS));
+        if (user.role === 'doctor') setDoctorPerms(normalizePermissions(user.permissions, EMPTY_DOCTOR_PERMS));
       } else {
         setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
+        setProPerms({ ...EMPTY_PRO_PERMS });
+        setDoctorPerms({ ...EMPTY_DOCTOR_PERMS });
       }
 
       // Step B: Asynchronously fetch latest authoritative permissions from backend
@@ -180,10 +178,13 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
               status: fetchedUser.status || prev.status,
             }));
 
-            // If permissions is strictly null, it is an older legacy user
-            // If it is an object, normalize exact booleans (unselected permissions stay false!)
-            const isLegacy = fetchedUser.permissions === null || fetchedUser.permissions === undefined;
-            setReceptionistPerms(normalizeReceptionistPermissions(fetchedUser.permissions, isLegacy));
+            if (user.role === 'receptionist') {
+              setReceptionistPerms(normalizePermissions(fetchedUser.permissions, EMPTY_RECEPTIONIST_PERMS));
+            } else if (user.role === 'pro_manager') {
+              setProPerms(normalizePermissions(fetchedUser.permissions, EMPTY_PRO_PERMS));
+            } else if (user.role === 'doctor') {
+              setDoctorPerms(normalizePermissions(fetchedUser.permissions, EMPTY_DOCTOR_PERMS));
+            }
           }
         })
         .catch((err) => {
@@ -197,7 +198,6 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         isMounted = false;
       };
     } else {
-      setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
       setPermissionsLoading(false);
     }
   }, [isOpen, user?.user_id]);
@@ -221,9 +221,13 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         status: formData.status,
       };
 
-      // Include accurate permissions in the payload when editing a receptionist
+      // Include accurate permissions in the payload when editing
       if (user.role === 'receptionist') {
         payload.permissions = receptionistPerms;
+      } else if (user.role === 'pro_manager') {
+        payload.permissions = proPerms;
+      } else if (user.role === 'doctor') {
+        payload.permissions = doctorPerms;
       }
 
       const res = await usersApi.updateUser(user.user_id, payload);
@@ -362,7 +366,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
           </div>
         </div>
 
-        {/* Receptionist Granular Permissions — shown only for receptionist role */}
+        {/* Receptionist Granular Permissions */}
         {user.role === 'receptionist' && (
           <div className="pt-2 border-t border-slate-100 space-y-3">
             <div className="flex items-center justify-between">
@@ -402,7 +406,99 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
                 ))}
               </div>
               <p className="mt-2.5 text-[10px] text-blue-600 font-medium">
-                ⚠ The Receptionist must log out and log back in for permission changes to take effect.
+                ⚠ The user must log out and log back in for permission changes to take effect.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* PRO / Manager Granular Permissions */}
+        {user.role === 'pro_manager' && (
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Shield className="w-3.5 h-3.5 text-purple-600" />
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                  PRO / Manager Granular Permissions
+                </h4>
+              </div>
+              {permissionsLoading && (
+                <span className="flex items-center gap-1.5 text-[11px] text-purple-600 font-medium">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Loading saved permissions...
+                </span>
+              )}
+            </div>
+
+            <div
+              className={`bg-purple-50/50 p-3.5 rounded-2xl border border-purple-200/70 transition-opacity ${
+                permissionsLoading ? 'opacity-60 pointer-events-none' : ''
+              }`}
+            >
+              <div className="grid grid-cols-2 gap-2.5 text-xs text-slate-700">
+                {Object.entries(PRO_PERMISSION_LABELS).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      disabled={permissionsLoading}
+                      checked={proPerms[key] === true}
+                      onChange={(e) =>
+                        setProPerms((prev) => ({ ...prev, [key]: e.target.checked }))
+                      }
+                      className="w-4 h-4 text-purple-600 rounded border-slate-300 focus:ring-purple-500 disabled:opacity-50 cursor-pointer"
+                    />
+                    <span className="text-[11px] font-medium">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2.5 text-[10px] text-purple-600 font-medium">
+                ⚠ The user must log out and log back in for permission changes to take effect.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Doctor Granular Permissions */}
+        {user.role === 'doctor' && (
+          <div className="pt-2 border-t border-slate-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Shield className="w-3.5 h-3.5 text-emerald-600" />
+                <h4 className="font-bold text-slate-800 uppercase tracking-wider text-[11px]">
+                  Doctor Granular Permissions
+                </h4>
+              </div>
+              {permissionsLoading && (
+                <span className="flex items-center gap-1.5 text-[11px] text-emerald-600 font-medium">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Loading saved permissions...
+                </span>
+              )}
+            </div>
+
+            <div
+              className={`bg-emerald-50/50 p-3.5 rounded-2xl border border-emerald-200/70 transition-opacity ${
+                permissionsLoading ? 'opacity-60 pointer-events-none' : ''
+              }`}
+            >
+              <div className="grid grid-cols-2 gap-2.5 text-xs text-slate-700">
+                {Object.entries(DOCTOR_PERMISSION_LABELS).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      disabled={permissionsLoading}
+                      checked={doctorPerms[key] === true}
+                      onChange={(e) =>
+                        setDoctorPerms((prev) => ({ ...prev, [key]: e.target.checked }))
+                      }
+                      className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 disabled:opacity-50 cursor-pointer"
+                    />
+                    <span className="text-[11px] font-medium">{label}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-2.5 text-[10px] text-emerald-600 font-medium">
+                ⚠ The doctor must log out and log back in for permission changes to take effect.
               </p>
             </div>
           </div>

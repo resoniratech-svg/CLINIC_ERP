@@ -92,6 +92,7 @@ import { ReportsPage } from './pages/reports/ReportsPage';
 import { RolesPermissionsPage } from './pages/settings/RolesPermissionsPage';
 import { HospitalSettingsPage } from './pages/settings/HospitalSettingsPage';
 import { ProfileSettingsPage } from './pages/settings/ProfileSettingsPage';
+import { CouponManagementPage } from './pages/coupons/CouponManagementPage';
 import { AuditLogsPage } from './pages/logs/AuditLogsPage';
 import { LoginHistoryPage } from './pages/logs/LoginHistoryPage';
 
@@ -170,6 +171,8 @@ export default function App() {
             <Route path="settings/profile" element={<ProfileSettingsPage />} />
             <Route path="settings/permissions" element={<RolesPermissionsPage />} />
             <Route path="settings/hospital" element={<HospitalSettingsPage />} />
+            <Route path="settings/coupons" element={<CouponManagementPage />} />
+            <Route path="coupons" element={<CouponManagementPage />} />
 
             {/* Logs */}
             <Route path="logs/audit" element={<AuditLogsPage />} />
@@ -258,6 +261,13 @@ export default function App() {
               </PermissionGate>
             } />
 
+            {/* Coupon Management — permission: coupon_management */}
+            <Route path="coupons" element={
+              <PermissionGate permission="coupon_management">
+                <CouponManagementPage />
+              </PermissionGate>
+            } />
+
             {/* Profile — always accessible */}
             <Route path="profile" element={<ReceptionistProfilePage />} />
           </Route>
@@ -323,6 +333,13 @@ export default function App() {
             {/* Leaves */}
             <Route path="leaves" element={<DoctorLeavesPage />} />
 
+            {/* Coupon Management — permission: coupon_management */}
+            <Route path="coupons" element={
+              <PermissionGate permission="coupon_management">
+                <CouponManagementPage />
+              </PermissionGate>
+            } />
+
             {/* Profile */}
             <Route path="profile" element={<DoctorProfilePage />} />
           </Route>
@@ -367,6 +384,14 @@ export default function App() {
             <Route path="tasks" element={<PROTasksPage />} />
             <Route path="feedback" element={<PROFeedbackPage />} />
             <Route path="complaints" element={<PROComplaintsPage />} />
+
+            {/* Coupon Management — permission: coupon_management */}
+            <Route path="coupons" element={
+              <PermissionGate permission="coupon_management">
+                <CouponManagementPage />
+              </PermissionGate>
+            } />
+
             <Route path="profile" element={<PROProfilePage />} />
           </Route>
 

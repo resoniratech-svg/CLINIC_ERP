@@ -73,12 +73,25 @@ export const AuthProvider = ({ children }) => {
   const hasPermission = (key) => {
     if (!user) return false;
     if (user.role === 'super_admin') return true;
+
+    // Check if permission key is explicitly defined in user.permissions
+    if (user.permissions && typeof user.permissions === 'object') {
+      if (user.permissions[key] !== undefined) {
+        return user.permissions[key] === true;
+      }
+    }
+
     if (user.role === 'receptionist') {
-      // permissions must be an object with boolean values
       if (!user.permissions || typeof user.permissions !== 'object') return false;
       return user.permissions[key] === true;
     }
-    // Other roles (doctor, pro_manager, executive, pharmacy) use role-level RBAC only
+
+    // Coupon management is strictly gated by permission for non-super_admin users
+    if (key === 'coupon_management') {
+      return false;
+    }
+
+    // Other roles use role-level RBAC for their default features
     return true;
   };
 

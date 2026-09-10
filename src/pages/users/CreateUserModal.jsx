@@ -34,6 +34,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
     followup: true,
     renewal: true,
     due_management: true,
+    coupon_management: false,
   });
 
   const [doctorDetails, setDoctorDetails] = useState({
@@ -50,6 +51,10 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
     followup_consultation_fee: 200,
   });
 
+  const [doctorPerms, setDoctorPerms] = useState({
+    coupon_management: false,
+  });
+
   const [proPerms, setProPerms] = useState({
     counselling: true,
     billing: true,
@@ -62,6 +67,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
     feedback: true,
     reports: true,
     accountant: true,
+    coupon_management: false,
   });
 
   const [execDetails, setExecDetails] = useState({
@@ -134,6 +140,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
         payload.permissions = receptionistPerms;
       } else if (role === 'doctor') {
         payload.doctor_details = doctorDetails;
+        payload.permissions = doctorPerms;
       } else if (role === 'pro_manager') {
         payload.permissions = proPerms;
       } else if (role === 'executive') {
@@ -407,6 +414,24 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
                   onChange={(e) => setDoctorDetails({ ...doctorDetails, followup_consultation_fee: parseFloat(e.target.value) || 0 })}
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
                 />
+              </div>
+            </div>
+
+            {/* Doctor Granular Permissions */}
+            <div className="pt-3 border-t border-indigo-200/60">
+              <h5 className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider mb-2">
+                Doctor Granular Permissions
+              </h5>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs text-slate-700">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={doctorPerms.coupon_management}
+                    onChange={(e) => setDoctorPerms({ ...doctorPerms, coupon_management: e.target.checked })}
+                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
+                  />
+                  <span className="text-[11px] font-medium text-slate-700">Coupon Management</span>
+                </label>
               </div>
             </div>
           </div>

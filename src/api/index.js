@@ -394,3 +394,17 @@ export const proApi = {
   getProfile: () => axiosClient.get('/pro/profile'),
   updateProfile: (data) => axiosClient.put('/pro/profile', data)
 };
+
+export const couponsApi = {
+  getCoupons: (params) => axiosClient.get('/coupons', { params }),
+  getCouponById: (id) => axiosClient.get(`/coupons/${id}`),
+  generateCode: (params) => axiosClient.get('/coupons/generate-code', { params }),
+  createCoupon: (data) => axiosClient.post('/coupons', data),
+  updateCoupon: (id, data) => axiosClient.put(`/coupons/${id}`, data),
+  updateStatus: (id, status) => axiosClient.patch(`/coupons/${id}/status`, { status }),
+  searchPatients: (params) => axiosClient.get('/coupons/patients/search', { params }),
+  validateCoupon: (params) => axiosClient.get('/coupons/validate', { params }),
+  redeemCoupon: (data) => axiosClient.post('/coupons/redeem', data),
+  getRedemptions: (id) => axiosClient.get(`/coupons/${id}/redemptions`)
+};
+

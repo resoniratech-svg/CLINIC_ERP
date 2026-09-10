@@ -17,7 +17,8 @@ import {
   LogOut,
   ChevronDown,
   Building,
-  HeartHandshake
+  HeartHandshake,
+  Ticket
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -61,6 +62,7 @@ export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
   const canDueManagement   = hasPermission('due_management');
   const canCrmCalling      = hasPermission('crm_calling');
   const canFollowup        = hasPermission('followup');
+  const canCoupon          = hasPermission('coupon_management');
 
   // Registration section is visible if either registration OR renewal is permitted
   const showRegistrationSection = canRegistration || canRenewal;
@@ -272,6 +274,14 @@ export const ReceptionistSidebar = ({ isMobileOpen, onCloseMobile }) => {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Coupon Management — requires: coupon_management */}
+          {canCoupon && (
+            <NavLink to="/receptionist/coupons" className={navLinkClasses} onClick={onCloseMobile}>
+              <Ticket className="w-4 h-4 text-purple-600" />
+              <span>Coupon Management</span>
+            </NavLink>
           )}
 
           {/* CRM & Calling — requires: crm_calling */}
