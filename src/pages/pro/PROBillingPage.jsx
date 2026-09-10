@@ -8,12 +8,9 @@ import {
   CheckCircle,
   AlertCircle,
   RefreshCw,
-  Search,
-  DollarSign,
   ArrowDownRight,
   ShieldCheck,
   History,
-  FileText,
   Stethoscope,
   BarChart3,
   TrendingUp,
@@ -25,11 +22,12 @@ import { proApi, settingsApi, couponsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 const formatCurrency = (val) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
 
-export const PROBillingPage = () => {
+const PROBillingPageContent = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -96,9 +94,19 @@ export const PROBillingPage = () => {
   });
 
   const verifyPatient = useCallback(async (idToVerify, explicitDoctorId = null) => {
-    const pId = parseInt(idToVerify);
-    if (!pId || isNaN(pId)) {
+    if (!idToVerify || String(idToVerify).trim() === '') {
       setPatientLookup({ loading: false, patient: null, error: null });
+      setAvailablePackages([]);
+      setPrescribedTreatments([]);
+      setConsultingDoctor(null);
+      setPatientCoupons([]);
+      setSelectedCoupon(null);
+      return;
+    }
+
+    const pId = parseInt(idToVerify, 10);
+    if (isNaN(pId) || pId <= 0) {
+      setPatientLookup({ loading: false, patient: null, error: `Invalid Patient ID "${idToVerify}"` });
       setAvailablePackages([]);
       setPrescribedTreatments([]);
       setConsultingDoctor(null);
@@ -111,7 +119,7 @@ export const PROBillingPage = () => {
     setLoadingPackages(true);
     try {
       const res = await proApi.getPatientOverview(pId);
-      if (res.success && res.data?.patient) {
+      if (res?.success && res.data?.patient) {
         setPatientLookup({
           loading: false,
           patient: res.data.patient,
@@ -136,26 +144,31 @@ export const PROBillingPage = () => {
           }
         }
 
-        // Also fetch active/pending packages for this patient
+        // Also fetch active/pending packages for this patient (non-blocking)
         try {
           const pkgRes = await proApi.getPackages({ patient_id: pId });
-          if (pkgRes.success) {
+          if (pkgRes?.success) {
             setAvailablePackages(pkgRes.data || []);
           }
         } catch {
           setAvailablePackages([]);
         }
 
-        // Also fetch referral reward coupons for this patient
+        // Also fetch referral reward coupons for this patient (fault-tolerant & non-blocking)
         setLoadingCoupons(true);
         try {
-          const coupRes = await couponsApi.getPatientCoupons(pId);
-          if (coupRes.success && coupRes.data) {
-            setPatientCoupons(coupRes.data.coupons || []);
+          if (couponsApi && typeof couponsApi.getPatientCoupons === 'function') {
+            const coupRes = await couponsApi.getPatientCoupons(pId);
+            if (coupRes?.success && coupRes?.data) {
+              setPatientCoupons(coupRes.data.coupons || []);
+            } else {
+              setPatientCoupons([]);
+            }
           } else {
             setPatientCoupons([]);
           }
-        } catch {
+        } catch (cErr) {
+          console.warn('Non-blocking: could not load referral coupons:', cErr);
           setPatientCoupons([]);
         } finally {
           setLoadingCoupons(false);
@@ -173,7 +186,7 @@ export const PROBillingPage = () => {
         setSelectedCoupon(null);
       }
     } catch (err) {
-      const errMsg = err.response?.data?.message || err.message || 'Patient not found';
+      const errMsg = err?.response?.data?.message || err?.message || 'Patient not found';
       setPatientLookup({
         loading: false,
         patient: null,
@@ -189,29 +202,50 @@ export const PROBillingPage = () => {
     }
   }, []);
 
-  // Handle URL query parameters (e.g. from Patient Overview)
+  // Handle URL query parameters (e.g. from Patient Overview or Treatment Plans)
   useEffect(() => {
-    const qPatientId = searchParams.get('patient_id');
-    const qDoctorId = searchParams.get('doctor_id');
-    const qTreatmentName = searchParams.get('treatment_name');
-    const qTreatmentType = searchParams.get('treatment_type');
+    try {
+      const qPatientId = searchParams.get('patient_id');
+      const qDoctorId = searchParams.get('doctor_id');
+      let qTreatmentName = searchParams.get('treatment_name');
+      let qTreatmentType = searchParams.get('treatment_type');
 
-    if (qPatientId) {
-      setForm(prev => ({
-        ...prev,
-        patient_id: qPatientId,
-        doctor_id: qDoctorId || prev.doctor_id,
-        bill_type: 'treatment',
-        items: qTreatmentName ? [
-          {
-            item_name: qTreatmentName,
-            charge_type: qTreatmentType || 'Treatment',
-            quantity: 1,
-            unit_price: 2000
+      if (qTreatmentName && typeof qTreatmentName === 'string') {
+        try {
+          if (qTreatmentName.includes('%')) {
+            qTreatmentName = decodeURIComponent(qTreatmentName);
           }
-        ] : prev.items
-      }));
-      verifyPatient(qPatientId, qDoctorId);
+        } catch {}
+      }
+
+      if (qTreatmentType && typeof qTreatmentType === 'string') {
+        try {
+          if (qTreatmentType.includes('%')) {
+            qTreatmentType = decodeURIComponent(qTreatmentType);
+          }
+        } catch {}
+      }
+
+      if (qPatientId) {
+        const cleanPatientId = String(qPatientId).trim();
+        setForm(prev => ({
+          ...prev,
+          patient_id: cleanPatientId,
+          doctor_id: qDoctorId ? String(qDoctorId).trim() : prev.doctor_id,
+          bill_type: 'treatment',
+          items: qTreatmentName ? [
+            {
+              item_name: qTreatmentName,
+              charge_type: qTreatmentType || 'Treatment',
+              quantity: 1,
+              unit_price: 2000
+            }
+          ] : prev.items
+        }));
+        verifyPatient(cleanPatientId, qDoctorId ? String(qDoctorId).trim() : null);
+      }
+    } catch (err) {
+      console.error('Error parsing billing query params:', err);
     }
   }, [searchParams, verifyPatient]);
 
@@ -319,6 +353,15 @@ export const PROBillingPage = () => {
       return { ...prev, items: updated };
     });
   };
+
+  // Calculate live preview subtotal, discount, and total
+  const previewSubtotal = (form.items || []).reduce(
+    (sum, it) => sum + (parseFloat(it.unit_price || 0) * parseInt(it.quantity || 1)),
+    0
+  );
+  const previewDiscount = Math.max(0, parseFloat(form.discount_amount || 0));
+  const previewTotal = Math.max(0, Math.round((previewSubtotal - previewDiscount) * 100) / 100);
+  const isDiscountOverSubtotal = previewDiscount > previewSubtotal && previewSubtotal > 0;
 
   // Recalculate discount whenever selected coupon or subtotal changes
   useEffect(() => {
@@ -1308,5 +1351,16 @@ export const PROBillingPage = () => {
         }}
       />
     </div>
+  );
+};
+
+export const PROBillingPage = (props) => {
+  return (
+    <ErrorBoundary
+      title="PRO Billing Error"
+      message="An error occurred while displaying the billing screen. You can try refreshing or returning to patient overview."
+    >
+      <PROBillingPageContent {...props} />
+    </ErrorBoundary>
   );
 };
