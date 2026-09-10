@@ -195,10 +195,11 @@ export const ExcelImportPage = () => {
         setParsedRows([]);
         setFile(null);
       } else {
-        showToast('Failed to import outbound records', 'error');
+        showToast(res.message || 'Failed to import outbound records', 'error');
       }
     } catch (err) {
-      showToast(err.message || 'Error processing outbound import', 'error');
+      const errMsg = err.response?.data?.message || err.message || 'Error processing outbound import';
+      showToast(errMsg, 'error');
     } finally {
       setLoading(false);
     }

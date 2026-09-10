@@ -73,7 +73,13 @@ export const crmApi = {
 export const callCenterApi = {
   searchPatientInbound: (data) => axiosClient.post('/callcenter/inbound/search', data),
   createLead: (data) => axiosClient.post('/callcenter/leads', data),
-  importOutboundLeads: (data) => axiosClient.post('/callcenter/outbound/import', data),
+  importOutboundLeads: (data) =>
+    axiosClient.post('/callcenter/outbound/import', data).catch((err) => {
+      if (err?.response?.status === 404) {
+        return axiosClient.post('/outbound/import', data);
+      }
+      throw err;
+    }),
   getExecutiveIncentives: (params) => axiosClient.get('/callcenter/executive-incentives', { params }),
 };
 
@@ -269,7 +275,20 @@ export const executiveApi = {
   createLead: (data) => axiosClient.post('/executive/leads', data),
   updateLead: (id, data) => axiosClient.put(`/executive/leads/${id}`, data),
   updateOutboundLead: (id, data) => axiosClient.put(`/executive/outbound/leads/${id}`, data),
-  importOutboundLeads: (data) => axiosClient.post('/executive/outbound/import', data),
+  importOutboundLeads: (data) =>
+    axiosClient.post('/executive/outbound/import', data).catch((err) => {
+      if (err?.response?.status === 404) {
+        return axiosClient.post('/outbound/import', data);
+      }
+      throw err;
+    }),
+  getOutboundImportBatches: () =>
+    axiosClient.get('/executive/outbound/batches').catch((err) => {
+      if (err?.response?.status === 404) {
+        return axiosClient.get('/outbound/batches');
+      }
+      throw err;
+    }),
   getOutboundQueue: (params) =>
     axiosClient.get('/executive/outbound/queue', { params }).catch((err) => {
       if (err?.response?.status === 404) {
