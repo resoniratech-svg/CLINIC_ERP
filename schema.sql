@@ -228,6 +228,8 @@ CREATE TABLE IF NOT EXISTS patients (
     gender          gender_type,
     village         VARCHAR(150),
     mandal          VARCHAR(150),
+    village_id      INTEGER REFERENCES master_villages(id),
+    mandal_id       INTEGER REFERENCES master_mandals(id),
     address         TEXT,
     source          VARCHAR(100),
     patient_type    patient_type NOT NULL DEFAULT 'new',

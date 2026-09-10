@@ -11,6 +11,8 @@ async function bootstrap() {
     await db.query("ALTER TYPE appointment_status ADD VALUE IF NOT EXISTS 'in_consultation'");
     await db.query("ALTER TABLE outbound_leads ADD COLUMN IF NOT EXISTS serial_no VARCHAR(100)");
     await db.query("ALTER TABLE outbound_leads ADD COLUMN IF NOT EXISTS problem TEXT");
+    await db.query("ALTER TABLE patients ADD COLUMN IF NOT EXISTS village_id INTEGER");
+    await db.query("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mandal_id INTEGER");
 
     // Auto-apply additive migration files safely
     const migDir = path.join(__dirname, '../migrations');

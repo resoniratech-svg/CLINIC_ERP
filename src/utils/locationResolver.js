@@ -1,40 +1,67 @@
 /**
  * Location Resolver Utility for dynamic Village -> Mandal resolution & master data auto-creation.
- * Ensures consistent parsing, case-insensitivity, and deduplication scoped by parent mandal.
+ * Ensures consistent parsing, case-insensitivity, validation, and deduplication scoped by parent mandal.
  */
 
+/**
+ * Defensive schema helper ensuring patients table has village_id and mandal_id columns.
+ * Prevents 500 errors on instances where migrations may not have run yet.
+ */
+async function ensurePatientLocationColumns(client) {
+  try {
+    await client.query("ALTER TABLE patients ADD COLUMN IF NOT EXISTS village_id INTEGER");
+    await client.query("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mandal_id INTEGER");
+  } catch (e) {
+    // Safe to ignore if already present
+  }
+}
+
+/**
+ * Resolves or auto-creates Village and Mandal in master data.
+ * Returns { village, mandal, village_id, mandal_id } or { error, statusCode }.
+ */
 async function resolveOrCreateLocation(client, params = {}) {
   const { village_mandal, village, mandal, village_id, mandal_id } = params;
 
-  let vId = village_id ? parseInt(village_id, 10) : null;
-  let mId = mandal_id ? parseInt(mandal_id, 10) : null;
+  let vId = village_id !== undefined && village_id !== null && village_id !== '' ? parseInt(village_id, 10) : null;
+  let mId = mandal_id !== undefined && mandal_id !== null && mandal_id !== '' ? parseInt(mandal_id, 10) : null;
   let vName = village && typeof village === 'string' ? village.trim() : null;
   let mName = mandal && typeof mandal === 'string' ? mandal.trim() : null;
 
-  // 1. If explicit village_id is provided, resolve directly from master_villages
-  if (vId && !isNaN(vId)) {
+  // 1. If explicit village_id is provided, validate and resolve directly from master_villages
+  if (vId !== null && !isNaN(vId)) {
     const vRes = await client.query(`
-      SELECT v.*, m.name as mandal_name
+      SELECT v.*, m.name as mandal_name, m.id as resolved_mandal_id
       FROM master_villages v
       LEFT JOIN master_mandals m ON v.mandal_id = m.id
       WHERE v.id = $1
     `, [vId]);
-    if (vRes.rows.length > 0) {
-      const row = vRes.rows[0];
-      vName = row.name;
-      mId = row.mandal_id || mId;
-      mName = row.mandal_name || mName;
-      return { village: vName, mandal: mName, village_id: vId, mandal_id: mId };
+
+    if (vRes.rows.length === 0) {
+      return {
+        error: `Invalid village_id: Village with ID ${vId} does not exist in master registry`,
+        statusCode: 400
+      };
     }
+
+    const row = vRes.rows[0];
+    vName = row.name;
+    mId = row.resolved_mandal_id || row.mandal_id || null;
+    mName = row.mandal_name || null;
+    return { village: vName, mandal: mName, village_id: vId, mandal_id: mId };
   }
 
-  // 2. If explicit mandal_id is provided without village
-  if (mId && !isNaN(mId) && !vName) {
+  // 2. If explicit mandal_id is provided without village (Mandal-only location)
+  if (mId !== null && !isNaN(mId) && !vName) {
     const mRes = await client.query(`SELECT * FROM master_mandals WHERE id = $1`, [mId]);
-    if (mRes.rows.length > 0) {
-      mName = mRes.rows[0].name;
-      return { village: null, mandal: mName, village_id: null, mandal_id: mId };
+    if (mRes.rows.length === 0) {
+      return {
+        error: `Invalid mandal_id: Mandal with ID ${mId} does not exist in master registry`,
+        statusCode: 400
+      };
     }
+    mName = mRes.rows[0].name;
+    return { village: null, mandal: mName, village_id: null, mandal_id: mId };
   }
 
   // 3. Parse input string if village_mandal is provided and village/mandal are not both set
@@ -65,6 +92,7 @@ async function resolveOrCreateLocation(client, params = {}) {
         LEFT JOIN master_mandals m ON v.mandal_id = m.id
         WHERE LOWER(TRIM(v.name)) = LOWER(TRIM($1))
       `, [input]);
+
       if (exactV.rows.length === 1) {
         return {
           village: exactV.rows[0].name,
@@ -77,6 +105,7 @@ async function resolveOrCreateLocation(client, params = {}) {
       const exactM = await client.query(`
         SELECT * FROM master_mandals WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))
       `, [input]);
+
       if (exactM.rows.length > 0) {
         return {
           village: null,
@@ -92,7 +121,8 @@ async function resolveOrCreateLocation(client, params = {}) {
         rawMandal = words.slice(1).join(' ');
       } else if (words.length === 1 && words[0].length > 0) {
         return {
-          error: "Please specify both Village and Mandal in the format 'Village, Mandal' (e.g. 'Kachapur, Bhiknur')",
+          error: "Please specify both Village and Mandal in the format 'Village, Mandal' (e.g. 'mandhapur, domakonda')",
+          statusCode: 400,
           village: words[0],
           mandal: null,
           village_id: null,
@@ -169,4 +199,5 @@ async function resolveOrCreateLocation(client, params = {}) {
 
 module.exports = {
   resolveOrCreateLocation,
+  ensurePatientLocationColumns,
 };

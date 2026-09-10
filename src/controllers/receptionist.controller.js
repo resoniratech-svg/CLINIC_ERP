@@ -1,6 +1,6 @@
 const db = require('../db');
 const { formatResponse } = require('../utils/helpers');
-const { resolveOrCreateLocation } = require('../utils/locationResolver');
+const { resolveOrCreateLocation, ensurePatientLocationColumns } = require('../utils/locationResolver');
 
 // Helper to generate padded sequential code (collision-proof)
 async function generateId(prefix, tableName, client = null) {
@@ -173,11 +173,17 @@ async function searchPatients(req, res) {
     const patients = result.rows.map(patient => {
       const regExpiry = patient.registration_expiry ? new Date(patient.registration_expiry).toISOString().split('T')[0] : null;
       const regStatus = regExpiry && regExpiry >= today ? 'active' : 'expired';
+      const locDisplay = (patient.village && patient.mandal)
+        ? `${patient.village}, ${patient.mandal}`
+        : (patient.village || patient.mandal || patient.address || null);
       return {
         ...patient,
         registration_status: regStatus,
         expiry_date: regExpiry,
-        current_doctor_name: patient.doctor_name
+        current_doctor_name: patient.doctor_name,
+        village_name: patient.village || null,
+        mandal_name: patient.mandal || null,
+        display_location: locDisplay
       };
     });
 
@@ -234,6 +240,11 @@ async function getPatientOverview(req, res) {
     const regStatus = regExpiry && regExpiry >= today ? 'active' : 'expired';
     patient.expiry_date = regExpiry;
     patient.registration_status = regStatus;
+    patient.village_name = patient.village || null;
+    patient.mandal_name = patient.mandal || null;
+    patient.display_location = (patient.village && patient.mandal)
+      ? `${patient.village}, ${patient.mandal}`
+      : (patient.village || patient.mandal || patient.address || null);
 
     // Upcoming Appointment
     const apptRes = await db.query(`
@@ -375,6 +386,9 @@ async function registerPatient(req, res) {
 
     const branchId = req.user.branch_id || 1;
 
+    // Ensure patients table has location columns
+    await ensurePatientLocationColumns(client);
+
     // Resolve or dynamically create Village and Mandal master data
     let locResolution = { village: null, mandal: null, village_id: null, mandal_id: null };
     if (village_mandal || village || mandal || village_id || mandal_id) {
@@ -387,7 +401,7 @@ async function registerPatient(req, res) {
       });
       if (locResolution.error) {
         await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, locResolution.error));
+        return res.status(locResolution.statusCode || 400).json(formatResponse(false, null, locResolution.error));
       }
     }
 
@@ -691,7 +705,16 @@ async function registerPatient(req, res) {
       target_target: targetTarget,
       patient_id: targetPatientId,
       registration_id: targetPatient?.registration_id,
-      patient: targetPatient,
+      patient: {
+        ...targetPatient,
+        village_id: locResolution.village_id || targetPatient?.village_id || null,
+        mandal_id: locResolution.mandal_id || targetPatient?.mandal_id || null,
+        village_name: locResolution.village || targetPatient?.village || null,
+        mandal_name: locResolution.mandal || targetPatient?.mandal || null,
+        display_location: (locResolution.village && locResolution.mandal)
+          ? `${locResolution.village}, ${locResolution.mandal}`
+          : (locResolution.village || locResolution.mandal || targetPatient?.village || targetPatient?.mandal || targetPatient?.address || null)
+      },
       appointment: newAppt,
       bill: newBill,
       payment: newPayment,
@@ -883,6 +906,8 @@ async function createEmployeeReferral(req, res) {
       const regExpiry = new Date();
       regExpiry.setDate(regExpiry.getDate() + validityDays);
 
+      await ensurePatientLocationColumns(client);
+
       let locResolution = { village: null, mandal: null, village_id: null, mandal_id: null };
       if (village_mandal || village || mandal || village_id || mandal_id) {
         locResolution = await resolveOrCreateLocation(client, {
@@ -892,6 +917,10 @@ async function createEmployeeReferral(req, res) {
           village_id,
           mandal_id
         });
+        if (locResolution.error) {
+          await client.query('ROLLBACK');
+          return res.status(locResolution.statusCode || 400).json(formatResponse(false, null, locResolution.error));
+        }
       }
 
       const resolvedAddress = address || (
@@ -1057,6 +1086,8 @@ async function createPatientReferral(req, res) {
       const regExpiry = new Date();
       regExpiry.setDate(regExpiry.getDate() + validityDays);
 
+      await ensurePatientLocationColumns(client);
+
       let locResolution = { village: null, mandal: null, village_id: null, mandal_id: null };
       if (village_mandal || village || mandal || village_id || mandal_id) {
         locResolution = await resolveOrCreateLocation(client, {
@@ -1066,6 +1097,10 @@ async function createPatientReferral(req, res) {
           village_id,
           mandal_id
         });
+        if (locResolution.error) {
+          await client.query('ROLLBACK');
+          return res.status(locResolution.statusCode || 400).json(formatResponse(false, null, locResolution.error));
+        }
       }
 
       const resolvedAddress = address || (
