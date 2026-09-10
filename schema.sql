@@ -705,6 +705,11 @@ CREATE INDEX IF NOT EXISTS idx_coupons_status ON coupons(status);
 CREATE INDEX IF NOT EXISTS idx_coupons_referring_patient ON coupons(referring_patient_id);
 CREATE INDEX IF NOT EXISTS idx_coupons_referred_patient ON coupons(referred_patient_id);
 CREATE INDEX IF NOT EXISTS idx_coupons_validity ON coupons(valid_from, valid_until);
+CREATE INDEX IF NOT EXISTS idx_coupons_referring_created ON coupons(referring_patient_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_coupon_id ON coupon_redemptions(coupon_id);
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_patient_id ON coupon_redemptions(patient_id);
 CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_bill_id ON coupon_redemptions(bill_id);
+
+-- BILLS COUPON LINK
+ALTER TABLE bills ADD COLUMN IF NOT EXISTS coupon_id INTEGER REFERENCES coupons(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_bills_coupon_id ON bills(coupon_id);

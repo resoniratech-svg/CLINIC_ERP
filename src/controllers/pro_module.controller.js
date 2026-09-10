@@ -717,7 +717,7 @@ async function getPrescriptionItemModifications(req, res) {
 async function createBill(req, res) {
   const client = await db.pool.connect();
   try {
-    const { patient_id, doctor_id, appointment_id, bill_type, items, discount_amount, package_id } = req.body;
+    const { patient_id, doctor_id, appointment_id, bill_type, items, discount_amount, package_id, coupon_code, coupon_id } = req.body;
 
     if (!patient_id || !bill_type || !items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json(formatResponse(false, null, 'patient_id, bill_type, and items array are required'));
@@ -736,8 +736,76 @@ async function createBill(req, res) {
       subtotal += lineTotal;
     }
 
-    const discAmt = parseFloat(discount_amount || 0);
-    const totalAmount = subtotal - discAmt; // Server-computed!
+    let discAmt = parseFloat(discount_amount || 0);
+    let resolvedCoupon = null;
+
+    // Atomic Coupon Validation & Lock
+    if (coupon_code || coupon_id) {
+      const cRes = await client.query(`
+        SELECT * FROM coupons 
+        WHERE (id = $1 OR LOWER(coupon_code) = LOWER($2))
+        FOR UPDATE
+      `, [coupon_id ? parseInt(coupon_id, 10) : -1, coupon_code ? String(coupon_code).trim() : '']);
+
+      if (cRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json(formatResponse(false, null, 'Referral coupon not found'));
+      }
+
+      resolvedCoupon = cRes.rows[0];
+
+      // Verify coupon belongs to this patient (Patient A is referring_patient_id)
+      if (parseInt(resolvedCoupon.referring_patient_id, 10) !== parseInt(patient_id, 10)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(
+          false, 
+          null, 
+          `This referral coupon belongs to Patient #${resolvedCoupon.referring_patient_id} and cannot be used for Patient #${patient_id}`
+        ));
+      }
+
+      if (resolvedCoupon.status === 'redeemed') {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'This referral coupon has already been redeemed and cannot be reused'));
+      }
+
+      if (resolvedCoupon.status !== 'active') {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `Cannot redeem coupon with status "${resolvedCoupon.status}"`));
+      }
+
+      const vFromStr = resolvedCoupon.valid_from instanceof Date ? resolvedCoupon.valid_from.toISOString().split('T')[0] : String(resolvedCoupon.valid_from).split('T')[0];
+      const vUntilStr = resolvedCoupon.valid_until instanceof Date ? resolvedCoupon.valid_until.toISOString().split('T')[0] : String(resolvedCoupon.valid_until).split('T')[0];
+      const today = new Date().toISOString().split('T')[0];
+
+      if (vFromStr > today) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `This coupon is not valid until ${vFromStr}`));
+      }
+
+      if (vUntilStr < today) {
+        await client.query(`UPDATE coupons SET status = 'expired' WHERE id = $1`, [resolvedCoupon.id]);
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `This coupon expired on ${vUntilStr}`));
+      }
+
+      // Calculate discount server-side
+      const discountVal = parseFloat(resolvedCoupon.discount_value);
+      let calculatedDiscount = 0;
+      if (resolvedCoupon.discount_type === 'percentage') {
+        calculatedDiscount = (subtotal * discountVal) / 100;
+        if (resolvedCoupon.max_discount_limit && parseFloat(resolvedCoupon.max_discount_limit) > 0) {
+          calculatedDiscount = Math.min(calculatedDiscount, parseFloat(resolvedCoupon.max_discount_limit));
+        }
+      } else {
+        calculatedDiscount = discountVal;
+      }
+
+      // Cap discount at subtotal
+      discAmt = Math.round(Math.min(calculatedDiscount, subtotal) * 100) / 100;
+    }
+
+    const totalAmount = Math.max(0, Math.round((subtotal - discAmt) * 100) / 100);
 
     const billNo = 'BILL-PRO-' + Date.now();
     const createdBy = req.user.user_id;
@@ -746,16 +814,21 @@ async function createBill(req, res) {
     const billRes = await client.query(`
       INSERT INTO bills (
         bill_number, patient_id, doctor_id, bill_type, amount, discount_amount,
-        final_amount, created_by, branch_id, package_id, status
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, 'created'::bill_status)
+        final_amount, created_by, branch_id, package_id, status, coupon_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, 'created'::bill_status, $10)
       RETURNING *
-    `, [billNo, patient_id, docIdToUse, bill_type, subtotal, discAmt, totalAmount, createdBy, package_id || null]);
+    `, [billNo, patient_id, docIdToUse, bill_type, subtotal, discAmt, totalAmount, createdBy, package_id || null, resolvedCoupon ? resolvedCoupon.id : null]);
 
     const bill = billRes.rows[0];
     bill.subtotal = subtotal;
     bill.total_amount = totalAmount;
     bill.paid_amount = 0;
     bill.payment_status = 'pending';
+    if (resolvedCoupon) {
+      bill.coupon_code = resolvedCoupon.coupon_code;
+      bill.coupon_id = resolvedCoupon.id;
+      bill.discount_amount = discAmt;
+    }
 
     for (const item of items) {
       const lineTotal = parseFloat(item.unit_price || item.amount || 0) * parseInt(item.quantity || 1);
@@ -768,9 +841,33 @@ async function createBill(req, res) {
       `, [bill.bill_id, chargeType, desc, lineTotal]);
     }
 
+    // Atomic Coupon Redemption
+    if (resolvedCoupon) {
+      await client.query(`
+        UPDATE coupons 
+        SET status = 'redeemed', updated_by = $1, updated_at = now() 
+        WHERE id = $2
+      `, [createdBy, resolvedCoupon.id]);
+
+      await client.query(`
+        INSERT INTO coupon_redemptions (
+          coupon_id, patient_id, bill_id, bill_amount, discount_amount, final_payable, redeemed_by, remarks
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        resolvedCoupon.id,
+        patient_id,
+        bill.bill_id,
+        subtotal,
+        discAmt,
+        totalAmount,
+        createdBy,
+        `Redeemed in PRO Billing (Bill: ${billNo})`
+      ]);
+    }
+
     await client.query('COMMIT');
     res.locals.auditEntry = { module: 'PRO Billing', action: 'Create Bill', recordId: bill.bill_id, newValue: bill };
-    return res.status(201).json(formatResponse(true, bill, 'Bill created successfully'));
+    return res.status(201).json(formatResponse(true, bill, resolvedCoupon ? `Bill created and coupon ${resolvedCoupon.coupon_code} redeemed successfully` : 'Bill created successfully'));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('createBill error:', err);

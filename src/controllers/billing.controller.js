@@ -85,7 +85,7 @@ async function createBill(req, res) {
   try {
     await client.query('BEGIN');
 
-    const { patient_id, doctor_id, bill_type, items, amount, discount_amount, discount_approved_by } = req.body;
+    const { patient_id, doctor_id, bill_type, items, amount, discount_amount, discount_approved_by, coupon_code, coupon_id } = req.body;
 
     if (!patient_id || !bill_type || amount === undefined) {
       await client.query('ROLLBACK');
@@ -100,10 +100,72 @@ async function createBill(req, res) {
       return res.status(403).json(formatResponse(false, null, 'Receptionists are restricted to consultation fee billing only. Treatment and other billing must be handled by PRO/Manager.'));
     }
 
-    // Validate discount limit
-    const discount = parseFloat(discount_amount || 0);
+    let discount = parseFloat(discount_amount || 0);
     const totalAmount = parseFloat(amount);
-    if (discount > 0) {
+    let resolvedCoupon = null;
+
+    if (coupon_code || coupon_id) {
+      const cRes = await client.query(`
+        SELECT * FROM coupons 
+        WHERE (id = $1 OR LOWER(coupon_code) = LOWER($2))
+        FOR UPDATE
+      `, [coupon_id ? parseInt(coupon_id, 10) : -1, coupon_code ? String(coupon_code).trim() : '']);
+
+      if (cRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(404).json(formatResponse(false, null, 'Referral coupon not found'));
+      }
+
+      resolvedCoupon = cRes.rows[0];
+
+      if (parseInt(resolvedCoupon.referring_patient_id, 10) !== parseInt(patient_id, 10)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(
+          false, 
+          null, 
+          `This referral coupon belongs to Patient #${resolvedCoupon.referring_patient_id} and cannot be used for Patient #${patient_id}`
+        ));
+      }
+
+      if (resolvedCoupon.status === 'redeemed') {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'This referral coupon has already been redeemed and cannot be reused'));
+      }
+
+      if (resolvedCoupon.status !== 'active') {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `Cannot redeem coupon with status "${resolvedCoupon.status}"`));
+      }
+
+      const vFromStr = resolvedCoupon.valid_from instanceof Date ? resolvedCoupon.valid_from.toISOString().split('T')[0] : String(resolvedCoupon.valid_from).split('T')[0];
+      const vUntilStr = resolvedCoupon.valid_until instanceof Date ? resolvedCoupon.valid_until.toISOString().split('T')[0] : String(resolvedCoupon.valid_until).split('T')[0];
+      const today = new Date().toISOString().split('T')[0];
+
+      if (vFromStr > today) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `This coupon is not valid until ${vFromStr}`));
+      }
+
+      if (vUntilStr < today) {
+        await client.query(`UPDATE coupons SET status = 'expired' WHERE id = $1`, [resolvedCoupon.id]);
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `This coupon expired on ${vUntilStr}`));
+      }
+
+      const discountVal = parseFloat(resolvedCoupon.discount_value);
+      let calculatedDiscount = 0;
+      if (resolvedCoupon.discount_type === 'percentage') {
+        calculatedDiscount = (totalAmount * discountVal) / 100;
+        if (resolvedCoupon.max_discount_limit && parseFloat(resolvedCoupon.max_discount_limit) > 0) {
+          calculatedDiscount = Math.min(calculatedDiscount, parseFloat(resolvedCoupon.max_discount_limit));
+        }
+      } else {
+        calculatedDiscount = discountVal;
+      }
+
+      discount = Math.round(Math.min(calculatedDiscount, totalAmount) * 100) / 100;
+    } else if (discount > 0) {
+      // Validate manual discount limit
       const maxDiscountPct = 20.00; // default 20% limit
       const maxDiscountAmt = (totalAmount * maxDiscountPct) / 100;
       if (discount > maxDiscountAmt && userRole !== 'super_admin' && !discount_approved_by) {
@@ -112,19 +174,20 @@ async function createBill(req, res) {
       }
     }
 
-    const finalAmount = totalAmount - discount;
+    const finalAmount = Math.max(0, Math.round((totalAmount - discount) * 100) / 100);
     const branchId = req.user.branch_id || 1;
     const billNumber = `BILL-${Date.now()}`;
 
     const billRes = await client.query(`
       INSERT INTO bills (
         bill_number, patient_id, doctor_id, bill_type, created_by, amount,
-        discount_amount, discount_approved_by, final_amount, status, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'created', $10)
+        discount_amount, discount_approved_by, final_amount, status, branch_id, coupon_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'created', $10, $11)
       RETURNING *
     `, [
       billNumber, patient_id, doctor_id || null, bill_type, req.user.user_id,
-      totalAmount, discount, discount_approved_by || null, finalAmount, branchId
+      totalAmount, discount, discount_approved_by || null, finalAmount, branchId,
+      resolvedCoupon ? resolvedCoupon.id : null
     ]);
 
     const newBill = billRes.rows[0];
@@ -139,10 +202,33 @@ async function createBill(req, res) {
       }
     }
 
+    if (resolvedCoupon) {
+      await client.query(`
+        UPDATE coupons 
+        SET status = 'redeemed', updated_by = $1, updated_at = now() 
+        WHERE id = $2
+      `, [req.user.user_id, resolvedCoupon.id]);
+
+      await client.query(`
+        INSERT INTO coupon_redemptions (
+          coupon_id, patient_id, bill_id, bill_amount, discount_amount, final_payable, redeemed_by, remarks
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        resolvedCoupon.id,
+        patient_id,
+        newBill.bill_id,
+        totalAmount,
+        discount,
+        finalAmount,
+        req.user.user_id,
+        `Redeemed in Billing (Bill: ${billNumber})`
+      ]);
+    }
+
     await client.query('COMMIT');
 
     res.locals.auditEntry = { module: 'Billing & Finance', action: 'Create Bill', recordId: newBill.bill_id, newValue: newBill };
-    return res.status(201).json(formatResponse(true, newBill, 'Bill created successfully'));
+    return res.status(201).json(formatResponse(true, newBill, resolvedCoupon ? `Bill created and coupon ${resolvedCoupon.coupon_code} redeemed successfully` : 'Bill created successfully'));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('createBill error:', err);

@@ -811,9 +811,153 @@ async function getCouponRedemptions(req, res) {
   }
 }
 
+/**
+ * GET /api/v1/coupons/patient/:patientId
+ * Returns the coupon wallet for a referring patient with deterministic sorting (newest first)
+ * and server-side eligibility checks for PRO billing.
+ */
+async function getPatientCoupons(req, res) {
+  try {
+    const patientId = parseInt(req.params.patientId, 10);
+    if (isNaN(patientId) || patientId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid Patient ID is required'));
+    }
+
+    // Verify patient exists
+    const ptRes = await db.query(
+      `SELECT patient_id, full_name, registration_id as uhid, mobile_number, patient_type 
+       FROM patients WHERE patient_id = $1`,
+      [patientId]
+    );
+    if (ptRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient #${patientId} not found`));
+    }
+    const patient = ptRes.rows[0];
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // Fetch all coupons owned by this patient with joins for referred patient & redemption details
+    // Ordered strictly by created_at DESC, id DESC (newest first!)
+    const query = `
+      SELECT 
+        c.*,
+        ref_p.full_name as referring_patient_name,
+        ref_p.registration_id as referring_patient_uhid,
+        ref_p.mobile_number as referring_patient_mobile,
+        tgt_p.full_name as referred_patient_name,
+        tgt_p.registration_id as referred_patient_uhid,
+        tgt_p.mobile_number as referred_patient_mobile,
+        u.full_name as created_by_name,
+        cr.id as redemption_id,
+        cr.bill_id as redemption_bill_id,
+        cr.bill_amount as redemption_bill_amount,
+        cr.discount_amount as redemption_discount_amount,
+        cr.final_payable as redemption_final_payable,
+        cr.redeemed_at as redemption_redeemed_at,
+        red_u.full_name as redemption_redeemed_by_name
+      FROM coupons c
+      LEFT JOIN patients ref_p ON c.referring_patient_id = ref_p.patient_id
+      LEFT JOIN patients tgt_p ON c.referred_patient_id = tgt_p.patient_id
+      LEFT JOIN users u ON c.created_by = u.user_id
+      LEFT JOIN coupon_redemptions cr ON c.id = cr.coupon_id
+      LEFT JOIN users red_u ON cr.redeemed_by = red_u.user_id
+      WHERE c.referring_patient_id = $1
+      ORDER BY c.created_at DESC, c.id DESC
+    `;
+
+    const result = await db.query(query, [patientId]);
+    const items = result.rows.map((row) => {
+      const vFrom = row.valid_from instanceof Date ? row.valid_from.toISOString().split('T')[0] : String(row.valid_from).split('T')[0];
+      const vUntil = row.valid_until instanceof Date ? row.valid_until.toISOString().split('T')[0] : String(row.valid_until).split('T')[0];
+
+      let isEligible = true;
+      let ineligibleReason = null;
+
+      if (row.status === 'redeemed') {
+        isEligible = false;
+        ineligibleReason = 'Already redeemed';
+      } else if (row.status === 'cancelled') {
+        isEligible = false;
+        ineligibleReason = 'Cancelled';
+      } else if (row.status === 'inactive') {
+        isEligible = false;
+        ineligibleReason = 'Inactive';
+      } else if (vUntil < today) {
+        isEligible = false;
+        ineligibleReason = 'Expired';
+      } else if (vFrom > today) {
+        isEligible = false;
+        ineligibleReason = `Valid from ${vFrom}`;
+      }
+
+      return {
+        id: row.id,
+        coupon_id: row.id,
+        coupon_code: row.coupon_code,
+        referring_patient_id: row.referring_patient_id,
+        referring_patient_name: row.referring_patient_name,
+        referring_patient_uhid: row.referring_patient_uhid,
+        referring_patient_mobile: row.referring_patient_mobile,
+        referred_patient_id: row.referred_patient_id,
+        referred_patient_name: row.referred_patient_name,
+        referred_patient_uhid: row.referred_patient_uhid,
+        referred_patient_mobile: row.referred_patient_mobile,
+        discount_type: row.discount_type,
+        discount_value: parseFloat(row.discount_value),
+        max_discount_limit: row.max_discount_limit ? parseFloat(row.max_discount_limit) : null,
+        valid_from: vFrom,
+        valid_until: vUntil,
+        status: row.status,
+        remarks: row.remarks,
+        created_at: row.created_at,
+        created_by_name: row.created_by_name,
+        eligible_for_use: isEligible,
+        is_eligible: isEligible,
+        ineligible_reason: ineligibleReason,
+        ineligibility_reason: ineligibleReason,
+        redemption: row.redemption_id ? {
+          redemption_id: row.redemption_id,
+          bill_id: row.redemption_bill_id,
+          bill_amount: parseFloat(row.redemption_bill_amount),
+          discount_amount: parseFloat(row.redemption_discount_amount),
+          final_payable: parseFloat(row.redemption_final_payable),
+          redeemed_at: row.redemption_redeemed_at,
+          redeemed_by_name: row.redemption_redeemed_by_name
+        } : null
+      };
+    });
+
+    const activeEligible = items.filter(c => c.eligible_for_use);
+    const redeemed = items.filter(c => c.status === 'redeemed');
+    const totalDiscountGiven = redeemed.reduce((sum, c) => sum + (c.redemption?.discount_amount || 0), 0);
+
+    return res.json(formatResponse(true, {
+      patient: {
+        patient_id: patient.patient_id,
+        full_name: patient.full_name,
+        uhid: patient.uhid,
+        mobile_number: patient.mobile_number
+      },
+      stats: {
+        total_coupons: items.length,
+        active_eligible_coupons: activeEligible.length,
+        redeemed_coupons: redeemed.length,
+        total_discount_given: totalDiscountGiven
+      },
+      coupons: items,
+      active_eligible_coupons: activeEligible
+    }, 'Patient coupon wallet retrieved successfully'));
+
+  } catch (err) {
+    console.error('getPatientCoupons error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error while fetching patient coupons'));
+  }
+}
+
 module.exports = {
   getGeneratedCode,
   searchPatientsForCoupon,
+  getPatientCoupons,
   listCoupons,
   getCouponById,
   createCoupon,

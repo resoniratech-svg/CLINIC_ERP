@@ -2,25 +2,28 @@ const express = require('express');
 const router = express.Router();
 const couponsController = require('../controllers/coupons.controller');
 const { authenticateToken } = require('../middleware/auth');
-const { requireCouponPermission } = require('../middleware/rbac');
+const { requireCouponPermission, authorizeRoles } = require('../middleware/rbac');
 
-// All coupon endpoints require authentication and coupon permission (Super Admin or authorized role)
+// All coupon endpoints require authentication
 router.use(authenticateToken);
+
+// Patient coupon wallet & validation (accessible to staff involved in billing and consultations)
+router.get('/patient/:patientId', authorizeRoles('super_admin', 'pro_manager', 'receptionist', 'doctor'), couponsController.getPatientCoupons);
+router.get('/validate', authorizeRoles('super_admin', 'pro_manager', 'receptionist', 'doctor'), couponsController.validateCoupon);
+router.post('/validate', authorizeRoles('super_admin', 'pro_manager', 'receptionist', 'doctor'), couponsController.validateCoupon);
+
+// Administrative coupon management operations require coupon_management permission
 router.use(requireCouponPermission());
+
+// Redemption endpoints (transactional redemption on billing)
+router.post('/redeem', couponsController.redeemCoupon);
+router.post('/:id/redeem', couponsController.redeemCoupon);
 
 // Patient search for autocomplete
 router.get('/patients/search', couponsController.searchPatientsForCoupon);
 
 // Code generator
 router.get('/generate-code', couponsController.getGeneratedCode);
-
-// Validation & calculation helper (for future billing/receptionist integration)
-router.get('/validate', couponsController.validateCoupon);
-router.post('/validate', couponsController.validateCoupon);
-
-// Redemption endpoints (transactional redemption on billing)
-router.post('/redeem', couponsController.redeemCoupon);
-router.post('/:id/redeem', couponsController.redeemCoupon);
 
 // Coupon CRUD & lifecycle
 router.get('/', couponsController.listCoupons);

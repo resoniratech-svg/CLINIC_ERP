@@ -9,6 +9,7 @@ async function generateId(prefix, tableName, client = null) {
   if (tableName === 'patients') colName = 'registration_id';
   else if (tableName === 'bills') colName = 'bill_number';
   else if (tableName === 'referrals') colName = 'referral_code';
+  else if (tableName === 'coupons') colName = 'coupon_code';
 
   const res = await queryRunner.query(`SELECT COUNT(*) as count FROM ${tableName}`);
   let nextNum = parseInt(res.rows[0]?.count || 0) + 1;
@@ -1055,7 +1056,8 @@ async function createPatientReferral(req, res) {
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
-    const { patient_name, mobile_number, age, gender, village_mandal, village, mandal, village_id, mandal_id, address, reason, referring_patient_id, remarks } = req.body;
+    const { patient_name, mobile_number, age, gender, village_mandal, village, mandal, village_id, mandal_id, address, reason, referring_patient_id, remarks, assigned_doctor_id } = req.body;
+    const assignedDoctorId = assigned_doctor_id ? parseInt(assigned_doctor_id, 10) : null;
 
     if (!patient_name || !mobile_number || !referring_patient_id) {
       await client.query('ROLLBACK');
@@ -1143,6 +1145,36 @@ async function createPatientReferral(req, res) {
       VALUES ($1, 'patient', $2, $3, $4, $5)
       RETURNING *
     `, [ptId, req.user.user_id, refCode, parseInt(referring_patient_id), remarks || null]);
+
+    // Automatically generate referral reward coupon for Patient A (the referrer)
+    let rewardCoupon = null;
+    try {
+      const rewardCode = await generateId('REF-', 'coupons', client);
+      const validFrom = new Date();
+      const validUntil = new Date();
+      validUntil.setDate(validUntil.getDate() + 90);
+
+      const coupRes = await client.query(`
+        INSERT INTO coupons (
+          coupon_code, discount_type, discount_value, max_discount_limit,
+          referring_patient_id, referred_patient_id, valid_from, valid_until,
+          status, remarks, branch_id, created_by
+        ) VALUES ($1, 'cash', 500, NULL, $2, $3, $4, $5, 'active', $6, $7, $8)
+        RETURNING *
+      `, [
+        rewardCode,
+        parseInt(referring_patient_id, 10),
+        ptId,
+        validFrom.toISOString().split('T')[0],
+        validUntil.toISOString().split('T')[0],
+        `Referral reward for introducing patient #${ptId}`,
+        branchId,
+        req.user.user_id
+      ]);
+      rewardCoupon = coupRes.rows[0];
+    } catch (cErr) {
+      console.warn('Auto coupon generation warning:', cErr.message);
+    }
 
     // If doctor assignment & schedule parameters are supplied, create Appointment & Bill & Payment
     let newAppt = null;
