@@ -1,5 +1,6 @@
 const db = require('../db');
 const { formatResponse } = require('../utils/helpers');
+const { resolveOrCreateLocation } = require('../utils/locationResolver');
 
 // Helper to generate padded sequential code (collision-proof)
 async function generateId(prefix, tableName, client = null) {
@@ -310,6 +311,8 @@ async function registerPatient(req, res) {
     const village_mandal = req.body.village_mandal || p.village_mandal;
     const village = req.body.village || p.village;
     const mandal = req.body.mandal || p.mandal;
+    const village_id = req.body.village_id || p.village_id;
+    const mandal_id = req.body.mandal_id || p.mandal_id;
     const address = req.body.address || p.address;
     const ailment_reason = req.body.ailment_reason || p.ailment_reason;
     const lead_source = req.body.lead_source || p.lead_source;
@@ -372,6 +375,22 @@ async function registerPatient(req, res) {
 
     const branchId = req.user.branch_id || 1;
 
+    // Resolve or dynamically create Village and Mandal master data
+    let locResolution = { village: null, mandal: null, village_id: null, mandal_id: null };
+    if (village_mandal || village || mandal || village_id || mandal_id) {
+      locResolution = await resolveOrCreateLocation(client, {
+        village_mandal,
+        village,
+        mandal,
+        village_id,
+        mandal_id
+      });
+      if (locResolution.error) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, locResolution.error));
+      }
+    }
+
     // Distinguish patient acquisition channel vs medical ailment/reason
     const channelNames = [
       'inbound call', 'outbound call', 'excel import', 'import from excel',
@@ -411,6 +430,29 @@ async function registerPatient(req, res) {
         await client.query(`UPDATE patients SET ailment_reason = $1, updated_at = now() WHERE patient_id = $2`, [resolvedAilment, targetPatientId]);
         targetPatient.ailment_reason = resolvedAilment;
       }
+      if (locResolution.village || locResolution.mandal || locResolution.village_id || locResolution.mandal_id) {
+        await client.query(`
+          UPDATE patients
+          SET village = COALESCE($1, village),
+              mandal = COALESCE($2, mandal),
+              village_id = COALESCE($3, village_id),
+              mandal_id = COALESCE($4, mandal_id),
+              address = COALESCE($5, address),
+              updated_at = now()
+          WHERE patient_id = $6
+        `, [
+          locResolution.village,
+          locResolution.mandal,
+          locResolution.village_id,
+          locResolution.mandal_id,
+          address || (locResolution.village && locResolution.mandal ? `${locResolution.village}, ${locResolution.mandal}` : null),
+          targetPatientId
+        ]);
+        if (locResolution.village) targetPatient.village = locResolution.village;
+        if (locResolution.mandal) targetPatient.mandal = locResolution.mandal;
+        if (locResolution.village_id) targetPatient.village_id = locResolution.village_id;
+        if (locResolution.mandal_id) targetPatient.mandal_id = locResolution.mandal_id;
+      }
       if (!targetPatient.registration_id) {
         const regId = await generateId('REG-', 'patients', client);
         await client.query(`UPDATE patients SET registration_id = $1 WHERE patient_id = $2`, [regId, targetPatientId]);
@@ -426,15 +468,25 @@ async function registerPatient(req, res) {
       const regExpiry = new Date();
       regExpiry.setDate(regExpiry.getDate() + validityDays);
 
+      const resolvedAddress = address || (
+        locResolution.village && locResolution.mandal
+          ? `${locResolution.village}, ${locResolution.mandal}`
+          : (locResolution.village || locResolution.mandal || village_mandal || null)
+      );
+
       const newPtRes = await client.query(`
         INSERT INTO patients (
-          full_name, mobile_number, age, gender, village, mandal, address, ailment_reason,
+          full_name, mobile_number, age, gender, village, mandal, village_id, mandal_id, address, ailment_reason,
           registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by, source
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'new', $12, $13, $14)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'new', $14, $15, $16)
         RETURNING *
       `, [
         full_name.trim(), numericMobile, parsedAge, cleanGender,
-        village || village_mandal || null, mandal || null, address || village_mandal || null,
+        locResolution.village || null,
+        locResolution.mandal || null,
+        locResolution.village_id || null,
+        locResolution.mandal_id || null,
+        resolvedAddress,
         resolvedAilment || null, regId, regDate, regExpiry, branchId, req.user.user_id,
         resolvedSource
       ]);
@@ -455,10 +507,27 @@ async function registerPatient(req, res) {
 
     const doctor = docRes.rows[0];
 
-    // Server-side Consultation Fee resolution
-    let baseFee = parseFloat(doctor.new_consultation_fee || 500);
-    if (apptType === 'renewal') baseFee = parseFloat(doctor.renewal_consultation_fee || 300);
-    if (apptType === 'followup') baseFee = parseFloat(doctor.followup_consultation_fee || 200);
+    // Server-side Doctor Default Consultation Fee
+    let defaultDocFee = parseFloat(doctor.new_consultation_fee || 500);
+    if (apptType === 'renewal') defaultDocFee = parseFloat(doctor.renewal_consultation_fee || 300);
+    if (apptType === 'followup') defaultDocFee = parseFloat(doctor.followup_consultation_fee || 200);
+
+    // Patient-Specific Consultation Fee Override (Temporary for this registration only)
+    const rawFee = req.body.consultation_fee !== undefined
+      ? req.body.consultation_fee
+      : (b.consultation_fee !== undefined
+        ? b.consultation_fee
+        : (req.body.fee !== undefined ? req.body.fee : undefined));
+
+    let baseFee = defaultDocFee;
+    if (rawFee !== undefined && rawFee !== null && rawFee !== '') {
+      const parsedFee = parseFloat(rawFee);
+      if (isNaN(parsedFee) || parsedFee < 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Consultation fee must be a valid non-negative number'));
+      }
+      baseFee = parsedFee;
+    }
 
     // Handle Discount Validation
     const discount = discount_amount !== undefined && discount_amount !== '' ? parseFloat(discount_amount) : 0;
@@ -678,6 +747,18 @@ async function createEnquiry(req, res) {
     const reqText = reason_requirement ? reason_requirement.toString().trim() : null;
     const remText = remarks ? remarks.toString().trim() : null;
 
+    let resolvedVillage = null;
+    let resolvedMandal = null;
+    if (village_mandal) {
+      try {
+        const loc = await resolveOrCreateLocation(db, { village_mandal });
+        resolvedVillage = loc.village || village_mandal.toString().trim();
+        resolvedMandal = loc.mandal || null;
+      } catch (e) {
+        resolvedVillage = village_mandal.toString().trim();
+      }
+    }
+
     const leadRes = await db.query(`
       INSERT INTO leads (
         lead_name, mobile_number, age, gender, village, mandal, source,
@@ -691,8 +772,8 @@ async function createEnquiry(req, res) {
       trimmedMobile,
       parsedAge,
       pGender,
-      village_mandal ? village_mandal.toString().trim() : null,
-      village_mandal ? village_mandal.toString().trim() : null,
+      resolvedVillage,
+      resolvedMandal,
       sourceLabel,
       null,
       pLeadSource,
@@ -769,7 +850,7 @@ async function createEmployeeReferral(req, res) {
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
-    const { patient_name, mobile_number, age, gender, village_mandal, reason, referring_employee_id, remarks } = req.body;
+    const { patient_name, mobile_number, age, gender, village_mandal, village, mandal, village_id, mandal_id, address, reason, referring_employee_id, remarks } = req.body;
 
     if (!patient_name || !mobile_number || !referring_employee_id) {
       await client.query('ROLLBACK');
@@ -802,21 +883,40 @@ async function createEmployeeReferral(req, res) {
       const regExpiry = new Date();
       regExpiry.setDate(regExpiry.getDate() + validityDays);
 
+      let locResolution = { village: null, mandal: null, village_id: null, mandal_id: null };
+      if (village_mandal || village || mandal || village_id || mandal_id) {
+        locResolution = await resolveOrCreateLocation(client, {
+          village_mandal,
+          village,
+          mandal,
+          village_id,
+          mandal_id
+        });
+      }
+
+      const resolvedAddress = address || (
+        locResolution.village && locResolution.mandal
+          ? `${locResolution.village}, ${locResolution.mandal}`
+          : (locResolution.village || locResolution.mandal || village_mandal || null)
+      );
+
       const newPt = await client.query(`
         INSERT INTO patients (
-          full_name, mobile_number, age, gender, village, mandal, address, ailment_reason,
+          full_name, mobile_number, age, gender, village, mandal, village_id, mandal_id, address, ailment_reason,
           registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'new', $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14)
         RETURNING patient_id
       `, [
         patient_name.trim(),
         cleanMobile,
         age ? parseInt(age) : null,
         gender || 'male',
-        village_mandal ? village_mandal.trim() : null,
-        village_mandal ? village_mandal.trim() : null,
-        village_mandal ? village_mandal.trim() : null,
+        locResolution.village || null,
+        locResolution.mandal || null,
+        locResolution.village_id || null,
+        locResolution.mandal_id || null,
+        resolvedAddress,
         reason ? reason.trim() : null,
         regId,
         regDate,
@@ -833,70 +933,79 @@ async function createEmployeeReferral(req, res) {
       INSERT INTO referrals (patient_id, referral_type, referred_by, referral_code, referring_employee_id, department, remarks)
       VALUES ($1, 'employee', $2, $3, $4, $5, $6)
       RETURNING *
-    `, [ptId, emp.user_id, refCode, emp.user_id, emp.department || 'General', remarks || null]);
+    `, [ptId, emp.full_name, refCode, emp.user_id, emp.department || 'General', remarks || null]);
 
-    // If doctor assignment & schedule parameters are supplied, create Appointment & Bill & Payment
+    // Handle Appointment and Bill creation if doctor is provided
     let newAppt = null;
     let newBill = null;
     let newPayment = null;
-    const assignedDoctorId = req.body.assigned_doctor_id ? parseInt(req.body.assigned_doctor_id) : null;
-    if (assignedDoctorId) {
-      const docRes = await client.query(`SELECT doctor_id, status, new_consultation_fee, renewal_consultation_fee, followup_consultation_fee FROM doctors WHERE doctor_id = $1`, [assignedDoctorId]);
-      if (docRes.rows.length > 0 && docRes.rows[0].status === 'active') {
-        const doctor = docRes.rows[0];
-        const apptDate = req.body.appointment_date || new Date().toISOString().split('T')[0];
-        const apptTime = req.body.appointment_time || '10:00:00';
-        const apptType = (req.body.appointment_type || 'new').toLowerCase();
 
-        let baseFee = parseFloat(doctor.new_consultation_fee || 500);
-        if (apptType === 'renewal') baseFee = parseFloat(doctor.renewal_consultation_fee || 300);
-        if (apptType === 'followup') baseFee = parseFloat(doctor.followup_consultation_fee || 200);
+    if (req.body.assigned_doctor_id && req.body.appointment_date) {
+      const docRes = await client.query(`
+        SELECT doctor_id, status, new_consultation_fee, renewal_consultation_fee, followup_consultation_fee
+        FROM doctors WHERE doctor_id = $1
+      `, [parseInt(req.body.assigned_doctor_id)]);
 
-        const discount = req.body.discount_amount ? parseFloat(req.body.discount_amount) : 0;
-        const finalFee = Math.max(0, baseFee - discount);
-        const paidAmt = req.body.payment_amount !== undefined && req.body.payment_amount !== '' ? parseFloat(req.body.payment_amount) : finalFee;
-        const payMeth = (req.body.payment_method || 'cash').toLowerCase();
+      if (docRes.rows.length === 0 || docRes.rows[0].status !== 'active') {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Selected doctor is inactive or resigned'));
+      }
+      const doctor = docRes.rows[0];
+      const apptDate = req.body.appointment_date;
+      const apptTime = req.body.appointment_time || '10:00:00';
+      const apptType = (req.body.appointment_type || 'new').toLowerCase();
 
-        const isToday = apptDate === new Date().toISOString().split('T')[0];
-        const initialApptStatus = isToday ? 'checked_in' : 'scheduled';
+      let defaultDocFee = parseFloat(doctor.new_consultation_fee || 500);
+      if (apptType === 'renewal') defaultDocFee = parseFloat(doctor.renewal_consultation_fee || 300);
+      if (apptType === 'followup') defaultDocFee = parseFloat(doctor.followup_consultation_fee || 200);
 
-        const apptRes = await client.query(`
-          INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_time, appointment_type, status, created_by, branch_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING *
-        `, [ptId, assignedDoctorId, apptDate, apptTime, apptType, initialApptStatus, req.user.user_id, branchId]);
-        newAppt = apptRes.rows[0];
-
-        const billNum = await generateId('INV-', 'bills');
-        const billRes = await client.query(`
-          INSERT INTO bills (bill_number, patient_id, doctor_id, bill_type, created_by, branch_id, amount, discount_amount, final_amount, status)
-          VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, 'created')
-          RETURNING *
-        `, [billNum, ptId, assignedDoctorId, req.user.user_id, branchId, baseFee, discount, finalFee]);
-        newBill = billRes.rows[0];
-
-        if (paidAmt > 0) {
-          const payRes = await client.query(`
-            INSERT INTO payments (bill_id, patient_id, payment_method, amount, status, received_by, branch_id)
-            VALUES ($1, $2, $3, $4, 'success', $5, $6)
-            RETURNING *
-          `, [newBill.bill_id, ptId, payMeth, paidAmt, req.user.user_id, branchId]);
-          newPayment = payRes.rows[0];
+      const rawFee = req.body.consultation_fee !== undefined ? req.body.consultation_fee : req.body.fee;
+      let baseFee = defaultDocFee;
+      if (rawFee !== undefined && rawFee !== null && rawFee !== '') {
+        const parsedFee = parseFloat(rawFee);
+        if (isNaN(parsedFee) || parsedFee < 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, 'Consultation fee must be a valid non-negative number'));
         }
+        baseFee = parsedFee;
+      }
 
-        const dueAmt = Math.max(0, finalFee - paidAmt);
-        if (dueAmt > 0) {
-          await client.query(`
-            INSERT INTO due_patients (patient_id, bill_id, due_amount, status, branch_id)
-            VALUES ($1, $2, $3, 'pending', $4)
-          `, [ptId, newBill.bill_id, dueAmt, branchId]);
-        }
+      const discount = req.body.discount_amount ? parseFloat(req.body.discount_amount) : 0;
+      const finalFee = Math.max(0, baseFee - discount);
+      const paidAmt = req.body.payment_amount !== undefined ? parseFloat(req.body.payment_amount) : finalFee;
+
+      const apptRes = await client.query(`
+        INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_time, appointment_type, status, created_by, branch_id)
+        VALUES ($1, $2, $3, $4, $5, 'scheduled', $6, $7) RETURNING *
+      `, [ptId, doctor.doctor_id, apptDate, apptTime, apptType, req.user.user_id, branchId]);
+      newAppt = apptRes.rows[0];
+
+      const billNum = await generateId('INV-', 'bills');
+      const billRes = await client.query(`
+        INSERT INTO bills (bill_number, patient_id, doctor_id, bill_type, created_by, branch_id, total_amount, discount_amount, net_amount, paid_amount, balance_due, payment_status, status)
+        VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, $9, $10, $11, 'completed') RETURNING *
+      `, [billNum, ptId, doctor.doctor_id, req.user.user_id, branchId, baseFee, discount, finalFee, paidAmt, Math.max(0, finalFee - paidAmt), paidAmt >= finalFee ? 'paid' : (paidAmt > 0 ? 'partial' : 'pending')]);
+      newBill = billRes.rows[0];
+
+      if (paidAmt > 0) {
+        const payNum = await generateId('PAY-', 'bill_payments');
+        const payRes = await client.query(`
+          INSERT INTO bill_payments (bill_id, payment_number, amount, payment_method, payment_status, created_by, branch_id)
+          VALUES ($1, $2, $3, $4, 'completed', $5, $6) RETURNING *
+        `, [newBill.bill_id, payNum, paidAmt, req.body.payment_method || 'cash', req.user.user_id, branchId]);
+        newPayment = payRes.rows[0];
       }
     }
 
     await client.query('COMMIT');
 
-    res.locals.auditEntry = { module: 'Referrals', action: 'Create Employee Referral', recordId: refRes.rows[0].id, newValue: refRes.rows[0] };
+    res.locals.auditEntry = {
+      module: 'Referral Management',
+      action: 'Create Employee Referral',
+      recordId: refRes.rows[0].referral_id,
+      newValue: refRes.rows[0]
+    };
+
     return res.status(201).json(formatResponse(true, {
       ...refRes.rows[0],
       appointment: newAppt,
@@ -917,7 +1026,7 @@ async function createPatientReferral(req, res) {
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
-    const { patient_name, mobile_number, age, gender, village_mandal, reason, referring_patient_id, remarks } = req.body;
+    const { patient_name, mobile_number, age, gender, village_mandal, village, mandal, village_id, mandal_id, address, reason, referring_patient_id, remarks } = req.body;
 
     if (!patient_name || !mobile_number || !referring_patient_id) {
       await client.query('ROLLBACK');
@@ -927,7 +1036,7 @@ async function createPatientReferral(req, res) {
     const branchId = req.user.branch_id || 1;
 
     // Check referring patient
-    const ptRefRes = await client.query(`SELECT patient_id FROM patients WHERE patient_id = $1`, [parseInt(referring_patient_id)]);
+    const ptRefRes = await client.query(`SELECT patient_id, full_name FROM patients WHERE patient_id = $1`, [parseInt(referring_patient_id)]);
     if (ptRefRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json(formatResponse(false, null, 'Referring patient not found'));
@@ -948,21 +1057,40 @@ async function createPatientReferral(req, res) {
       const regExpiry = new Date();
       regExpiry.setDate(regExpiry.getDate() + validityDays);
 
+      let locResolution = { village: null, mandal: null, village_id: null, mandal_id: null };
+      if (village_mandal || village || mandal || village_id || mandal_id) {
+        locResolution = await resolveOrCreateLocation(client, {
+          village_mandal,
+          village,
+          mandal,
+          village_id,
+          mandal_id
+        });
+      }
+
+      const resolvedAddress = address || (
+        locResolution.village && locResolution.mandal
+          ? `${locResolution.village}, ${locResolution.mandal}`
+          : (locResolution.village || locResolution.mandal || village_mandal || null)
+      );
+
       const newPt = await client.query(`
         INSERT INTO patients (
-          full_name, mobile_number, age, gender, village, mandal, address, ailment_reason,
+          full_name, mobile_number, age, gender, village, mandal, village_id, mandal_id, address, ailment_reason,
           registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'new', $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14)
         RETURNING patient_id
       `, [
         patient_name.trim(),
         cleanMobile,
         age ? parseInt(age) : null,
         gender || 'male',
-        village_mandal ? village_mandal.trim() : null,
-        village_mandal ? village_mandal.trim() : null,
-        village_mandal ? village_mandal.trim() : null,
+        locResolution.village || null,
+        locResolution.mandal || null,
+        locResolution.village_id || null,
+        locResolution.mandal_id || null,
+        resolvedAddress,
         reason ? reason.trim() : null,
         regId,
         regDate,
@@ -976,16 +1104,15 @@ async function createPatientReferral(req, res) {
     const refCode = await generateId('REF-', 'referrals');
 
     const refRes = await client.query(`
-      INSERT INTO referrals (patient_id, referral_type, referral_code, referring_patient_id, remarks)
-      VALUES ($1, 'patient', $2, $3, $4)
+      INSERT INTO referrals (patient_id, referral_type, referred_by, referral_code, referring_patient_id, remarks)
+      VALUES ($1, 'patient', $2, $3, $4, $5)
       RETURNING *
-    `, [ptId, refCode, parseInt(referring_patient_id), remarks || null]);
+    `, [ptId, ptRefRes.rows[0].full_name || 'Patient', refCode, parseInt(referring_patient_id), remarks || null]);
 
     // If doctor assignment & schedule parameters are supplied, create Appointment & Bill & Payment
     let newAppt = null;
     let newBill = null;
     let newPayment = null;
-    const assignedDoctorId = req.body.assigned_doctor_id ? parseInt(req.body.assigned_doctor_id) : null;
     if (assignedDoctorId) {
       const docRes = await client.query(`SELECT doctor_id, status, new_consultation_fee, renewal_consultation_fee, followup_consultation_fee FROM doctors WHERE doctor_id = $1`, [assignedDoctorId]);
       if (docRes.rows.length > 0 && docRes.rows[0].status === 'active') {
@@ -994,9 +1121,20 @@ async function createPatientReferral(req, res) {
         const apptTime = req.body.appointment_time || '10:00:00';
         const apptType = (req.body.appointment_type || 'new').toLowerCase();
 
-        let baseFee = parseFloat(doctor.new_consultation_fee || 500);
-        if (apptType === 'renewal') baseFee = parseFloat(doctor.renewal_consultation_fee || 300);
-        if (apptType === 'followup') baseFee = parseFloat(doctor.followup_consultation_fee || 200);
+        let defaultDocFee = parseFloat(doctor.new_consultation_fee || 500);
+        if (apptType === 'renewal') defaultDocFee = parseFloat(doctor.renewal_consultation_fee || 300);
+        if (apptType === 'followup') defaultDocFee = parseFloat(doctor.followup_consultation_fee || 200);
+
+        const rawFee = req.body.consultation_fee !== undefined ? req.body.consultation_fee : req.body.fee;
+        let baseFee = defaultDocFee;
+        if (rawFee !== undefined && rawFee !== null && rawFee !== '') {
+          const parsedFee = parseFloat(rawFee);
+          if (isNaN(parsedFee) || parsedFee < 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json(formatResponse(false, null, 'Consultation fee must be a valid non-negative number'));
+          }
+          baseFee = parsedFee;
+        }
 
         const discount = req.body.discount_amount ? parseFloat(req.body.discount_amount) : 0;
         const finalFee = Math.max(0, baseFee - discount);
@@ -1469,9 +1607,20 @@ async function createConsultationBill(req, res) {
     const apptType = (appt.appointment_type || 'new').toLowerCase();
 
     // Server-side fee lookup
-    let baseFee = parseFloat(appt.new_consultation_fee || 500);
-    if (apptType === 'renewal') baseFee = parseFloat(appt.renewal_consultation_fee || 300);
-    if (apptType === 'followup') baseFee = parseFloat(appt.followup_consultation_fee || 200);
+    let defaultDocFee = parseFloat(appt.new_consultation_fee || 500);
+    if (apptType === 'renewal') defaultDocFee = parseFloat(appt.renewal_consultation_fee || 300);
+    if (apptType === 'followup') defaultDocFee = parseFloat(appt.followup_consultation_fee || 200);
+
+    const rawFee = req.body.consultation_fee !== undefined ? req.body.consultation_fee : req.body.fee;
+    let baseFee = defaultDocFee;
+    if (rawFee !== undefined && rawFee !== null && rawFee !== '') {
+      const parsedFee = parseFloat(rawFee);
+      if (isNaN(parsedFee) || parsedFee < 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Consultation fee must be a valid non-negative number'));
+      }
+      baseFee = parsedFee;
+    }
 
     const discount = discount_amount ? parseFloat(discount_amount) : 0;
     if (discount > 0) {

@@ -141,7 +141,11 @@ async function getMasterData(req, res) {
 
     if (q && q.trim()) {
       params.push(`%${q.trim()}%`);
-      query += ` AND ${tableName === 'master_villages' ? 'v.' : ''}name ILIKE $${params.length}`;
+      if (tableName === 'master_villages') {
+        query += ` AND (v.name ILIKE $${params.length} OR m.name ILIKE $${params.length})`;
+      } else {
+        query += ` AND name ILIKE $${params.length}`;
+      }
     }
 
     query += ` ORDER BY ${tableName === 'master_villages' ? 'v.' : ''}name ASC, ${tableName === 'master_villages' ? 'v.' : ''}id ASC`;
@@ -169,11 +173,28 @@ async function addMasterData(req, res) {
 
     const trimmedName = name.trim();
 
-    // Check duplicate (case-insensitive)
-    const existing = await db.query(
-      `SELECT * FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))`,
-      [trimmedName]
-    );
+    // Check duplicate (case-insensitive, scoped by mandal_id for villages)
+    let existing;
+    if (tableName === 'master_villages') {
+      const mandalIdNum = mandal_id ? parseInt(mandal_id, 10) : null;
+      if (mandalIdNum) {
+        existing = await db.query(
+          `SELECT * FROM master_villages WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND mandal_id = $2`,
+          [trimmedName, mandalIdNum]
+        );
+      } else {
+        existing = await db.query(
+          `SELECT * FROM master_villages WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND mandal_id IS NULL`,
+          [trimmedName]
+        );
+      }
+    } else {
+      existing = await db.query(
+        `SELECT * FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM($1))`,
+        [trimmedName]
+      );
+    }
+
     if (existing.rows.length > 0) {
       return res.status(400).json(formatResponse(false, null, `Entry '${trimmedName}' already exists in ${type}`));
     }
@@ -223,11 +244,27 @@ async function updateMasterData(req, res) {
       return res.status(404).json(formatResponse(false, null, 'Master entry not found'));
     }
 
-    // Check duplicate (case-insensitive) across other rows
-    const duplicate = await db.query(
-      `SELECT * FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND id != $2`,
-      [trimmedName, id]
-    );
+    // Check duplicate (case-insensitive across other rows, scoped by mandal_id for villages)
+    let duplicate;
+    if (tableName === 'master_villages') {
+      const targetMandalId = mandal_id !== undefined ? (mandal_id ? parseInt(mandal_id, 10) : null) : current.rows[0].mandal_id;
+      if (targetMandalId) {
+        duplicate = await db.query(
+          `SELECT * FROM master_villages WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND mandal_id = $2 AND id != $3`,
+          [trimmedName, targetMandalId, id]
+        );
+      } else {
+        duplicate = await db.query(
+          `SELECT * FROM master_villages WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND mandal_id IS NULL AND id != $2`,
+          [trimmedName, id]
+        );
+      }
+    } else {
+      duplicate = await db.query(
+        `SELECT * FROM ${tableName} WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND id != $2`,
+        [trimmedName, id]
+      );
+    }
     if (duplicate.rows.length > 0) {
       return res.status(400).json(formatResponse(false, null, `Entry '${trimmedName}' already exists in ${type}`));
     }
