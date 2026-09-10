@@ -88,6 +88,8 @@ async function getUserById(req, res) {
     } else if (user.role === 'doctor') {
       const docRes = await db.query(`SELECT * FROM doctors WHERE user_id = $1`, [userId]);
       user.doctor_details = docRes.rows[0] || null;
+      const permRes = await db.query(`SELECT * FROM doctor_permissions WHERE user_id = $1`, [userId]);
+      user.permissions = permRes.rows[0] || { coupon_management: false };
     } else if (user.role === 'pro_manager') {
       const permRes = await db.query(`SELECT * FROM pro_manager_permissions WHERE user_id = $1`, [userId]);
       user.permissions = permRes.rows[0] || null;
@@ -147,8 +149,8 @@ async function createUser(req, res) {
       await client.query(`
         INSERT INTO receptionist_permissions (
           user_id, registration, enquiry, appointment, checkin, consultation_fee_billing,
-          payment_collection, crm_calling, followup, renewal, due_management
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          payment_collection, crm_calling, followup, renewal, due_management, coupon_management
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       `, [
         userId,
         p.registration !== undefined ? p.registration : true,
@@ -160,7 +162,8 @@ async function createUser(req, res) {
         p.crm_calling !== undefined ? p.crm_calling : true,
         p.followup !== undefined ? p.followup : true,
         p.renewal !== undefined ? p.renewal : true,
-        p.due_management !== undefined ? p.due_management : true
+        p.due_management !== undefined ? p.due_management : true,
+        p.coupon_management !== undefined ? p.coupon_management : false
       ]);
     } else if (cleanRole === 'doctor') {
       const d = req.body.doctor_details || req.body;
@@ -177,13 +180,19 @@ async function createUser(req, res) {
         d.slot_duration_minutes || 15, d.new_consultation_fee || 500, d.renewal_consultation_fee || 300,
         d.followup_consultation_fee || 200, branchId, status || 'active'
       ]);
+
+      const p = req.body.permissions || {};
+      await client.query(`
+        INSERT INTO doctor_permissions (user_id, coupon_management)
+        VALUES ($1, $2)
+      `, [userId, p.coupon_management !== undefined ? p.coupon_management : false]);
     } else if (cleanRole === 'pro_manager') {
       const p = req.body.permissions || {};
       await client.query(`
         INSERT INTO pro_manager_permissions (
           user_id, counselling, billing, payment, due_collection, crm, followup,
-          renewals, complaints, feedback, reports, accountant
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          renewals, complaints, feedback, reports, accountant, coupon_management
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       `, [
         userId,
         p.counselling !== undefined ? p.counselling : true,
@@ -196,7 +205,8 @@ async function createUser(req, res) {
         p.complaints !== undefined ? p.complaints : true,
         p.feedback !== undefined ? p.feedback : true,
         p.reports !== undefined ? p.reports : true,
-        p.accountant !== undefined ? p.accountant : true
+        p.accountant !== undefined ? p.accountant : true,
+        p.coupon_management !== undefined ? p.coupon_management : false
       ]);
     } else if (cleanRole === 'executive') {
       const e = req.body.executive_details || req.body;
@@ -278,39 +288,90 @@ async function updateUser(req, res) {
       }
     }
 
-    // Update granular permissions if the user is a receptionist and permissions were provided
-    if (oldUser.role === 'receptionist' && req.body.permissions) {
+    // Update granular permissions if permissions were provided
+    if (req.body.permissions) {
       const p = req.body.permissions;
-      await db.query(`
-        INSERT INTO receptionist_permissions (
-          user_id, registration, enquiry, appointment, checkin, consultation_fee_billing,
-          payment_collection, crm_calling, followup, renewal, due_management, updated_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
-        ON CONFLICT (user_id) DO UPDATE SET
-          registration = EXCLUDED.registration,
-          enquiry = EXCLUDED.enquiry,
-          appointment = EXCLUDED.appointment,
-          checkin = EXCLUDED.checkin,
-          consultation_fee_billing = EXCLUDED.consultation_fee_billing,
-          payment_collection = EXCLUDED.payment_collection,
-          crm_calling = EXCLUDED.crm_calling,
-          followup = EXCLUDED.followup,
-          renewal = EXCLUDED.renewal,
-          due_management = EXCLUDED.due_management,
-          updated_at = now()
-      `, [
-        userId,
-        p.registration !== undefined ? p.registration : true,
-        p.enquiry !== undefined ? p.enquiry : true,
-        p.appointment !== undefined ? p.appointment : true,
-        p.checkin !== undefined ? p.checkin : true,
-        p.consultation_fee_billing !== undefined ? p.consultation_fee_billing : true,
-        p.payment_collection !== undefined ? p.payment_collection : true,
-        p.crm_calling !== undefined ? p.crm_calling : true,
-        p.followup !== undefined ? p.followup : true,
-        p.renewal !== undefined ? p.renewal : true,
-        p.due_management !== undefined ? p.due_management : true
-      ]);
+      if (oldUser.role === 'receptionist') {
+        await db.query(`
+          INSERT INTO receptionist_permissions (
+            user_id, registration, enquiry, appointment, checkin, consultation_fee_billing,
+            payment_collection, crm_calling, followup, renewal, due_management, coupon_management, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+          ON CONFLICT (user_id) DO UPDATE SET
+            registration = EXCLUDED.registration,
+            enquiry = EXCLUDED.enquiry,
+            appointment = EXCLUDED.appointment,
+            checkin = EXCLUDED.checkin,
+            consultation_fee_billing = EXCLUDED.consultation_fee_billing,
+            payment_collection = EXCLUDED.payment_collection,
+            crm_calling = EXCLUDED.crm_calling,
+            followup = EXCLUDED.followup,
+            renewal = EXCLUDED.renewal,
+            due_management = EXCLUDED.due_management,
+            coupon_management = EXCLUDED.coupon_management,
+            updated_at = now()
+        `, [
+          userId,
+          p.registration !== undefined ? p.registration : true,
+          p.enquiry !== undefined ? p.enquiry : true,
+          p.appointment !== undefined ? p.appointment : true,
+          p.checkin !== undefined ? p.checkin : true,
+          p.consultation_fee_billing !== undefined ? p.consultation_fee_billing : true,
+          p.payment_collection !== undefined ? p.payment_collection : true,
+          p.crm_calling !== undefined ? p.crm_calling : true,
+          p.followup !== undefined ? p.followup : true,
+          p.renewal !== undefined ? p.renewal : true,
+          p.due_management !== undefined ? p.due_management : true,
+          p.coupon_management !== undefined ? p.coupon_management : false
+        ]);
+      } else if (oldUser.role === 'pro_manager') {
+        await db.query(`
+          INSERT INTO pro_manager_permissions (
+            user_id, counselling, billing, payment, due_collection, crm, followup,
+            renewals, complaints, feedback, reports, accountant, coupon_management, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+          ON CONFLICT (user_id) DO UPDATE SET
+            counselling = EXCLUDED.counselling,
+            billing = EXCLUDED.billing,
+            payment = EXCLUDED.payment,
+            due_collection = EXCLUDED.due_collection,
+            crm = EXCLUDED.crm,
+            followup = EXCLUDED.followup,
+            renewals = EXCLUDED.renewals,
+            complaints = EXCLUDED.complaints,
+            feedback = EXCLUDED.feedback,
+            reports = EXCLUDED.reports,
+            accountant = EXCLUDED.accountant,
+            coupon_management = EXCLUDED.coupon_management,
+            updated_at = now()
+        `, [
+          userId,
+          p.counselling !== undefined ? p.counselling : true,
+          p.billing !== undefined ? p.billing : true,
+          p.payment !== undefined ? p.payment : true,
+          p.due_collection !== undefined ? p.due_collection : true,
+          p.crm !== undefined ? p.crm : true,
+          p.followup !== undefined ? p.followup : true,
+          p.renewals !== undefined ? p.renewals : true,
+          p.complaints !== undefined ? p.complaints : true,
+          p.feedback !== undefined ? p.feedback : true,
+          p.reports !== undefined ? p.reports : true,
+          p.accountant !== undefined ? p.accountant : true,
+          p.coupon_management !== undefined ? p.coupon_management : false
+        ]);
+      } else if (oldUser.role === 'doctor') {
+        await db.query(`
+          INSERT INTO doctor_permissions (
+            user_id, coupon_management, updated_at
+          ) VALUES ($1, $2, now())
+          ON CONFLICT (user_id) DO UPDATE SET
+            coupon_management = EXCLUDED.coupon_management,
+            updated_at = now()
+        `, [
+          userId,
+          p.coupon_management !== undefined ? p.coupon_management : false
+        ]);
+      }
     }
 
     res.locals.auditEntry = { module: 'User Management', action: 'Update User', recordId: userId, oldValue: oldUser, newValue: req.body };

@@ -108,4 +108,78 @@ function requireReceptionistPermission(permKey) {
   };
 }
 
-module.exports = { authorizeRoles, checkPermission, requireReceptionistPermission };
+/**
+ * requireCouponPermission()
+ *
+ * Granular RBAC check for Coupon Management module.
+ * - super_admin: always allowed
+ * - receptionist: checks coupon_management permission
+ * - pro_manager: checks coupon_management permission
+ * - doctor: checks coupon_management permission
+ * - all other roles: 403 Access Denied
+ */
+function requireCouponPermission() {
+  return async (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json(formatResponse(false, null, 'Unauthenticated'));
+    }
+
+    const { role, user_id } = req.user;
+
+    // Super Admin always has full access
+    if (role === 'super_admin') {
+      return next();
+    }
+
+    // Role must be receptionist, pro_manager, or doctor
+    if (!['receptionist', 'pro_manager', 'doctor'].includes(role)) {
+      return res.status(403).json(
+        formatResponse(false, null, `Access denied: Role '${role}' is not authorized for Coupon Management.`)
+      );
+    }
+
+    // 1. Check permissions in JWT payload
+    const tokenPerms = req.user.permissions ||
+                       req.user.receptionist_permissions ||
+                       req.user.pro_manager_permissions ||
+                       req.user.doctor_permissions;
+
+    if (tokenPerms && typeof tokenPerms === 'object' && tokenPerms.coupon_management !== undefined) {
+      if (tokenPerms.coupon_management === true) {
+        return next();
+      }
+      return res.status(403).json(
+        formatResponse(false, null, `Access denied: you do not have Coupon Management permission.`)
+      );
+    }
+
+    // 2. Authoritative database check if not embedded in token
+    try {
+      let allowed = false;
+      if (role === 'receptionist') {
+        const r = await db.query('SELECT coupon_management FROM receptionist_permissions WHERE user_id = $1', [user_id]);
+        allowed = r.rows.length > 0 && r.rows[0].coupon_management === true;
+      } else if (role === 'pro_manager') {
+        const r = await db.query('SELECT coupon_management FROM pro_manager_permissions WHERE user_id = $1', [user_id]);
+        allowed = r.rows.length > 0 && r.rows[0].coupon_management === true;
+      } else if (role === 'doctor') {
+        const r = await db.query('SELECT coupon_management FROM doctor_permissions WHERE user_id = $1', [user_id]);
+        allowed = r.rows.length > 0 && r.rows[0].coupon_management === true;
+      }
+
+      if (allowed) {
+        return next();
+      }
+
+      return res.status(403).json(
+        formatResponse(false, null, `Access denied: you do not have Coupon Management permission.`)
+      );
+    } catch (err) {
+      console.error('requireCouponPermission error:', err);
+      return res.status(500).json(formatResponse(false, null, 'Internal server error during permission check'));
+    }
+  };
+}
+
+module.exports = { authorizeRoles, checkPermission, requireReceptionistPermission, requireCouponPermission };
+

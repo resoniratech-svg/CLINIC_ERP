@@ -934,7 +934,7 @@ async function createEmployeeReferral(req, res) {
           full_name, mobile_number, age, gender, village, mandal, village_id, mandal_id, address, ailment_reason,
           registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'new', $14, $15)
         RETURNING patient_id
       `, [
         patient_name.trim(),
@@ -962,7 +962,7 @@ async function createEmployeeReferral(req, res) {
       INSERT INTO referrals (patient_id, referral_type, referred_by, referral_code, referring_employee_id, department, remarks)
       VALUES ($1, 'employee', $2, $3, $4, $5, $6)
       RETURNING *
-    `, [ptId, emp.full_name, refCode, emp.user_id, emp.department || 'General', remarks || null]);
+    `, [ptId, req.user.user_id, refCode, emp.user_id, emp.department || 'General', remarks || null]);
 
     // Handle Appointment and Bill creation if doctor is provided
     let newAppt = null;
@@ -1114,7 +1114,7 @@ async function createPatientReferral(req, res) {
           full_name, mobile_number, age, gender, village, mandal, village_id, mandal_id, address, ailment_reason,
           registration_id, registration_date, registration_expiry, patient_type, branch_id, registered_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'new', $14, $15)
         RETURNING patient_id
       `, [
         patient_name.trim(),
@@ -1142,7 +1142,7 @@ async function createPatientReferral(req, res) {
       INSERT INTO referrals (patient_id, referral_type, referred_by, referral_code, referring_patient_id, remarks)
       VALUES ($1, 'patient', $2, $3, $4, $5)
       RETURNING *
-    `, [ptId, ptRefRes.rows[0].full_name || 'Patient', refCode, parseInt(referring_patient_id), remarks || null]);
+    `, [ptId, req.user.user_id, refCode, parseInt(referring_patient_id), remarks || null]);
 
     // If doctor assignment & schedule parameters are supplied, create Appointment & Bill & Payment
     let newAppt = null;

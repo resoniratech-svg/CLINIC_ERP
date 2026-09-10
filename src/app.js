@@ -40,6 +40,7 @@ app.use('/api/v1/executive', require('./routes/executive.routes'));
 app.use('/api/v1/doctor', require('./routes/doctor_module.routes'));
 app.use('/api/v1/pro', require('./routes/pro_module.routes'));
 app.use('/api/v1/outbound', require('./routes/executive.routes'));
+app.use('/api/v1/coupons', require('./routes/coupons.routes'));
 
 // Super Admin Aliases
 app.use('/api/v1/super-admin/doctors', require('./routes/doctors.routes'));
