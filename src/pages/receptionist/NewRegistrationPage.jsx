@@ -4,6 +4,7 @@ import { receptionistApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { AilmentSelect } from '../../components/common/AilmentSelect';
+import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -53,6 +54,8 @@ export const NewRegistrationPage = () => {
     age: location.state?.age !== undefined && location.state?.age !== null ? String(location.state.age) : '',
     gender: location.state?.gender || 'male',
     village_mandal: location.state?.village || location.state?.village_mandal || location.state?.mandal || '',
+    village_id: location.state?.village_id || null,
+    mandal_id: location.state?.mandal_id || null,
     ailment_reason: (() => {
       const explicitAilment = location.state?.ailment_reason || location.state?.requirement || '';
       if (explicitAilment) return explicitAilment;
@@ -84,6 +87,10 @@ export const NewRegistrationPage = () => {
 
   // Base Fee & Calculations
   const [selectedDoctor, setSelectedDoctor] = useState(null);
+  const [patientFee, setPatientFee] = useState('');
+  const [isFeeOverridden, setIsFeeOverridden] = useState(false);
+  const prevDoctorIdRef = useRef(null);
+  const prevApptTypeRef = useRef(formData.appointment_type);
   const [existingCheckLoading, setExistingCheckLoading] = useState(false);
   const [existingPatientInfo, setExistingPatientInfo] = useState(null);
 
@@ -143,8 +150,13 @@ export const NewRegistrationPage = () => {
         if (docRes.success && docRes.data) {
           setDoctors(docRes.data);
           if (docRes.data.length > 0) {
-            setFormData((prev) => ({ ...prev, assigned_doctor_id: docRes.data[0].doctor_id }));
-            setSelectedDoctor(docRes.data[0]);
+            const firstDoc = docRes.data[0];
+            setFormData((prev) => ({ ...prev, assigned_doctor_id: firstDoc.doctor_id }));
+            setSelectedDoctor(firstDoc);
+            prevDoctorIdRef.current = firstDoc.doctor_id;
+            const initFee = parseFloat(firstDoc.new_consultation_fee || 500);
+            setPatientFee(String(initFee));
+            setIsFeeOverridden(false);
           }
         }
 
@@ -176,13 +188,40 @@ export const NewRegistrationPage = () => {
     fetchPrerequisites();
   }, [user]);
 
-  // Update selected doctor object & fee when doctor or appt type changes
+  const getDefaultDocFee = (doc, apptType) => {
+    if (!doc) return 500;
+    if (apptType === 'renewal') return parseFloat(doc.renewal_consultation_fee || 300);
+    if (apptType === 'followup') return parseFloat(doc.followup_consultation_fee || 200);
+    return parseFloat(doc.new_consultation_fee || 500);
+  };
+
+  // Update selected doctor object & fee when doctor changes
   useEffect(() => {
     if (formData.assigned_doctor_id && doctors.length > 0) {
       const doc = doctors.find((d) => String(d.doctor_id) === String(formData.assigned_doctor_id));
-      setSelectedDoctor(doc || null);
+      if (doc) {
+        setSelectedDoctor(doc);
+        // If doctor changed, automatically update to new doctor's default fee and reset override
+        if (prevDoctorIdRef.current !== null && String(prevDoctorIdRef.current) !== String(doc.doctor_id)) {
+          const newDocFee = getDefaultDocFee(doc, formData.appointment_type);
+          setPatientFee(String(newDocFee));
+          setIsFeeOverridden(false);
+        }
+        prevDoctorIdRef.current = doc.doctor_id;
+      }
     }
-  }, [formData.assigned_doctor_id, doctors]);
+  }, [formData.assigned_doctor_id, doctors, formData.appointment_type]);
+
+  // When appointment_type changes, update fee if not manually overridden
+  useEffect(() => {
+    if (selectedDoctor && prevApptTypeRef.current !== formData.appointment_type) {
+      prevApptTypeRef.current = formData.appointment_type;
+      if (!isFeeOverridden) {
+        const docFee = getDefaultDocFee(selectedDoctor, formData.appointment_type);
+        setPatientFee(String(docFee));
+      }
+    }
+  }, [formData.appointment_type, selectedDoctor, isFeeOverridden]);
 
   const formatDocName = (name) => {
     if (!name) return 'Doctor';
@@ -236,19 +275,56 @@ export const NewRegistrationPage = () => {
     return name.includes(q) || spec.includes(q) || qual.includes(q);
   });
 
-  // Determine Base Fee
-  const getBaseFee = () => {
-    if (!selectedDoctor) return 500;
-    if (formData.appointment_type === 'renewal') return parseFloat(selectedDoctor.renewal_consultation_fee || 300);
-    if (formData.appointment_type === 'followup') return parseFloat(selectedDoctor.followup_consultation_fee || 200);
-    return parseFloat(selectedDoctor.new_consultation_fee || 500);
-  };
+  const defaultFee = useMemo(() => {
+    return getDefaultDocFee(selectedDoctor, formData.appointment_type);
+  }, [selectedDoctor, formData.appointment_type]);
 
-  const baseFee = getBaseFee();
+  const parsedPatientFee = patientFee === '' ? defaultFee : parseFloat(patientFee);
+  const effectiveFee = isNaN(parsedPatientFee) || parsedPatientFee < 0 ? 0 : parsedPatientFee;
   const discount = Math.max(0, parseFloat(formData.discount_amount) || 0);
-  const finalFee = Math.max(0, baseFee - discount);
+  const finalFee = Math.max(0, effectiveFee - discount);
   const paymentAmount = formData.payment_amount === '' ? finalFee : parseFloat(formData.payment_amount) || 0;
   const dueAmount = Math.max(0, finalFee - paymentAmount);
+
+  const resetForm = () => {
+    const firstDoc = doctors[0] || null;
+    const defaultDocId = firstDoc?.doctor_id || '';
+    const initialFee = firstDoc ? getDefaultDocFee(firstDoc, 'new') : 500;
+
+    setFormData({
+      mobile_number: '',
+      full_name: '',
+      age: '',
+      gender: 'male',
+      village_mandal: '',
+      village_id: null,
+      mandal_id: null,
+      ailment_reason: '',
+      lead_source: 'walkin',
+      lead_id: null,
+      referring_employee_id: '',
+      referring_patient_name: '',
+      assigned_doctor_id: defaultDocId,
+      appointment_date: new Date().toISOString().split('T')[0],
+      appointment_time: '10:00:00',
+      appointment_type: 'new',
+      discount_amount: 0,
+      discount_reason: '',
+      payment_method: 'cash',
+      payment_amount: '',
+      remarks: '',
+    });
+
+    setSelectedDoctor(firstDoc);
+    prevDoctorIdRef.current = defaultDocId;
+    prevApptTypeRef.current = 'new';
+    setPatientFee(String(initialFee));
+    setIsFeeOverridden(false);
+    setExistingPatientInfo(null);
+    setSelectedEmp(null);
+    setSelectedReferringPt(null);
+    setDoctorSearchTerm('');
+  };
 
   // Auto-check Mobile on blur
   const checkExistingMobile = async () => {
@@ -261,14 +337,21 @@ export const NewRegistrationPage = () => {
           const match = res.data.patients.find((p) => p.mobile_number === mobile);
           if (match) {
             setExistingPatientInfo(match);
-            setFormData((prev) => ({
-              ...prev,
-              full_name: match.full_name || match.patient_name || prev.full_name,
-              age: match.age || prev.age,
-              gender: match.gender || prev.gender,
-              village_mandal: match.village || match.village_mandal || prev.village_mandal,
-              appointment_type: 'renewal', // auto recommend renewal for existing
-            }));
+            setFormData((prev) => {
+              const vName = match.village || '';
+              const mName = match.mandal || '';
+              const dispLoc = vName && mName ? `${vName}, ${mName}` : (vName || mName || match.village_mandal || prev.village_mandal);
+              return {
+                ...prev,
+                full_name: match.full_name || match.patient_name || prev.full_name,
+                age: match.age || prev.age,
+                gender: match.gender || prev.gender,
+                village_mandal: dispLoc,
+                village_id: match.village_id || null,
+                mandal_id: match.mandal_id || null,
+                appointment_type: 'renewal', // auto recommend renewal for existing
+              };
+            });
             showToast(`Existing patient detected: ${match.full_name || match.patient_name} (${match.registration_id})`, 'info');
           } else {
             setExistingPatientInfo(null);
@@ -292,6 +375,22 @@ export const NewRegistrationPage = () => {
       return;
     }
 
+    const rawPatientFeeNum = parseFloat(patientFee);
+    if (patientFee === '' || isNaN(rawPatientFeeNum) || rawPatientFeeNum < 0) {
+      showToast('Please enter a valid non-negative consultation fee', 'warning');
+      return;
+    }
+
+    if (discount > rawPatientFeeNum) {
+      showToast(`Discount (₹${discount}) cannot exceed consultation fee (₹${rawPatientFeeNum})`, 'warning');
+      return;
+    }
+
+    if (paymentAmount > finalFee) {
+      showToast(`Payment amount (₹${paymentAmount}) cannot exceed final payable (₹${finalFee})`, 'warning');
+      return;
+    }
+
     if (formData.lead_source === 'employee_referral' && !selectedEmp) {
       showToast('Please select a referring employee for this employee referral', 'warning');
       return;
@@ -309,7 +408,9 @@ export const NewRegistrationPage = () => {
         full_name: formData.full_name.trim(),
         age: formData.age ? parseInt(formData.age) : null,
         gender: formData.gender,
-        village_mandal: formData.village_mandal.trim() || null,
+        village_mandal: formData.village_mandal ? formData.village_mandal.trim() : null,
+        village_id: formData.village_id || null,
+        mandal_id: formData.mandal_id || null,
         ailment_reason: formData.ailment_reason.trim() || null,
         lead_source: formData.lead_source,
         source: formData.lead_source === 'executive_lead' ? 'Call Center Executive Lead' : (formData.lead_source === 'employee_referral' ? 'Employee Referral' : (formData.lead_source === 'patient_referral' ? 'Patient Referral' : formData.lead_source)),
@@ -320,6 +421,8 @@ export const NewRegistrationPage = () => {
         appointment_date: formData.appointment_date,
         appointment_time: formData.appointment_time,
         appointment_type: formData.appointment_type,
+        consultation_fee: rawPatientFeeNum,
+        fee: rawPatientFeeNum,
         discount_amount: discount,
         payment_method: formData.payment_method,
         payment_amount: paymentAmount,
@@ -329,11 +432,22 @@ export const NewRegistrationPage = () => {
       const res = await receptionistApi.registerPatient(payload);
       if (res.success) {
         showToast('Patient registered & consultation payment recorded successfully!', 'success');
+        // Refresh master data so newly created locations are immediately cached
+        settingsApi.getMasterData('villages', { status: 'active' }).then(r => {
+          if (r?.success && Array.isArray(r.data)) setVillagesList(r.data);
+        }).catch(() => {});
+        settingsApi.getMasterData('mandals', { status: 'active' }).then(r => {
+          if (r?.success && Array.isArray(r.data)) setMandalsList(r.data);
+        }).catch(() => {});
+
         setCompletedRecord({
           ...res.data,
           patientName: formData.full_name,
           mobile: formData.mobile_number,
           doctorName: selectedDoctor?.doctor_name || selectedDoctor?.full_name,
+          defaultFee,
+          chargedFee: rawPatientFeeNum,
+          discount,
           finalFee,
           paidAmount: paymentAmount,
           dueAmount,
@@ -473,28 +587,32 @@ export const NewRegistrationPage = () => {
             </div>
 
             {/* Village / Mandal */}
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                Village / Mandal *
-              </label>
-              <input
-                type="text"
-                required
-                list="registered-villages-datalist"
-                value={formData.village_mandal}
-                onChange={(e) => setFormData({ ...formData, village_mandal: e.target.value })}
-                placeholder="e.g. Kukatpally, Hyderabad"
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-              <datalist id="registered-villages-datalist">
-                {villagesList.map((v) => (
-                  <option key={v.id || v.name} value={v.name} />
-                ))}
-                {mandalsList.map((m) => (
-                  <option key={`mandal-${m.id || m.name}`} value={m.name} />
-                ))}
-              </datalist>
-            </div>
+            <VillageMandalSelect
+              label="Village / Mandal"
+              required
+              value={formData.village_mandal}
+              villageId={formData.village_id}
+              mandalId={formData.mandal_id}
+              villages={villagesList}
+              mandals={mandalsList}
+              onChange={(e, val) => {
+                setFormData(prev => ({
+                  ...prev,
+                  village_mandal: val,
+                  village_id: null,
+                  mandal_id: null
+                }));
+              }}
+              onSelect={(selection) => {
+                setFormData(prev => ({
+                  ...prev,
+                  village_mandal: selection.displayName,
+                  village_id: selection.villageId || null,
+                  mandal_id: selection.mandalId || null
+                }));
+              }}
+              placeholder="e.g. Pothugal, Karimnagar or type new Village, Mandal"
+            />
 
             {/* Lead Source */}
             <div>
@@ -808,10 +926,16 @@ export const NewRegistrationPage = () => {
                         <div
                           key={doc.doctor_id}
                           onClick={() => {
+                            const isDifferentDoc = String(formData.assigned_doctor_id) !== String(doc.doctor_id);
                             setFormData((prev) => ({ ...prev, assigned_doctor_id: doc.doctor_id }));
                             setSelectedDoctor(doc);
                             setDoctorSearchTerm(doc.doctor_name || doc.full_name || '');
                             setIsDoctorDropdownOpen(false);
+                            if (isDifferentDoc) {
+                              const docFee = getDefaultDocFee(doc, formData.appointment_type);
+                              setPatientFee(String(docFee));
+                              setIsFeeOverridden(false);
+                            }
                           }}
                           className={`p-2.5 hover:bg-blue-50/80 cursor-pointer transition-colors flex items-center justify-between text-xs ${
                             isSelected ? 'bg-blue-50 font-bold text-blue-900' : 'text-slate-700'
@@ -893,46 +1017,111 @@ export const NewRegistrationPage = () => {
           </div>
         </div>
 
-        {/* Section 3: Consultation Fee Billing & Payment Collection */}
+        {/* Section 3: Consultation Fee Billing & Payment Recording */}
         <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-2xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-1">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
               <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-700 font-bold flex items-center justify-center text-[11px]">3</span>
               <span>Consultation Fee Billing & Payment Recording</span>
             </h3>
             <span className="text-[10px] text-slate-400 font-mono">
-              Auto-resolved from doctor pricing matrix
+              {isFeeOverridden
+                ? '• Temporary fee override active (Doctor master pricing unchanged)'
+                : 'Auto-resolved from doctor pricing matrix'}
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 text-xs">
-            {/* Base Fee (Auto) */}
-            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Standard Fee (Auto)</span>
-              <span className="text-lg font-black text-slate-900 font-mono">₹{baseFee}</span>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+            {/* 1. Standard Fee (Default) */}
+            <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Standard Fee (Default)</span>
+                <span className="text-lg font-black text-slate-700 font-mono">₹{defaultFee}</span>
+              </div>
+              <span className="text-[10px] text-slate-400 block pt-1">
+                Doctor master rate ({formData.appointment_type})
+              </span>
             </div>
 
-            {/* Allowed Discount */}
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                Discount (₹)
-              </label>
-              <input
-                type="number"
-                min="0"
-                max={baseFee}
-                value={formData.discount_amount}
-                onChange={(e) => setFormData({ ...formData, discount_amount: e.target.value })}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-medium"
-              />
+            {/* 2. Consultation Fee For This Patient (Editable) */}
+            <div className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between ${
+              isFeeOverridden
+                ? 'bg-amber-50/50 border-amber-300 ring-1 ring-amber-200'
+                : 'bg-white border-blue-200 ring-1 ring-blue-100'
+            }`}>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-700">
+                    Fee For This Patient *
+                  </label>
+                  {isFeeOverridden && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPatientFee(String(defaultFee));
+                        setIsFeeOverridden(false);
+                      }}
+                      className="text-[10px] text-blue-600 hover:text-blue-800 font-bold underline cursor-pointer"
+                      title="Revert to doctor default fee"
+                    >
+                      Revert
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-mono font-bold text-slate-400 text-sm">₹</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={patientFee}
+                    onChange={(e) => {
+                      setPatientFee(e.target.value);
+                      setIsFeeOverridden(true);
+                    }}
+                    className="w-full pl-7 pr-3 py-1.5 text-sm rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold text-slate-900"
+                    placeholder={String(defaultFee)}
+                  />
+                </div>
+              </div>
+              <span className={`text-[10px] block pt-1 ${isFeeOverridden ? 'text-amber-700 font-semibold' : 'text-slate-400'}`}>
+                {isFeeOverridden ? 'Temporary override (this patient only)' : 'Default loaded from doctor pricing'}
+              </span>
             </div>
 
-            {/* Final Payable Amount */}
-            <div className="p-3 bg-blue-50/60 rounded-2xl border border-blue-200">
-              <span className="text-[10px] text-blue-600 font-bold uppercase tracking-wider block">Final Payable</span>
-              <span className="text-lg font-black text-blue-800 font-mono">₹{finalFee}</span>
+            {/* 3. Discount */}
+            <div className="p-3.5 bg-white rounded-2xl border border-slate-200 flex flex-col justify-between">
+              <div>
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1">
+                  Discount (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max={effectiveFee}
+                  value={formData.discount_amount}
+                  onChange={(e) => setFormData({ ...formData, discount_amount: e.target.value })}
+                  className="w-full px-3 py-1.5 text-sm rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-medium"
+                />
+              </div>
+              <span className="text-[10px] text-slate-400 block pt-1">
+                Subject to discount policy
+              </span>
             </div>
 
+            {/* 4. Final Payable */}
+            <div className="p-3.5 bg-blue-50/70 rounded-2xl border border-blue-200 flex flex-col justify-between">
+              <div>
+                <span className="text-[10px] text-blue-600 font-bold uppercase tracking-wider block">Final Payable</span>
+                <span className="text-lg font-black text-blue-900 font-mono">₹{finalFee}</span>
+              </div>
+              <span className="text-[10px] text-blue-700/70 block pt-1 font-mono">
+                ₹{effectiveFee} - ₹{discount} = ₹{finalFee}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs pt-1">
             {/* Payment Method */}
             <div>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">
@@ -950,9 +1139,8 @@ export const NewRegistrationPage = () => {
                 <option value="bajaj_pay">Bajaj Pay Health EMI</option>
               </select>
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs pt-2">
+            {/* Amount Paid Today */}
             <div>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                 Amount Paid Today (₹) *
@@ -973,7 +1161,8 @@ export const NewRegistrationPage = () => {
               )}
             </div>
 
-            <div>
+            {/* Front Desk Remarks */}
+            <div className="sm:col-span-2">
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                 Front Desk Remarks
               </label>
@@ -992,7 +1181,10 @@ export const NewRegistrationPage = () => {
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
             type="button"
-            onClick={() => navigate('/receptionist/dashboard')}
+            onClick={() => {
+              resetForm();
+              navigate('/receptionist/dashboard');
+            }}
             className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-50 transition-colors cursor-pointer"
           >
             Cancel
@@ -1024,6 +1216,7 @@ export const NewRegistrationPage = () => {
         <Modal
           isOpen={true}
           onClose={() => {
+            resetForm();
             setCompletedRecord(null);
             navigate('/receptionist/dashboard');
           }}
@@ -1073,8 +1266,22 @@ export const NewRegistrationPage = () => {
                 <span className="font-bold text-slate-900">{formatDocName(completedRecord.doctorName)}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Total Consultation Fee:</span>
-                <span className="font-mono font-bold text-slate-900">₹{completedRecord.finalFee}</span>
+                <span className="text-slate-500">Standard Doctor Fee:</span>
+                <span className="font-mono text-slate-500">₹{completedRecord.defaultFee}</span>
+              </div>
+              <div className="flex justify-between py-1 border-b border-slate-100">
+                <span className="text-slate-500">Consultation Fee (This Patient):</span>
+                <span className="font-mono font-bold text-slate-900">₹{completedRecord.chargedFee || completedRecord.finalFee}</span>
+              </div>
+              {completedRecord.discount > 0 && (
+                <div className="flex justify-between py-1 border-b border-slate-100">
+                  <span className="text-slate-500">Discount Applied:</span>
+                  <span className="font-mono font-bold text-red-600">-₹{completedRecord.discount}</span>
+                </div>
+              )}
+              <div className="flex justify-between py-1 border-b border-slate-100 font-bold">
+                <span className="text-slate-700">Final Payable:</span>
+                <span className="font-mono text-blue-900 text-sm">₹{completedRecord.finalFee}</span>
               </div>
               <div className="flex justify-between py-1 border-b border-slate-100">
                 <span className="text-slate-500">Paid Amount ({completedRecord.paymentMethod?.toUpperCase()}):</span>
@@ -1089,8 +1296,9 @@ export const NewRegistrationPage = () => {
             </div>
 
             {/* Modal Actions */}
-            <div className="pt-2 flex items-center justify-end gap-3">
+            <div className="pt-2 flex flex-wrap items-center justify-end gap-3">
               <button
+                type="button"
                 onClick={() => {
                   window.print();
                 }}
@@ -1101,7 +1309,21 @@ export const NewRegistrationPage = () => {
               </button>
 
               <button
+                type="button"
                 onClick={() => {
+                  resetForm();
+                  setCompletedRecord(null);
+                }}
+                className="px-4 py-2 border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Register Another Patient</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  resetForm();
                   setCompletedRecord(null);
                   navigate('/receptionist/check-in');
                 }}

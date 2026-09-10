@@ -4,6 +4,7 @@ import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { AilmentSelect } from '../../components/common/AilmentSelect';
+import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { useToast } from '../../context/ToastContext';
 import {
   HelpCircle,
@@ -371,16 +372,13 @@ export const EnquiriesPage = () => {
               </select>
             </div>
 
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">Village / Mandal / City</label>
-              <input
-                type="text"
-                value={formData.village_mandal}
-                onChange={(e) => setFormData({ ...formData, village_mandal: e.target.value })}
-                placeholder="e.g. Karimnagar"
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none"
-              />
-            </div>
+            <VillageMandalSelect
+              label="Village / Mandal / City"
+              value={formData.village_mandal}
+              onChange={(e, val) => setFormData({ ...formData, village_mandal: val })}
+              onSelect={(selection) => setFormData({ ...formData, village_mandal: selection.displayName })}
+              placeholder="e.g. Karimnagar or Pothugal, Karimnagar"
+            />
           </div>
 
           <AilmentSelect

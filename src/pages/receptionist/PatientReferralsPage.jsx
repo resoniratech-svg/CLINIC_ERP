@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
+import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { useToast } from '../../context/ToastContext';
 import { HeartHandshake, Plus, Search, CheckCircle2, UserPlus, Users, ChevronDown, X } from 'lucide-react';
 
@@ -399,16 +400,13 @@ export const PatientReferralsPage = () => {
             </div>
           </div>
 
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">Village / Mandal</label>
-            <input
-              type="text"
-              value={formData.village_mandal}
-              onChange={(e) => setFormData({ ...formData, village_mandal: e.target.value })}
-              placeholder="e.g. Gachibowli, Hyderabad"
-              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-            />
-          </div>
+          <VillageMandalSelect
+            label="Village / Mandal"
+            value={formData.village_mandal}
+            onChange={(e, val) => setFormData({ ...formData, village_mandal: val })}
+            onSelect={(selection) => setFormData({ ...formData, village_mandal: selection.displayName })}
+            placeholder="e.g. Pothugal, Karimnagar"
+          />
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-700 mb-1">Referral Remarks</label>
