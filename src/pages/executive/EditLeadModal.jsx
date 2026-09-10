@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '../../components/common/Modal';
+import { AilmentSelect } from '../../components/common/AilmentSelect';
 import { executiveApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -237,18 +238,14 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
 
         {/* Problem / Requirement & Campaign */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Health Complaint / Problem
-            </label>
-            <input
-              type="text"
-              value={formData.requirement}
-              onChange={(e) => setFormData({ ...formData, requirement: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. Skin Allergy / Joint Pain"
-            />
-          </div>
+          <AilmentSelect
+            label="Health Complaint / Problem"
+            labelClassName="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1"
+            value={formData.requirement}
+            onChange={(e) => setFormData({ ...formData, requirement: e.target.value })}
+            placeholder="e.g. Skin Allergy / Joint Pain"
+            inputClassName="bg-slate-50 border-slate-300 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
 
           <div>
             <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">

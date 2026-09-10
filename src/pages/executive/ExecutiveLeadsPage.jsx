@@ -3,6 +3,7 @@ import { useLocation, Link } from 'react-router-dom';
 import { executiveApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
+import { AilmentSelect } from '../../components/common/AilmentSelect';
 import { LeadDetailsModal } from './LeadDetailsModal';
 import { EditLeadModal } from './EditLeadModal';
 import { useToast } from '../../context/ToastContext';
@@ -491,19 +492,15 @@ export const ExecutiveLeadsPage = () => {
             </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1">
-              Requirement / Reason <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              placeholder="e.g. Back Pain, Skin Allergy, Gastric Consultation"
-              value={newLeadForm.requirement}
-              onChange={(e) => setNewLeadForm({ ...newLeadForm, requirement: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          <AilmentSelect
+            label="Requirement / Reason"
+            labelClassName="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1"
+            required
+            placeholder="e.g. Back Pain, Skin Allergy, Gastric Consultation"
+            value={newLeadForm.requirement}
+            onChange={(e) => setNewLeadForm({ ...newLeadForm, requirement: e.target.value })}
+            inputClassName="bg-slate-50 border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
 
           <div>
             <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1">

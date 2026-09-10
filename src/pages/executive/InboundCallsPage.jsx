@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { executiveApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { AilmentSelect } from '../../components/common/AilmentSelect';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -471,23 +472,16 @@ export const InboundCallsPage = () => {
             </div>
 
             {/* Requirement / Reason */}
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Requirement / Ailment Reason <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                list="inbound-ailments-datalist"
-                placeholder="e.g. Chronic Joint Pain, Psoriasis, Asthma, Child Immunity Consultation"
-                value={leadForm.requirement}
-                onChange={(e) => setLeadForm({ ...leadForm, requirement: e.target.value })}
-                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-              <datalist id="inbound-ailments-datalist">
-                {ailmentsList.map(a => <option key={a.id || a.name} value={a.name} />)}
-              </datalist>
-            </div>
+            <AilmentSelect
+              label="Requirement / Ailment Reason"
+              labelClassName="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+              required
+              value={leadForm.requirement}
+              onChange={(e) => setLeadForm({ ...leadForm, requirement: e.target.value })}
+              placeholder="e.g. Chronic Joint Pain, Psoriasis, Asthma, Child Immunity Consultation"
+              ailments={ailmentsList}
+              inputClassName="px-3.5 py-2 bg-slate-50 border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:ring-emerald-500"
+            />
 
             {/* Remarks */}
             <div>
