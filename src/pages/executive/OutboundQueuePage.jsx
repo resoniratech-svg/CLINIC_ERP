@@ -46,10 +46,10 @@ export const OutboundQueuePage = () => {
     setLoading(true);
     try {
       const res = await executiveApi.getOutboundQueue();
-      if (res.success && res.data) {
-        setQueue(res.data);
+      if (res && res.success) {
+        setQueue(Array.isArray(res.data) ? res.data : []);
       } else {
-        showToast('Failed to load outbound calling queue', 'error');
+        showToast(res?.message || 'Failed to load outbound calling queue', 'error');
       }
     } catch (err) {
       showToast(err.message || 'Error fetching outbound queue', 'error');

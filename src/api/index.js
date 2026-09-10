@@ -270,7 +270,13 @@ export const executiveApi = {
   updateLead: (id, data) => axiosClient.put(`/executive/leads/${id}`, data),
   updateOutboundLead: (id, data) => axiosClient.put(`/executive/outbound/leads/${id}`, data),
   importOutboundLeads: (data) => axiosClient.post('/executive/outbound/import', data),
-  getOutboundQueue: () => axiosClient.get('/executive/outbound/queue'),
+  getOutboundQueue: (params) =>
+    axiosClient.get('/executive/outbound/queue', { params }).catch((err) => {
+      if (err?.response?.status === 404) {
+        return axiosClient.get('/outbound/queue', { params });
+      }
+      throw err;
+    }),
   recordCallOutcome: (data) => axiosClient.post('/executive/calls/outcome', data),
   updateCallRecord: (id, data) => axiosClient.put(`/executive/calls/${id}`, data),
   getCallbacks: () => axiosClient.get('/executive/callbacks'),
