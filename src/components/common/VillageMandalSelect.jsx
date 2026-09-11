@@ -152,7 +152,7 @@ export const VillageMandalSelect = ({
         v => (v.name || '').toLowerCase() === vLower && (v.mandal_name || '').toLowerCase() === mLower
       );
       if (!exists) {
-        return { village: vPart, mandal: mPart, displayName: `${vPart}, ${mPart}` };
+        return { village: vPart, mandal: mPart, displayName: `${vPart} — ${mPart}` };
       }
     }
     return null;
@@ -168,11 +168,15 @@ export const VillageMandalSelect = ({
       };
     }
 
-    // Split search query if contains comma (e.g. "pothugal, karimnagar")
+    // Split search query if contains comma or dash (e.g. "pothugal, karimnagar" or "pothugal — karimnagar")
     let vSearch = q;
     let mSearch = '';
     if (q.includes(',')) {
       const parts = q.split(',').map(s => s.trim());
+      vSearch = parts[0] || '';
+      mSearch = parts[1] || '';
+    } else if (/\s+[-—]\s+/.test(q)) {
+      const parts = q.split(/\s+[-—]\s+/).map(s => s.trim());
       vSearch = parts[0] || '';
       mSearch = parts[1] || '';
     }
@@ -200,7 +204,7 @@ export const VillageMandalSelect = ({
   const handleSelectVillage = (village) => {
     const vName = village.name;
     const mName = village.mandal_name || '';
-    const display = mName ? `${vName}, ${mName}` : vName;
+    const display = mName ? `${vName} — ${mName}` : vName;
 
     if (typeof onSelect === 'function') {
       onSelect({
@@ -408,7 +412,9 @@ export const VillageMandalSelect = ({
                     >
                       <div className="flex-1 min-w-0 pr-2">
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-800 truncate">{v.name}</span>
+                          <span className="font-semibold text-slate-800 truncate">
+                            {v.name} {v.mandal_name ? `— ${v.mandal_name}` : ''}
+                          </span>
                           <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-blue-100/70 text-blue-700 font-bold shrink-0">
                             Village
                           </span>

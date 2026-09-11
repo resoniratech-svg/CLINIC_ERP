@@ -451,7 +451,11 @@ export const HospitalSettingsPage = () => {
                 <LoadingSpinner label="Loading registry items..." />
               ) : masterList
                   .filter((item) => {
-                    const matchesSearch = !searchFilter || item.name.toLowerCase().includes(searchFilter.toLowerCase());
+                    const qLower = searchFilter.toLowerCase();
+                    const matchesSearch =
+                      !searchFilter ||
+                      (item.name || '').toLowerCase().includes(qLower) ||
+                      (item.mandal_name && item.mandal_name.toLowerCase().includes(qLower));
                     const matchesStatus =
                       statusFilter === 'all' ||
                       (statusFilter === 'active' && (item.status || 'active') === 'active') ||
@@ -467,7 +471,11 @@ export const HospitalSettingsPage = () => {
                 <div className="divide-y divide-slate-100 text-xs max-h-[500px] overflow-y-auto">
                   {masterList
                     .filter((item) => {
-                      const matchesSearch = !searchFilter || item.name.toLowerCase().includes(searchFilter.toLowerCase());
+                      const qLower = searchFilter.toLowerCase();
+                      const matchesSearch =
+                        !searchFilter ||
+                        (item.name || '').toLowerCase().includes(qLower) ||
+                        (item.mandal_name && item.mandal_name.toLowerCase().includes(qLower));
                       const matchesStatus =
                         statusFilter === 'all' ||
                         (statusFilter === 'active' && (item.status || 'active') === 'active') ||
@@ -496,10 +504,16 @@ export const HospitalSettingsPage = () => {
                             </span>
 
                             {/* Mandal attribution badge if village */}
-                            {masterType === 'villages' && item.mandal_name && (
-                              <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100 shrink-0">
-                                Mandal: {item.mandal_name}
-                              </span>
+                            {masterType === 'villages' && (
+                              item.mandal_name ? (
+                                <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100 shrink-0">
+                                  Mandal: {item.mandal_name}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-medium text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full border border-slate-200 shrink-0">
+                                  Mandal: Unassigned
+                                </span>
+                              )
                             )}
 
                             {/* Status badge */}
