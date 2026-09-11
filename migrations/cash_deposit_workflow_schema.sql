@@ -38,3 +38,5 @@ ALTER TABLE cash_deposits ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCE
 
 CREATE INDEX IF NOT EXISTS idx_cd_deposit_type ON cash_deposits(deposit_type);
 CREATE INDEX IF NOT EXISTS idx_cd_deposit_request_id ON cash_deposits(deposit_request_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cdr_idempotency_key ON cash_deposit_requests(idempotency_key) WHERE idempotency_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cd_deposit_request_id_unique ON cash_deposits(deposit_request_id) WHERE deposit_request_id IS NOT NULL;

@@ -481,6 +481,7 @@ CREATE INDEX IF NOT EXISTS idx_cdr_requested_by ON cash_deposit_requests(request
 CREATE INDEX IF NOT EXISTS idx_cdr_status ON cash_deposit_requests(status);
 CREATE INDEX IF NOT EXISTS idx_cdr_request_date ON cash_deposit_requests(request_date);
 CREATE INDEX IF NOT EXISTS idx_cdr_created_at ON cash_deposit_requests(created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cdr_idempotency_key ON cash_deposit_requests(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS cash_deposits (
     id               SERIAL PRIMARY KEY,
@@ -499,6 +500,8 @@ CREATE TABLE IF NOT EXISTS cash_deposits (
     approved_by      INTEGER REFERENCES users(user_id),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cd_deposit_request_id_unique ON cash_deposits(deposit_request_id) WHERE deposit_request_id IS NOT NULL;
 
 -- 15. CRM
 CREATE TABLE IF NOT EXISTS crm_followups (

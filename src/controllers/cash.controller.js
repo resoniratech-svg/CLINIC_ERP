@@ -255,6 +255,7 @@ async function createCashDeposit(req, res) {
 
 // 4. Create PRO Deposit Request
 async function createDepositRequest(req, res) {
+  const idempotencyKey = req.body?.idempotency_key || null;
   try {
     // Only PRO and Super Admin can request
     const allowedRoles = ['pro_manager', 'super_admin'];
@@ -279,7 +280,6 @@ async function createDepositRequest(req, res) {
     const requestDate = req.body.request_date || new Date().toISOString().split('T')[0];
     const challanRef = req.body.challan_reference || req.body.deposit_reference || null;
     const remarks = req.body.remarks || null;
-    const idempotencyKey = req.body.idempotency_key || null;
 
     // Idempotency: duplicate key check
     if (idempotencyKey) {
@@ -355,6 +355,23 @@ async function createDepositRequest(req, res) {
       'Deposit request submitted successfully — awaiting Super Admin approval.'
     ));
   } catch (err) {
+    if (err.code === '23505' && idempotencyKey) {
+      try {
+        const existing = await db.query(
+          `SELECT * FROM cash_deposit_requests WHERE idempotency_key = $1 LIMIT 1`,
+          [idempotencyKey]
+        );
+        if (existing.rows.length > 0) {
+          return res.status(200).json(formatResponse(
+            true,
+            existing.rows[0],
+            'Existing deposit request returned for idempotency key'
+          ));
+        }
+      } catch (findErr) {
+        console.error('Error fetching existing record after unique conflict:', findErr);
+      }
+    }
     console.error('createDepositRequest error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
@@ -862,6 +879,9 @@ async function completeDepositRequest(req, res) {
     }, 'Bank cash deposit completed and ledger updated successfully.'));
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === '23505') {
+      return res.status(409).json(formatResponse(false, null, 'This deposit request has already been completed.'));
+    }
     console.error('completeDepositRequest error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   } finally {
