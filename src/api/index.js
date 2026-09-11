@@ -58,7 +58,16 @@ export const billingApi = {
 export const cashApi = {
   getCashLedger: (params) => axiosClient.get('/cash/ledger', { params }),
   createExpenditure: (data) => axiosClient.post('/cash/expenditure', data),
+  getExpenditures: (params) => axiosClient.get('/cash/expenditures', { params }),
   createCashDeposit: (data) => axiosClient.post('/cash/deposit', data),
+  getDepositHistory: (params) => axiosClient.get('/cash/deposits', { params }),
+  createDepositRequest: (data) => axiosClient.post('/cash/deposit-requests', data),
+  getDepositRequests: (params) => axiosClient.get('/cash/deposit-requests', { params }),
+  getPendingDepositRequestsCount: (params) => axiosClient.get('/cash/deposit-requests/pending-count', { params }),
+  getDepositRequestById: (id) => axiosClient.get(`/cash/deposit-requests/${id}`),
+  approveDepositRequest: (id, data) => axiosClient.post(`/cash/deposit-requests/${id}/approve`, data || {}),
+  rejectDepositRequest: (id, data) => axiosClient.post(`/cash/deposit-requests/${id}/reject`, data),
+  completeDepositRequest: (id, data) => axiosClient.post(`/cash/deposit-requests/${id}/complete`, data),
 };
 
 export const crmApi = {
@@ -369,8 +378,12 @@ export const proApi = {
   getOpeningBalance: (params) => axiosClient.get('/pro/accountant/opening-balance', { params }),
   getCashRevenue: (params) => axiosClient.get('/pro/accountant/cash-revenue', { params }),
   createExpenditure: (data) => axiosClient.post('/pro/accountant/expenditure', data),
+  getExpenditures: (params) => axiosClient.get('/cash/expenditures', { params }),
   getClosingBalance: (params) => axiosClient.get('/pro/accountant/closing-balance', { params }),
   depositCash: (data) => axiosClient.post('/pro/accountant/deposit', data),
+  createDepositRequest: (data) => axiosClient.post('/cash/deposit-requests', data),
+  getDepositRequests: (params) => axiosClient.get('/cash/deposit-requests', { params }),
+  completeDepositRequest: (id, data) => axiosClient.post(`/cash/deposit-requests/${id}/complete`, data),
   getDailyCashSummary: (params) => axiosClient.get('/pro/accountant/daily-summary', { params }),
   getGrandTotal: (params) => axiosClient.get('/pro/accountant/grand-total', { params }),
 

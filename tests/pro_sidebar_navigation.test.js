@@ -332,7 +332,7 @@ describe('PRO Sidebar Navigation - Accountant Module Cleanup Suite', () => {
     const pageContent = fs.readFileSync(accountantPagePath, 'utf8');
     assert.match(pageContent, /fetchSummary/);
     assert.match(pageContent, /handleCreateExpense/);
-    assert.match(pageContent, /handleDepositCash/);
+    assert.match(pageContent, /(handleRequestDeposit|handleDepositCash)/);
     assert.match(pageContent, /Physical Cash Drawer Ledger/i);
     assert.match(pageContent, /Collections by Payment Mode/i);
     assert.match(pageContent, /Grand Total Revenue/i);
