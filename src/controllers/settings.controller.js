@@ -119,7 +119,7 @@ async function getMasterData(req, res) {
       return res.status(404).json(formatResponse(false, null, `Master data type '${type}' not found`));
     }
 
-    const { status, q } = req.query;
+    const { status, q, mandal_id } = req.query;
     let query = '';
     const params = [];
 
@@ -132,6 +132,11 @@ async function getMasterData(req, res) {
       `;
     } else {
       query = `SELECT * FROM ${tableName} WHERE 1=1`;
+    }
+
+    if (tableName === 'master_villages' && mandal_id) {
+      params.push(parseInt(mandal_id, 10));
+      query += ` AND v.mandal_id = $${params.length}`;
     }
 
     if (status) {

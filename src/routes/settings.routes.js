@@ -8,10 +8,10 @@ router.get('/permissions-matrix', authenticateToken, authorizeRoles('super_admin
 router.post('/permissions-matrix', authenticateToken, authorizeRoles('super_admin'), settingsController.updatePermissionsMatrix);
 router.get('/hospital', authenticateToken, settingsController.getHospitalSettings);
 router.put('/hospital', authenticateToken, authorizeRoles('super_admin'), settingsController.updateHospitalSettings);
-router.get('/masters/:type', authenticateToken, settingsController.getMasterData);
-router.post('/masters/:type', authenticateToken, authorizeRoles('super_admin'), settingsController.addMasterData);
-router.put('/masters/:type/:id', authenticateToken, authorizeRoles('super_admin'), settingsController.updateMasterData);
-router.patch('/masters/:type/:id/status', authenticateToken, authorizeRoles('super_admin'), settingsController.toggleMasterDataStatus);
+router.get(['/masters/:type', '/master/:type'], authenticateToken, settingsController.getMasterData);
+router.post(['/masters/:type', '/master/:type'], authenticateToken, authorizeRoles('super_admin'), settingsController.addMasterData);
+router.put(['/masters/:type/:id', '/master/:type/:id'], authenticateToken, authorizeRoles('super_admin'), settingsController.updateMasterData);
+router.patch(['/masters/:type/:id/status', '/master/:type/:id/status'], authenticateToken, authorizeRoles('super_admin'), settingsController.toggleMasterDataStatus);
 
 // Authenticated User Profile & Branches for Settings
 router.get('/profile', authenticateToken, settingsController.getProfile);
