@@ -38,6 +38,8 @@ describe('Master End-to-End Patient Journey Integration Suite', () => {
       DELETE FROM oc_nr_patients;
       DELETE FROM renewals;
       DELETE FROM referrals;
+      DELETE FROM coupon_redemptions;
+      DELETE FROM coupons;
       DELETE FROM crm_followups;
       DELETE FROM leads;
       DELETE FROM appointments;

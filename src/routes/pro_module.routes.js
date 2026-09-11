@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const proController = require('../controllers/pro_module.controller');
+const cashController = require('../controllers/cash.controller');
 const { authenticateToken } = require('../middleware/auth');
 const { authorizeRoles } = require('../middleware/rbac');
 
@@ -89,8 +90,17 @@ router.post('/my-tasks/:call_id/reschedule', proController.rescheduleTask);
 router.get('/accountant/opening-balance', proController.getOpeningBalance);
 router.get('/accountant/cash-revenue', proController.getCashRevenue);
 router.post('/accountant/expenditure', proController.createExpenditure);
+router.get('/accountant/expenditures', cashController.getExpendituresHistory);
 router.get('/accountant/closing-balance', proController.getClosingBalance);
 router.post('/accountant/deposit', proController.depositCash);
+router.get('/accountant/deposits', cashController.getDepositHistory);
+router.post('/accountant/deposit-requests', cashController.createDepositRequest);
+router.get('/accountant/deposit-requests', cashController.getDepositRequests);
+router.get('/accountant/deposit-requests/pending-count', cashController.getPendingDepositRequestsCount);
+router.get('/accountant/deposit-requests/:id', cashController.getDepositRequestById);
+router.post('/accountant/deposit-requests/:id/approve', cashController.approveDepositRequest);
+router.post('/accountant/deposit-requests/:id/reject', cashController.rejectDepositRequest);
+router.post('/accountant/deposit-requests/:id/complete', cashController.completeDepositRequest);
 router.get('/accountant/daily-summary', proController.getDailyCashSummary);
 router.get('/accountant/cash-ledger', proController.getDailyCashSummary);
 router.get('/accountant/grand-total', proController.getGrandTotal);

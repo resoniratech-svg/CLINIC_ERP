@@ -1144,7 +1144,7 @@ async function saveDraft(req, res) {
     }
 
     if (consult.status === 'completed') {
-      return res.json(formatResponse(true, { consultation_id: consultId, status: 'completed' }, 'Consultation is already completed. Clinical changes preserved.'));
+      return res.status(400).json(formatResponse(false, null, 'Consultation is already completed. Edits are locked.'));
     }
 
     // Persist draft status and ensure appointment stays in_consultation

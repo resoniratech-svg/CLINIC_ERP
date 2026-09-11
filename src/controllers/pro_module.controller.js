@@ -1816,6 +1816,15 @@ async function getClosingBalance(req, res) {
 }
 
 async function depositCash(req, res) {
+  // PRO cannot perform direct bank deposit without Super Admin approval
+  if (req.user.role === 'pro_manager') {
+    return res.status(403).json(formatResponse(
+      false,
+      null,
+      'PRO users cannot perform direct bank deposits. Please submit a deposit request for Super Admin approval.'
+    ));
+  }
+
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');

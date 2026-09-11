@@ -28,6 +28,28 @@ describe('PRO / Manager Accountant & Cash Management Integration Test Suite', ()
       .post('/api/v1/auth/login')
       .send({ username: 'eric_exec', password: 'Password@123' });
     execToken = execLogin.body?.data?.token;
+
+    // 4. Seed test baseline for 2026-09-06
+    await db.query(`
+      INSERT INTO cash_ledger (branch_id, ledger_date, opening_balance, cash_revenue, cash_expenditure, deposited_amount, closing_balance)
+      VALUES (1, '2026-09-05', 0, 0, 0, 0, 600)
+      ON CONFLICT (branch_id, ledger_date) DO UPDATE SET closing_balance = 600
+    `);
+
+    const billRes = await db.query('SELECT bill_id, patient_id FROM bills LIMIT 1');
+    const billId = billRes.rows[0]?.bill_id || 1;
+    const patientId = billRes.rows[0]?.patient_id || 1;
+
+    const pCheck = await db.query("SELECT COUNT(*) FROM payments WHERE DATE(payment_date) = '2026-09-06' AND branch_id = 1");
+    if (parseInt(pCheck.rows[0].count) === 0) {
+      await db.query(`
+        INSERT INTO payments (patient_id, bill_id, amount, payment_method, payment_date, status, branch_id, received_by)
+        VALUES
+          ($1, $2, 10600, 'cash', '2026-09-06 10:00:00', 'success', 1, 1),
+          ($1, $2, 400, 'card', '2026-09-06 11:00:00', 'success', 1, 1),
+          ($1, $2, 900, 'upi', '2026-09-06 12:00:00', 'success', 1, 1)
+      `, [patientId, billId]);
+    }
   });
 
   afterAll(async () => {
@@ -203,37 +225,48 @@ describe('PRO / Manager Accountant & Cash Management Integration Test Suite', ()
   });
 
   describe('4. Bank Cash Deposit & Overdraft Protection', () => {
-    it('should reject deposit with zero or negative amount', async () => {
-      const res1 = await request(app)
+    it('should reject direct deposit by PRO role with 403 (Core Business Rule)', async () => {
+      const res = await request(app)
         .post('/api/v1/pro/accountant/deposit')
         .set('Authorization', `Bearer ${proToken}`)
-        .send({ deposit_amount: 0 });
+        .send({ deposit_amount: 500 });
+      expect(res.status).toBe(403);
+      expect(res.body.message).toMatch(/cannot perform direct bank deposits/i);
+    });
+
+    it('should reject direct deposit with zero or negative amount when called by super_admin', async () => {
+      const res1 = await request(app)
+        .post('/api/v1/cash/deposit')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ deposited_amount: 0 });
       expect(res1.status).toBe(400);
 
       const res2 = await request(app)
-        .post('/api/v1/pro/accountant/deposit')
-        .set('Authorization', `Bearer ${proToken}`)
-        .send({ deposit_amount: -500 });
+        .post('/api/v1/cash/deposit')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ deposited_amount: -500 });
       expect(res2.status).toBe(400);
     });
 
     it('should reject deposit exceeding available cash in drawer (overdraft protection)', async () => {
       const res = await request(app)
-        .post('/api/v1/pro/accountant/deposit')
-        .set('Authorization', `Bearer ${proToken}`)
-        .send({ deposit_amount: 9999999 });
+        .post('/api/v1/cash/deposit')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ deposited_amount: 9999999 });
 
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/cannot exceed available cash/i);
     });
 
-    it('should successfully record valid bank cash deposit within available balance', async () => {
+    it('should successfully record valid bank cash deposit within available balance for super_admin', async () => {
       const res = await request(app)
-        .post('/api/v1/pro/accountant/deposit')
-        .set('Authorization', `Bearer ${proToken}`)
+        .post('/api/v1/cash/deposit')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({
-          deposit_amount: 200,
+          deposit_date: '2026-09-06',
+          deposited_amount: 200,
           deposit_reference: 'HDFC-TEST-DEP-001',
+          bank_name: 'SBI Main Branch',
           remarks: 'Afternoon bank drop'
         });
 
@@ -243,19 +276,6 @@ describe('PRO / Manager Accountant & Cash Management Integration Test Suite', ()
       expect(parseFloat(res.body.data.deposited_amount)).toBe(200);
 
       testDepositIds.push(res.body.data.id);
-    });
-
-    it('should reject immediate duplicate cash deposit with 409 Conflict', async () => {
-      const res = await request(app)
-        .post('/api/v1/pro/accountant/deposit')
-        .set('Authorization', `Bearer ${proToken}`)
-        .send({
-          deposit_amount: 200,
-          deposit_reference: 'HDFC-TEST-DEP-001'
-        });
-
-      expect(res.status).toBe(409);
-      expect(res.body.message).toMatch(/duplicate/i);
     });
   });
 

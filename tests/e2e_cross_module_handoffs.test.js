@@ -31,6 +31,17 @@ describe('Cross-Module Handoff & Boundary Integrity Test Suite', () => {
 
     const dRes = await db.query("SELECT d.doctor_id FROM doctors d JOIN users u ON d.user_id = u.user_id WHERE u.username = 'dr_smith'");
     activeDoctorId = dRes.rows[0].doctor_id;
+
+    // Clean any conflicting appointments/consultations for clean test run
+    await db.query(`
+      DELETE FROM prescription_modifications;
+      DELETE FROM prescription_clarifications;
+      DELETE FROM prescription_items;
+      DELETE FROM prescriptions;
+      DELETE FROM treatment_plans;
+      DELETE FROM consultations;
+      DELETE FROM appointments WHERE appointment_date = CURRENT_DATE;
+    `);
   });
 
   // Handoff 1: scheduled -> checked_in (Receptionist only)
