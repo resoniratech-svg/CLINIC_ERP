@@ -834,8 +834,11 @@ async function closeClarification(req, res) {
 // Helper to generate padded sequential medicine serial number (collision-proof)
 async function generateMedicineSerial(client = null) {
   const runner = client || db;
-  const countRes = await runner.query(`SELECT COUNT(*) as count FROM medicine_master`);
-  let nextNum = parseInt(countRes.rows[0]?.count || 0) + 1;
+  const maxRes = await runner.query(`
+    SELECT COALESCE(MAX(CAST(SUBSTRING(serial_number FROM '^MED-([0-9]+)$') AS INTEGER)), 0) as max_num 
+    FROM medicine_master
+  `);
+  let nextNum = parseInt(maxRes.rows[0]?.max_num || 0) + 1;
   let candidate = `MED-${String(nextNum).padStart(5, '0')}`;
 
   let check = await runner.query(`SELECT 1 FROM medicine_master WHERE serial_number = $1`, [candidate]);
@@ -862,6 +865,7 @@ async function getMedicines(req, res) {
     const { search, category, status } = req.query;
     let query = `
       SELECT mm.*,
+             COALESCE(mm.serial_number, 'MED-' || LPAD(mm.id::text, 5, '0')) as serial_number,
              COALESCE((SELECT SUM(ms.quantity) FROM medicine_stock ms WHERE ms.medicine_id = mm.id), 0)::integer as quantity
       FROM medicine_master mm
       WHERE 1=1
@@ -2571,6 +2575,7 @@ async function getStockAdjustments(req, res) {
       SELECT sa.*, 
              mm.medicine_name, 
              mm.strength as potency, 
+             COALESCE(mm.serial_number, 'MED-' || LPAD(mm.id::text, 5, '0')) as serial_number,
              ms.batch_number, 
              u.full_name as performed_by_name,
              u2.full_name as approved_by_name
@@ -2604,6 +2609,7 @@ async function getStockAdjustments(req, res) {
         const numIdx = params.length;
         query += ` AND (
           mm.medicine_name ILIKE $${termIdx} OR
+          mm.serial_number ILIKE $${termIdx} OR
           ms.batch_number ILIKE $${termIdx} OR
           sa.reason ILIKE $${termIdx} OR
           u.full_name ILIKE $${termIdx} OR
@@ -2612,6 +2618,7 @@ async function getStockAdjustments(req, res) {
       } else {
         query += ` AND (
           mm.medicine_name ILIKE $${termIdx} OR
+          mm.serial_number ILIKE $${termIdx} OR
           ms.batch_number ILIKE $${termIdx} OR
           sa.reason ILIKE $${termIdx} OR
           u.full_name ILIKE $${termIdx}
