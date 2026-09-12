@@ -49,7 +49,8 @@ export const ReassignDoctorModal = ({
   useEffect(() => {
     if (isOpen && appointment) {
       setSelectedDoctorId('');
-      setSelectedDate(appointment.appointment_date || todayStr);
+      // Default to TODAY — not the old appointment date (which could be a past date or non-working day)
+      setSelectedDate(todayStr);
       setSelectedTime('');
       setReason('');
       setSlotsData(null);
@@ -218,7 +219,7 @@ export const ReassignDoctorModal = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-[11px] font-bold text-slate-700 mb-1">
-              Appointment Date <span className="text-red-500">*</span>
+              New Appointment Date <span className="text-red-500">*</span>
             </label>
             <div className="relative">
               <Calendar className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
@@ -230,6 +231,17 @@ export const ReassignDoctorModal = ({
                 className="w-full pl-9 pr-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium"
               />
             </div>
+            {selectedDate && (() => {
+              const [y, m, d] = selectedDate.split('-').map(Number);
+              const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+              const dayName = dayNames[new Date(y, m - 1, d).getDay()];
+              const isWeekend = dayName === 'Sunday' || dayName === 'Saturday';
+              return (
+                <span className={`text-[10px] font-bold mt-0.5 block ${isWeekend ? 'text-amber-600' : 'text-slate-400'}`}>
+                  {isWeekend ? '⚠ ' : ''}{dayName}{isWeekend ? ' — verify doctor works this day' : ''}
+                </span>
+              );
+            })()}
           </div>
 
           <div>
@@ -275,6 +287,19 @@ export const ReassignDoctorModal = ({
               <div>
                 <strong className="block font-bold">Doctor is on Approved Leave</strong>
                 <span>Reason: {slotsData.leave_reason || 'Personal / Medical Leave'}. Please choose a different date or doctor.</span>
+              </div>
+            </div>
+          ) : slotsData && slotsData.is_working_day === false ? (
+            <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-amber-900">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block font-bold">Doctor Does Not Work on This Day</strong>
+                {selectedDate && (() => {
+                  const [y, m, d] = selectedDate.split('-').map(Number);
+                  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+                  const dayName = dayNames[new Date(y, m - 1, d).getDay()];
+                  return <span>The selected doctor is off on <strong>{dayName}s</strong>. Please pick a different date when the doctor is available.</span>;
+                })()}
               </div>
             </div>
           ) : slotsData?.slots?.length > 0 ? (
