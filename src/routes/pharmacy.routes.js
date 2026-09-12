@@ -70,8 +70,8 @@ const uploadMedicineFile = (req, res, next) => {
   });
 };
 
-router.post('/medicines/import/preview', authorizeRoles('super_admin'), uploadMedicineFile, pharmacyController.previewMedicineImport);
-router.post('/medicines/import/confirm', authorizeRoles('super_admin'), uploadMedicineFile, pharmacyController.confirmMedicineImport);
+router.post('/medicines/import/preview', authorizeRoles('super_admin', 'pharmacy'), uploadMedicineFile, pharmacyController.previewMedicineImport);
+router.post('/medicines/import/confirm', authorizeRoles('super_admin', 'pharmacy'), uploadMedicineFile, pharmacyController.confirmMedicineImport);
 
 // 8. Manual Stock Entry & Excel Stock Import
 router.get('/stock', authorizeRoles('pharmacy', 'super_admin'), pharmacyController.getStock);

@@ -334,5 +334,162 @@ describe('Pharmacy Portal & Super Admin Pharmacy Master Alignment Integration Su
       expect(phaSearch.body.data[0].serial_number).toMatch(/^MED-[0-9]{5}$/);
       expect(phaSearch.body.data[0].quantity).toBe(50);
     });
+
+    test('6.2 Pharmacy user can directly preview and confirm medicine formulary Excel import', async () => {
+      const xlsx = require('xlsx');
+      const uniqueName = `PhaExcel_${Date.now()}`;
+      const wsData = [
+        ['Sl#', 'Drug Name', 'Power', 'Available Quantity'],
+        ['1', uniqueName, '200C', 75],
+      ];
+      const ws = xlsx.utils.aoa_to_sheet(wsData);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, 'Formulary');
+      const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      // Preview as pharmacy user
+      const previewRes = await request(app)
+        .post('/api/v1/pharmacy/medicines/import/preview')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .attach('file', buf, 'pharmacy_formulary.xlsx');
+
+      expect(previewRes.status).toBe(200);
+      expect(previewRes.body.success).toBe(true);
+      expect(previewRes.body.data.valid_rows).toBe(1);
+      expect(previewRes.body.data.detected_columns.medicine_name).toBe('Drug Name');
+      expect(previewRes.body.data.detected_columns.potency).toBe('Power');
+      expect(previewRes.body.data.detected_columns.quantity).toBe('Available Quantity');
+      expect(previewRes.body.data.detected_columns.serial).toBe('Sl#');
+
+      // Confirm import as pharmacy user
+      const confirmRes = await request(app)
+        .post('/api/v1/pharmacy/medicines/import/confirm')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .send({
+          file_name: 'pharmacy_formulary.xlsx',
+          items: previewRes.body.data.valid_items,
+          row_issues: previewRes.body.data.row_issues,
+          duplicate_rows: previewRes.body.data.duplicate_rows,
+          invalid_rows: previewRes.body.data.invalid_rows
+        });
+
+      expect(confirmRes.status).toBe(201);
+      expect(confirmRes.body.success).toBe(true);
+      expect(confirmRes.body.data.successfully_imported).toBe(1);
+
+      // Verify item exists with serial and stock
+      const getRes = await request(app)
+        .get(`/api/v1/pharmacy/medicines?search=${encodeURIComponent(uniqueName)}`)
+        .set('Authorization', `Bearer ${pharmacyToken}`);
+
+      expect(getRes.status).toBe(200);
+      expect(getRes.body.data.length).toBe(1);
+      expect(getRes.body.data[0].serial_number).toMatch(/^MED-[0-9]{5}$/);
+      expect(getRes.body.data[0].quantity).toBe(75);
+    });
+
+    test('6.3 Re-importing stock increases quantity of existing medicine without creating duplicate records', async () => {
+      const xlsx = require('xlsx');
+      const medName = `ReimportMed_${Date.now()}`;
+      
+      // Step 1: Create initial medicine with 20 quantity
+      const initRes = await request(app)
+        .post('/api/v1/pharmacy/medicines')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .send({
+          medicine_name: medName,
+          strength: '1M',
+          quantity: 20
+        });
+      expect(initRes.status).toBe(201);
+      const initialSerial = initRes.body.data.serial_number;
+
+      // Step 2: Import Excel with additional 30 quantity
+      const wsData = [
+        ['S.No', 'Medicine Name', 'Strength', 'Qty'],
+        ['1', medName, '1M', 30],
+      ];
+      const ws = xlsx.utils.aoa_to_sheet(wsData);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, 'Formulary');
+      const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      const previewRes = await request(app)
+        .post('/api/v1/pharmacy/medicines/import/preview')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .attach('file', buf, 'reimport.xlsx');
+
+      expect(previewRes.status).toBe(200);
+      expect(previewRes.body.data.merged_count).toBe(1);
+      expect(previewRes.body.data.new_items_count).toBe(0);
+
+      const confirmRes = await request(app)
+        .post('/api/v1/pharmacy/medicines/import/confirm')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .send({
+          file_name: 'reimport.xlsx',
+          items: previewRes.body.data.valid_items,
+          row_issues: previewRes.body.data.row_issues,
+          duplicate_rows: previewRes.body.data.duplicate_rows,
+          invalid_rows: previewRes.body.data.invalid_rows
+        });
+
+      expect(confirmRes.status).toBe(201);
+      expect(confirmRes.body.data.successfully_merged).toBe(1);
+
+      // Verify no duplicates were created and total quantity accumulated to 50
+      const checkRes = await request(app)
+        .get(`/api/v1/pharmacy/medicines?search=${encodeURIComponent(medName)}`)
+        .set('Authorization', `Bearer ${pharmacyToken}`);
+
+      expect(checkRes.status).toBe(200);
+      expect(checkRes.body.data.length).toBe(1);
+      expect(checkRes.body.data[0].serial_number).toBe(initialSerial);
+      expect(checkRes.body.data[0].quantity).toBe(50);
+    });
+
+    test('6.4 Rejects ambiguous duplicate headers for the same logical column', async () => {
+      const xlsx = require('xlsx');
+      const wsData = [
+        ['Medicine Name', 'Strength', 'Quantity', 'Stock Qty'],
+        ['Test Ambiguous', '30C', 10, 20],
+      ];
+      const ws = xlsx.utils.aoa_to_sheet(wsData);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, 'Formulary');
+      const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      const res = await request(app)
+        .post('/api/v1/pharmacy/medicines/import/preview')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .attach('file', buf, 'ambiguous.xlsx');
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.message).toMatch(/Ambiguous headers: Multiple columns/);
+    });
+
+    test('6.5 Strictly excludes monetary columns (Amount, Rate, MRP, Purchase Price) from matching Quantity', async () => {
+      const xlsx = require('xlsx');
+      const wsData = [
+        ['Medicine Name', 'Strength', 'Purchase Price', 'MRP', 'Amount', 'Rate'],
+        ['No Quantity Med', '30C', 100, 150, 500, 99],
+      ];
+      const ws = xlsx.utils.aoa_to_sheet(wsData);
+      const wb = xlsx.utils.book_new();
+      xlsx.utils.book_append_sheet(wb, ws, 'Formulary');
+      const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      const res = await request(app)
+        .post('/api/v1/pharmacy/medicines/import/preview')
+        .set('Authorization', `Bearer ${pharmacyToken}`)
+        .attach('file', buf, 'monetary.xlsx');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.detected_columns.quantity).toBeNull();
+      expect(res.body.data.valid_items[0].quantity).toBeNull();
+    });
   });
 });
+

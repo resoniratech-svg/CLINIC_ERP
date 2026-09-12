@@ -1413,28 +1413,39 @@ async function getMedicineStockDetail(req, res) {
 
 const MEDICINE_IMPORT_ALIASES = {
   serial: [
-    'sl.no', 'sl no', 's.no', 's no', 'sl number', 'sl. number',
-    'serial number', 'serial no', 'serial.no', 'serial', 'number', 'id'
+    'sl.no', 'sl no', 'sl. no', 'sl number', 'sl. number', 'slno', 'sno',
+    'serial number', 'serial no', 'serial.no', 'serial', 's.no', 's no',
+    'sl#', 'serial#', 'number', 'id'
   ],
   medicine_name: [
-    'm name', 'mname', 'medicine', 'medicine name', 'medicines',
-    'medicine_name', 'drug', 'drug name', 'drugname', 'name'
+    'medicine name', 'medicine', 'drug name', 'drug', 'name of medicine',
+    'name', 'medicinename', 'drugname', 'm name', 'mname', 'medicines',
+    'medicine_name', 'item name', 'item'
   ],
   potency: [
-    'potency', 'dosage', 'dose', 'strength',
-    'potency / strength', 'potency/strength', 'potency strength'
+    'potency', 'strength', 'potency / strength', 'potency/strength',
+    'medicine potency', 'medicine strength', 'power', 'potency strength',
+    'dosage', 'dose'
   ],
   quantity: [
-    'quantity', 'qty', 'q.t.y', 'qnty', 'quant', 'stock quantity'
+    'quantity', 'qty', 'qty.', 'stock quantity', 'stock qty',
+    'initial quantity', 'opening quantity', 'available quantity',
+    'units', 'stock', 'q.t.y', 'qnty', 'quant'
   ]
 };
+
+const EXCLUDED_QUANTITY_HEADERS = new Set([
+  'amount', 'rate', 'mrp', 'price', 'purchase price', 'purchase_price',
+  'purchase rate', 'purchase_rate', 'sale price', 'sale rate', 'cost',
+  'batch', 'batch number', 'batch no', 'expiry', 'expiry date'
+]);
 
 function normalizeHeaderString(str) {
   if (!str) return '';
   return String(str)
     .trim()
     .toLowerCase()
-    .replace(/[._\/-]+/g, ' ')
+    .replace(/[._\/\-#]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -1455,6 +1466,12 @@ function resolveMedicineImportHeaders(rawHeaders) {
     if (!raw) continue;
     const norm = normalizeHeaderString(raw);
     const compact = String(raw).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    // Never match rate, amount, mrp, price or batch/expiry to quantity
+    if (EXCLUDED_QUANTITY_HEADERS.has(norm) || EXCLUDED_QUANTITY_HEADERS.has(compact)) {
+      continue;
+    }
+
     const canonical = aliasLookup[norm] || aliasLookup[compact];
 
     if (canonical) {
