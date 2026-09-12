@@ -20,12 +20,15 @@ router.get('/patients/search', receptionistController.searchPatients);
 router.get('/patients/:id/overview', receptionistController.getPatientOverview);
 router.get('/patients/:id/invoices', receptionistController.getPatientInvoices);
 router.get('/doctors', receptionistController.getActiveDoctors);
+router.get('/doctors/:id/available-slots', receptionistController.getDoctorAvailableSlots);
 router.get('/employees', receptionistController.getEligibleEmployees);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Registration  →  permission: registration
 // ──────────────────────────────────────────────────────────────────────────────
 router.post('/patients/register', requireReceptionistPermission('registration'), receptionistController.registerPatient);
+router.put('/patients/:id',       requireReceptionistPermission('registration'), receptionistController.updatePatient);
+router.patch('/patients/:id',     requireReceptionistPermission('registration'), receptionistController.updatePatient);
 router.post('/register-walkin',   requireReceptionistPermission('registration'), receptionistController.registerPatient);
 router.post('/register',          requireReceptionistPermission('registration'), receptionistController.registerPatient);
 
@@ -56,6 +59,8 @@ router.post('/leads/:id/assign',  requireReceptionistPermission('enquiry'), rece
 router.post('/appointments',                  requireReceptionistPermission('appointment'), receptionistController.createAppointment);
 router.get('/appointments',                   requireReceptionistPermission('appointment'), receptionistController.getAppointments);
 router.post('/appointments/:id/reschedule',   requireReceptionistPermission('appointment'), receptionistController.rescheduleAppointment);
+router.post('/appointments/:id/reassign-doctor', requireReceptionistPermission('appointment'), receptionistController.reassignDoctor);
+router.put('/appointments/:id/reassign-doctor',  requireReceptionistPermission('appointment'), receptionistController.reassignDoctor);
 router.post('/appointments/:id/cancel',       requireReceptionistPermission('appointment'), receptionistController.cancelAppointment);
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -15,12 +15,21 @@ router.get('/dashboard', authorizeRoles('doctor', 'super_admin'), doctorControll
 
 // Appointments & Queue
 router.get('/appointments/today', authorizeRoles('doctor', 'super_admin'), doctorController.getTodayAppointments);
+router.post('/appointments/:id/reschedule', authorizeRoles('doctor', 'super_admin'), doctorController.rescheduleAppointment);
+router.post('/appointments/:id/reassign-doctor', authorizeRoles('doctor', 'super_admin'), doctorController.reassignDoctor);
+router.put('/appointments/:id/reassign-doctor', authorizeRoles('doctor', 'super_admin'), doctorController.reassignDoctor);
 router.get('/queue', authorizeRoles('doctor', 'super_admin'), doctorController.getPatientQueue);
 router.get('/patient-queue', authorizeRoles('doctor', 'super_admin'), doctorController.getPatientQueue);
+
+// Doctors directory & slots
+router.get('/doctors', authorizeRoles('doctor', 'super_admin'), doctorController.getActiveDoctors);
+router.get('/doctors/:id/available-slots', authorizeRoles('doctor', 'super_admin'), doctorController.getDoctorAvailableSlots);
 
 // Patient Search & Overview
 router.get('/patients', authorizeRoles('doctor', 'super_admin'), doctorController.getPatients);
 router.get('/patients/:id/overview', authorizeRoles('doctor', 'super_admin'), doctorController.getPatientOverview);
+router.put('/patients/:id', authorizeRoles('doctor', 'super_admin'), doctorController.updatePatient);
+router.patch('/patients/:id', authorizeRoles('doctor', 'super_admin'), doctorController.updatePatient);
 
 // Consultation Lifecycle
 router.post('/consultations/start', authorizeRoles('doctor', 'super_admin'), doctorController.startConsultation);

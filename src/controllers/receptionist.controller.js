@@ -1,6 +1,7 @@
 const db = require('../db');
 const { formatResponse } = require('../utils/helpers');
 const { resolveOrCreateLocation, ensurePatientLocationColumns } = require('../utils/locationResolver');
+const { validateDoctorAvailability, generateDoctorSlots } = require('../utils/doctorScheduleHelper');
 
 // Helper to generate padded sequential code (collision-proof)
 async function generateId(prefix, tableName, client = null) {
@@ -625,10 +626,10 @@ async function registerPatient(req, res) {
     const billRes = await client.query(`
       INSERT INTO bills (
         bill_number, patient_id, doctor_id, bill_type, created_by, branch_id,
-        amount, discount_amount, final_amount, status
-      ) VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, 'created')
+        amount, discount_amount, final_amount, status, appointment_id
+      ) VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, 'created', $9)
       RETURNING *
-    `, [billNum, targetPatientId, parseInt(assigned_doctor_id), req.user.user_id, branchId, baseFee, discount, finalFee]);
+    `, [billNum, targetPatientId, parseInt(assigned_doctor_id), req.user.user_id, branchId, baseFee, discount, finalFee, newAppt.appointment_id]);
 
     const newBill = billRes.rows[0];
     newBill.due_amount = dueAmt;
@@ -726,6 +727,184 @@ async function registerPatient(req, res) {
     await client.query('ROLLBACK');
     console.error('registerPatient error:', err);
     return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
+  } finally {
+    client.release();
+  }
+}
+
+// 3.5B Patient Detail Corrections
+async function updatePatient(req, res) {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+    const patientId = parseInt(req.params.id);
+    if (!patientId || isNaN(patientId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
+    }
+
+    const ptRes = await client.query(`SELECT * FROM patients WHERE patient_id = $1 FOR UPDATE`, [patientId]);
+    if (ptRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json(formatResponse(false, null, 'Patient not found'));
+    }
+
+    const currentPatient = ptRes.rows[0];
+    const userBranchId = req.user.branch_id || 1;
+    if (currentPatient.branch_id !== userBranchId && req.user.role !== 'super_admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json(formatResponse(false, null, 'Cannot edit patient from another branch'));
+    }
+
+    const {
+      full_name,
+      mobile_number,
+      age,
+      gender,
+      village_mandal,
+      village,
+      mandal,
+      village_id,
+      mandal_id,
+      address,
+      ailment_reason,
+      source
+    } = req.body;
+
+    // Validate full_name
+    let cleanFullName = currentPatient.full_name;
+    if (full_name !== undefined) {
+      if (!full_name || typeof full_name !== 'string' || !full_name.trim()) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Patient full name cannot be empty or whitespace'));
+      }
+      cleanFullName = full_name.trim();
+    }
+
+    // Validate mobile_number
+    let cleanMobile = currentPatient.mobile_number;
+    if (mobile_number !== undefined) {
+      const mobStr = mobile_number.toString().trim();
+      let numericMobile = mobStr.replace(/\D/g, '');
+      if (numericMobile.length === 12 && numericMobile.startsWith('91')) {
+        numericMobile = numericMobile.slice(2);
+      }
+      if (numericMobile.length !== 10) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be a valid 10-digit number'));
+      }
+
+      // Check duplicate mobile for other patients
+      const dupCheck = await client.query(
+        `SELECT patient_id FROM patients WHERE mobile_number = $1 AND patient_id != $2`,
+        [numericMobile, patientId]
+      );
+      if (dupCheck.rows.length > 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `Mobile number ${numericMobile} already belongs to another patient`));
+      }
+      cleanMobile = numericMobile;
+    }
+
+    // Validate age
+    let cleanAge = currentPatient.age;
+    if (age !== undefined && age !== null && age !== '') {
+      const parsedAge = parseInt(age);
+      if (isNaN(parsedAge) || parsedAge <= 0 || parsedAge > 120) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Age must be a valid number between 1 and 120'));
+      }
+      cleanAge = parsedAge;
+    }
+
+    // Validate gender
+    let cleanGender = currentPatient.gender;
+    if (gender !== undefined) {
+      const g = gender.toString().toLowerCase().trim();
+      if (!['male', 'female', 'other'].includes(g)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, "Gender must be 'male', 'female', or 'other'"));
+      }
+      cleanGender = g;
+    }
+
+    // Location resolution
+    let cleanVillage = currentPatient.village;
+    let cleanMandal = currentPatient.mandal;
+    let cleanVillageId = currentPatient.village_id;
+    let cleanMandalId = currentPatient.mandal_id;
+
+    if (village_mandal !== undefined || village !== undefined || mandal !== undefined || village_id !== undefined || mandal_id !== undefined) {
+      const locRes = await resolveOrCreateLocation(client, {
+        village_mandal,
+        village,
+        mandal,
+        village_id,
+        mandal_id
+      });
+      if (locRes.error) {
+        await client.query('ROLLBACK');
+        return res.status(locRes.statusCode || 400).json(formatResponse(false, null, locRes.error));
+      }
+      cleanVillage = locRes.village;
+      cleanMandal = locRes.mandal;
+      cleanVillageId = locRes.village_id;
+      cleanMandalId = locRes.mandal_id;
+    }
+
+    const cleanAddress = address !== undefined ? address : currentPatient.address;
+    const cleanAilment = ailment_reason !== undefined ? ailment_reason : currentPatient.ailment_reason;
+    const cleanSource = source !== undefined ? source : currentPatient.source;
+
+    // Execute UPDATE — patient_id and registration_id remain immutable
+    const updateRes = await client.query(`
+      UPDATE patients
+      SET full_name = $1,
+          mobile_number = $2,
+          age = $3,
+          gender = $4,
+          village = $5,
+          mandal = $6,
+          village_id = $7,
+          mandal_id = $8,
+          address = $9,
+          ailment_reason = $10,
+          source = $11,
+          updated_at = now()
+      WHERE patient_id = $12
+      RETURNING *
+    `, [
+      cleanFullName, cleanMobile, cleanAge, cleanGender,
+      cleanVillage, cleanMandal, cleanVillageId, cleanMandalId,
+      cleanAddress, cleanAilment, cleanSource,
+      patientId
+    ]);
+
+    const updatedPatient = updateRes.rows[0];
+
+    // Audit Log
+    await client.query(`
+      INSERT INTO audit_logs (
+        user_id, role, action, module, record_id, old_value, new_value, remarks, branch_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [
+      req.user.user_id,
+      req.user.role,
+      'Edit Patient Details',
+      'Patients',
+      String(patientId),
+      JSON.stringify(currentPatient),
+      JSON.stringify(updatedPatient),
+      'Patient demographic details updated',
+      userBranchId
+    ]);
+
+    await client.query('COMMIT');
+    return res.json(formatResponse(true, updatedPatient, 'Patient details updated successfully'));
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('updatePatient error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error while updating patient'));
   } finally {
     client.release();
   }
@@ -1576,42 +1755,200 @@ async function getAppointments(req, res) {
   }
 }
 
-async function rescheduleAppointment(req, res) {
+async function reassignOrRescheduleAppointment(req, res, isReassign = false) {
+  const client = await db.pool.connect();
   try {
+    await client.query('BEGIN');
     const apptId = parseInt(req.params.id);
-    const { appointment_date, appointment_time } = req.body;
+    if (!apptId || isNaN(apptId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Valid appointment ID is required'));
+    }
+
+    const { appointment_date, appointment_time, doctor_id, reason } = req.body;
 
     if (!appointment_date || !appointment_time) {
+      await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'appointment_date and appointment_time are required'));
     }
 
-    const apptRes = await db.query(`SELECT * FROM appointments WHERE appointment_id = $1`, [apptId]);
+    if (isReassign && (!reason || typeof reason !== 'string' || reason.trim().length < 3)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'A valid reason (minimum 3 characters) is required for doctor reassignment'));
+    }
+
+    // Lock appointment
+    const apptRes = await client.query(`
+      SELECT a.*, p.branch_id as patient_branch_id, p.full_name as patient_name
+      FROM appointments a
+      JOIN patients p ON a.patient_id = p.patient_id
+      WHERE a.appointment_id = $1
+      FOR UPDATE OF a
+    `, [apptId]);
+
     if (apptRes.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json(formatResponse(false, null, 'Appointment not found'));
     }
 
     const appt = apptRes.rows[0];
+    const userBranchId = req.user.branch_id || 1;
 
-    // Check Doctor Slot Availability (excluding current appointment)
-    const slotCheck = await db.query(`
-      SELECT appointment_id FROM appointments
-      WHERE doctor_id = $1 AND appointment_date = $2 AND appointment_time::time = $3::time AND status NOT IN ('cancelled') AND appointment_id != $4
-    `, [appt.doctor_id, appointment_date, appointment_time, apptId]);
-
-    if (slotCheck.rows.length > 0) {
-      return res.status(400).json(formatResponse(false, null, `Selected doctor is already booked at ${appointment_time} on ${appointment_date}. Double booking is not allowed. Please choose another time slot.`));
+    // RBAC branch check
+    if (req.user.role !== 'super_admin' && appt.patient_branch_id !== userBranchId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json(formatResponse(false, null, 'Cannot modify appointment belonging to another branch'));
     }
 
-    await db.query(`
-      UPDATE appointments SET appointment_date = $1, appointment_time = $2, updated_at = now()
-      WHERE appointment_id = $3
-    `, [appointment_date, appointment_time, apptId]);
+    // Immutability checks: Completed or In Consultation appointments cannot be reassigned
+    const completedStatuses = ['completed', 'doctor_completed', 'dispensed', 'pro_completed'];
+    if (completedStatuses.includes(appt.status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Cannot reassign or reschedule an appointment that is already ${appt.status}`));
+    }
+    if (appt.status === 'cancelled') {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Cannot reassign or reschedule a cancelled appointment'));
+    }
+    if (appt.status === 'in_consultation') {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Cannot reassign an appointment currently in consultation'));
+    }
 
-    res.locals.auditEntry = { module: 'Appointments', action: 'Reschedule Appointment', recordId: apptId, newValue: { appointment_date, appointment_time } };
-    return res.json(formatResponse(true, null, 'Appointment rescheduled successfully'));
+    const targetDoctorId = doctor_id ? parseInt(doctor_id) : appt.doctor_id;
+    if (!targetDoctorId || isNaN(targetDoctorId)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Valid doctor_id is required'));
+    }
+
+    // Validate Doctor Availability (doctor active, within branch, leaves, slot collision, patient double booking)
+    const avail = await validateDoctorAvailability(
+      client,
+      targetDoctorId,
+      appointment_date,
+      appointment_time,
+      apptId,
+      appt.patient_branch_id,
+      appt.patient_id
+    );
+
+    if (!avail.valid) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, avail.error));
+    }
+
+    const doctorChanged = targetDoctorId !== appt.doctor_id;
+    let transferredBill = null;
+
+    if (doctorChanged) {
+      // Find consultation bill attached to this appointment (or by patient + old_doctor)
+      const billRes = await client.query(`
+        SELECT * FROM bills
+        WHERE (appointment_id = $1 OR (patient_id = $2 AND doctor_id = $3 AND bill_type = 'consultation'))
+          AND bill_type = 'consultation'
+        ORDER BY bill_id DESC
+        LIMIT 1
+        FOR UPDATE
+      `, [apptId, appt.patient_id, appt.doctor_id]);
+
+      if (billRes.rows.length > 0) {
+        const existingBill = billRes.rows[0];
+        // Transfer consultation bill attribution to the new doctor.
+        // Financial Invariant: exactly 1 bill, exactly existing payments, 0 extra charges to patient.
+        const updatedBillRes = await client.query(`
+          UPDATE bills
+          SET doctor_id = $1,
+              appointment_id = $2,
+              updated_at = now()
+          WHERE bill_id = $3
+          RETURNING *
+        `, [targetDoctorId, apptId, existingBill.bill_id]);
+
+        transferredBill = updatedBillRes.rows[0];
+      }
+    }
+
+    // Update appointment record
+    const updatedApptRes = await client.query(`
+      UPDATE appointments
+      SET doctor_id = $1,
+          appointment_date = $2,
+          appointment_time = $3,
+          updated_at = now()
+      WHERE appointment_id = $4
+      RETURNING *
+    `, [targetDoctorId, appointment_date, appointment_time, apptId]);
+
+    const updatedAppt = updatedApptRes.rows[0];
+
+    // Audit Log
+    const actionName = doctorChanged ? 'Reassign Doctor' : 'Reschedule Appointment';
+    await client.query(`
+      INSERT INTO audit_logs (
+        user_id, role, action, module, record_id, old_value, new_value, remarks, branch_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [
+      req.user.user_id,
+      req.user.role,
+      actionName,
+      'Appointments',
+      String(apptId),
+      JSON.stringify({ doctor_id: appt.doctor_id, appointment_date: appt.appointment_date, appointment_time: appt.appointment_time }),
+      JSON.stringify({ doctor_id: targetDoctorId, appointment_date, appointment_time, bill_transferred: !!transferredBill, bill_id: transferredBill ? transferredBill.bill_id : null }),
+      reason || (doctorChanged ? `Doctor reassigned from ${appt.doctor_id} to ${targetDoctorId}` : 'Appointment rescheduled'),
+      userBranchId
+    ]);
+
+    await client.query('COMMIT');
+
+    const message = doctorChanged
+      ? (transferredBill
+          ? 'Doctor reassigned successfully. Consultation fee attribution transferred to new doctor.'
+          : 'Doctor reassigned successfully.')
+      : 'Appointment rescheduled successfully';
+
+    return res.json(formatResponse(true, {
+      appointment: updatedAppt,
+      bill_transferred: !!transferredBill,
+      bill_id: transferredBill ? transferredBill.bill_id : null,
+      old_doctor_id: appt.doctor_id,
+      new_doctor_id: targetDoctorId
+    }, message));
   } catch (err) {
-    console.error('rescheduleAppointment error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    await client.query('ROLLBACK');
+    console.error('reassignOrRescheduleAppointment error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error while updating appointment'));
+  } finally {
+    client.release();
+  }
+}
+
+async function rescheduleAppointment(req, res) {
+  return reassignOrRescheduleAppointment(req, res, false);
+}
+
+async function reassignDoctor(req, res) {
+  return reassignOrRescheduleAppointment(req, res, true);
+}
+
+async function getDoctorAvailableSlots(req, res) {
+  try {
+    const doctorId = parseInt(req.params.id || req.query.doctor_id);
+    const dateStr = req.query.date;
+    const excludeApptId = req.query.exclude_appointment_id ? parseInt(req.query.exclude_appointment_id) : null;
+
+    if (!doctorId || isNaN(doctorId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid doctor_id is required'));
+    }
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid date (YYYY-MM-DD) is required'));
+    }
+
+    const result = await generateDoctorSlots(db, doctorId, dateStr, excludeApptId);
+    return res.json(formatResponse(true, result, 'Doctor slots retrieved successfully'));
+  } catch (err) {
+    console.error('getDoctorAvailableSlots error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error while fetching doctor slots'));
   }
 }
 
@@ -1715,10 +2052,10 @@ async function createConsultationBill(req, res) {
     const billRes = await client.query(`
       INSERT INTO bills (
         bill_number, patient_id, doctor_id, bill_type, created_by, branch_id,
-        amount, discount_amount, final_amount, status
-      ) VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, 'created')
+        amount, discount_amount, final_amount, status, appointment_id
+      ) VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, 'created', $9)
       RETURNING *
-    `, [billNum, parseInt(patient_id), appt.doctor_id, req.user.user_id, branchId, baseFee, discount, finalFee]);
+    `, [billNum, parseInt(patient_id), appt.doctor_id, req.user.user_id, branchId, baseFee, discount, finalFee, parseInt(appointment_id)]);
 
     const newBill = billRes.rows[0];
     newBill.due_amount = dueAmt;
@@ -2461,7 +2798,10 @@ module.exports = {
   createAppointment,
   getAppointments,
   rescheduleAppointment,
+  reassignDoctor,
+  getDoctorAvailableSlots,
   cancelAppointment,
+  updatePatient,
   createConsultationBill,
   getConsultationBills,
   getPatientInvoices,
