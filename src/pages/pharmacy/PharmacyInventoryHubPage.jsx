@@ -19,7 +19,10 @@ import {
   Edit3,
   RefreshCw,
   Eye,
-  Clock
+  Clock,
+  FileSpreadsheet,
+  Check,
+  X
 } from 'lucide-react';
 
 export const PharmacyInventoryHubPage = () => {
@@ -56,7 +59,18 @@ export const PharmacyInventoryHubPage = () => {
   // 2. Stock state
   const [stockList, setStockList] = useState([]);
 
-  // 3. Manual Add Stock Form state
+  // 3. Formulary Add Medicine state (Canonical 4 fields)
+  const [tabAddForm, setTabAddForm] = useState({
+    medicine_name: '',
+    strength: '',
+    quantity: '',
+  });
+  const [tabAddSerial, setTabAddSerial] = useState('');
+  const [tabAddLoadingSerial, setTabAddLoadingSerial] = useState(false);
+  const [tabAddSaving, setTabAddSaving] = useState(false);
+  const [showBatchReceiptSection, setShowBatchReceiptSection] = useState(false);
+
+  // Optional batch receipt form state (secondary)
   const [addStockForm, setAddStockForm] = useState({
     medicine_id: searchParams.get('medicine_id') || '',
     batch_number: '',
@@ -79,12 +93,13 @@ export const PharmacyInventoryHubPage = () => {
     }
   }, [searchParams]);
 
-  // 4. Excel Import state
+  // 4. Excel Import state (100% aligned with Super Admin Formulary Import)
   const fileInputRef = useRef(null);
   const [selectedFile, setSelectedFile] = useState(null);
-  const [importPreview, setImportPreview] = useState(null);
-  const [importing, setImporting] = useState(false);
-  const [parsedRows, setParsedRows] = useState([]);
+  const [validatingFile, setValidatingFile] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [importingMedicines, setImportingMedicines] = useState(false);
+  const [importResult, setImportResult] = useState(null);
 
   // 5. Stock Alerts state (low-stock, expiring, expired, out-of-stock)
   const [alertStockList, setAlertStockList] = useState([]);
@@ -100,9 +115,22 @@ export const PharmacyInventoryHubPage = () => {
         const res = await pharmacyApi.getStock({ search: search ? search.trim() : undefined });
         if (res.success) setStockList(res.data || []);
       } else if (activeTab === 'add-stock') {
-        // Pre-fetch medicines list for selector dropdown
+        // Pre-fetch medicines list for selector dropdown and load next serial for formulary add form
         const res = await pharmacyApi.getMedicines();
         if (res.success) setMedicines(res.data || []);
+        try {
+          setTabAddLoadingSerial(true);
+          const sRes = await pharmacyApi.getNextMedicineSerial();
+          if (sRes.success && sRes.data?.serial_number) {
+            setTabAddSerial(sRes.data.serial_number);
+          } else {
+            setTabAddSerial('AUTOMATICALLY GENERATED');
+          }
+        } catch (e) {
+          setTabAddSerial('AUTOMATICALLY GENERATED');
+        } finally {
+          setTabAddLoadingSerial(false);
+        }
       } else if (activeTab === 'low-stock') {
         const res = await pharmacyApi.getLowStock();
         if (res.success) setAlertStockList(res.data || []);
@@ -293,108 +321,172 @@ export const PharmacyInventoryHubPage = () => {
     }
   };
 
-  // Handlers for Excel Import
-  const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setSelectedFile(file);
-      parseExcelFile(file);
+  // Handler for Primary Formulary Add Medicine form
+  const handleTabAddSubmit = async (e) => {
+    e.preventDefault();
+    if (!tabAddForm.medicine_name.trim()) {
+      showToast('Medicine Name is required', 'warning');
+      return;
     }
-  };
-
-  const parseExcelFile = (file) => {
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const bstr = evt.target.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const rows = XLSX.utils.sheet_to_json(ws);
-        setParsedRows(rows);
-
-        // Request preview from backend
-        const res = await pharmacyApi.previewStockImport({
-          file_name: file.name,
-          rows: rows,
-        });
-
-        if (res.success) {
-          setImportPreview(res.data);
-          showToast(`File analyzed: ${res.data.valid_rows} valid, ${res.data.invalid_rows} invalid`, 'info');
-        } else {
-          showToast(res.message || 'Failed to generate preview', 'error');
-        }
-      } catch (err) {
-        showToast('Failed to parse Excel file. Ensure valid columns.', 'error');
-      }
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  const handleConfirmImport = async () => {
-    if (!parsedRows || parsedRows.length === 0) {
-      showToast('No rows to import', 'warning');
+    if (!tabAddForm.strength.trim()) {
+      showToast('Potency / Strength is required', 'warning');
+      return;
+    }
+    if (tabAddForm.quantity !== '' && parseInt(tabAddForm.quantity, 10) < 0) {
+      showToast('Quantity cannot be negative', 'warning');
       return;
     }
 
-    setImporting(true);
+    setTabAddSaving(true);
     try {
-      const res = await pharmacyApi.confirmStockImport({
-        file_name: selectedFile?.name || 'excel_stock_import.xlsx',
-        rows: parsedRows,
+      const res = await pharmacyApi.createMedicine({
+        medicine_name: tabAddForm.medicine_name.trim(),
+        strength: tabAddForm.strength.trim(),
+        quantity: tabAddForm.quantity !== '' ? parseInt(tabAddForm.quantity, 10) : undefined,
       });
 
       if (res.success) {
-        showToast('Excel stock batches imported successfully into live database!', 'success');
-        setImportPreview(null);
-        setSelectedFile(null);
-        setParsedRows([]);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-        navigate('/pharmacy/inventory/stock');
+        showToast(
+          res.message || `Medicine added to formulary: ${res.data?.serial_number || res.data?.medicine_name}`,
+          'success'
+        );
+        setTabAddForm({
+          medicine_name: '',
+          strength: '',
+          quantity: '',
+        });
+        navigate('/pharmacy/inventory/medicines');
       } else {
-        showToast(res.message || 'Failed to confirm stock import', 'error');
+        showToast(res.message || 'Failed to add medicine', 'error');
       }
     } catch (err) {
-      showToast(err.message || 'Error executing stock import', 'error');
+      showToast(err.response?.data?.message || err.message || 'Failed to create medicine', 'error');
     } finally {
-      setImporting(false);
+      setTabAddSaving(false);
+    }
+  };
+
+  // Handlers for Formulary Excel Import (100% aligned with Super Admin)
+  const handleProcessFile = (file) => {
+    if (!file) return;
+    const ext = (file.name || '').split('.').pop().toLowerCase();
+    if (ext !== 'xlsx' && ext !== 'xls') {
+      showToast('Please select a valid Excel (.xlsx or .xls) file', 'warning');
+      return;
+    }
+    setSelectedFile(file);
+    setPreviewData(null);
+    setImportResult(null);
+  };
+
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleProcessFile(file);
+    }
+  };
+
+  const handleRemoveFile = () => {
+    setSelectedFile(null);
+    setPreviewData(null);
+    setImportResult(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const handleValidatePreview = async () => {
+    if (!selectedFile) {
+      showToast('Please select an Excel file to validate', 'warning');
+      return;
+    }
+    setValidatingFile(true);
+    try {
+      const uploadFormData = new FormData();
+      uploadFormData.append('file', selectedFile);
+      const res = await pharmacyApi.previewMedicineImport(uploadFormData);
+      if (res.success) {
+        setPreviewData(res.data);
+        showToast(`Validation preview ready: ${res.data.valid_rows} item(s) to process`, 'success');
+      } else {
+        showToast(res.message || 'Validation failed', 'error');
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || err.message || 'Validation error', 'error');
+    } finally {
+      setValidatingFile(false);
+    }
+  };
+
+  const handleConfirmImport = async () => {
+    if (!previewData || previewData.valid_rows === 0) {
+      showToast('No valid rows available to import', 'warning');
+      return;
+    }
+    setImportingMedicines(true);
+    try {
+      const payload = {
+        file_name: previewData.file_name,
+        items: previewData.valid_items,
+        row_issues: previewData.row_issues,
+        duplicate_rows: previewData.duplicate_rows,
+        invalid_rows: previewData.invalid_rows
+      };
+      const res = await pharmacyApi.confirmMedicineImport(payload);
+      if (res.success) {
+        setImportResult(res.data);
+        const importedCount = res.data.successfully_imported || 0;
+        const mergedCount = res.data.successfully_merged || 0;
+        showToast(`Import completed: ${importedCount} created, ${mergedCount} merged`, 'success');
+      } else {
+        showToast(res.message || 'Import failed', 'error');
+      }
+    } catch (err) {
+      showToast(err.response?.data?.message || err.message || 'Import error', 'error');
+    } finally {
+      setImportingMedicines(false);
     }
   };
 
   const handleDownloadSample = () => {
     const sampleData = [
       {
+        'Sl.No': 1,
         'Medicine Name': 'Arnica Montana',
-        'Potency': '200CH',
-        'Unit': 'bottle',
-        'Category': 'Homeopathic Dilution',
-        'Batch Number': 'ARN-2026-01',
-        'Manufacture Date': '2026-01-01',
-        'Expiry Date': '2028-12-31',
+        'Potency': '200C',
         'Quantity': 50,
-        'Purchase Price': 85.00,
-        'MRP': 140.00,
       },
       {
+        'Sl.No': 2,
         'Medicine Name': 'Nux Vomica',
         'Potency': '30C',
-        'Unit': 'bottle',
-        'Category': 'Homeopathic Dilution',
-        'Batch Number': 'NUX-2026-02',
-        'Manufacture Date': '2026-02-01',
-        'Expiry Date': '2028-06-30',
         'Quantity': 30,
-        'Purchase Price': 75.00,
-        'MRP': 120.00,
       },
+      {
+        'Sl.No': 3,
+        'Medicine Name': 'Bryonia Alba',
+        'Potency': '200C',
+        'Quantity': 40,
+      },
+      {
+        'Sl.No': 4,
+        'Medicine Name': 'Belladonna',
+        'Potency': '1M',
+        'Quantity': 25,
+      },
+      {
+        'Sl.No': 5,
+        'Medicine Name': 'Rhus Tox',
+        'Potency': '30C',
+        'Quantity': 60,
+      }
     ];
 
     const ws = XLSX.utils.json_to_sheet(sampleData);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'StockTemplate');
-    XLSX.writeFile(wb, 'wecare_stock_import_template.xlsx');
-    showToast('Sample Excel template downloaded', 'success');
+    XLSX.utils.book_append_sheet(wb, ws, 'FormularyTemplate');
+    XLSX.writeFile(wb, 'wecare_formulary_import_template.xlsx');
+    showToast('Sample Formulary Excel template downloaded', 'success');
   };
 
   const tabsList = [
@@ -686,291 +778,616 @@ export const PharmacyInventoryHubPage = () => {
         </div>
       )}
 
-      {/* ----------------- TAB 3: MANUAL ADD STOCK ----------------- */}
+      {/* ----------------- TAB 3: ADD MEDICINE (FORMULARY MASTER) ----------------- */}
       {activeTab === 'add-stock' && (
-        <div className="max-w-2xl bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
-          <div className="mb-6 pb-4 border-b border-slate-100">
-            <h2 className="text-lg font-bold text-slate-800">Manual Stock Receipt</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Add a new batch or increase quantity for existing stock. Automatically logs into transaction ledger.
-            </p>
+        <div className="space-y-6">
+          <div className="max-w-2xl bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
+            <div className="mb-6 pb-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Add Medicine to Pharmacy Formulary</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Add medicine directly into the master formulary catalog. If medicine and potency already exist, stock will be accumulated.
+                </p>
+              </div>
+              <span className="font-mono font-bold text-xs text-blue-700 bg-blue-50 px-3 py-1.5 rounded-xl border border-blue-200 shrink-0">
+                {tabAddLoadingSerial ? 'Loading...' : tabAddSerial || 'AUTOMATICALLY GENERATED'}
+              </span>
+            </div>
+
+            <form onSubmit={handleTabAddSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Medicine Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={tabAddForm.medicine_name}
+                  onChange={(e) => setTabAddForm({ ...tabAddForm, medicine_name: e.target.value })}
+                  placeholder="e.g. Arnica Montana"
+                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-3 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Potency / Strength *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={tabAddForm.strength}
+                  onChange={(e) => setTabAddForm({ ...tabAddForm, strength: e.target.value })}
+                  placeholder="e.g. 30C, 200C, 1M, Q"
+                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs font-mono rounded-xl p-3 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Quantity (Optional)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={tabAddForm.quantity}
+                  onChange={(e) => setTabAddForm({ ...tabAddForm, quantity: e.target.value })}
+                  placeholder="e.g. 100 (leave empty if no initial stock)"
+                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs font-mono rounded-xl p-3 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  Serial Number
+                </label>
+                <input
+                  type="text"
+                  readOnly
+                  disabled
+                  value={tabAddLoadingSerial ? 'Loading...' : tabAddSerial || 'AUTOMATICALLY GENERATED'}
+                  className="w-full px-3 py-2.5 text-xs font-mono font-bold rounded-xl border border-slate-200 bg-slate-100 text-slate-600 cursor-not-allowed select-none"
+                />
+                <p className="text-[10px] text-slate-400 mt-1 uppercase">
+                  AUTOMATICALLY GENERATED — READ ONLY
+                </p>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => navigate('/pharmacy/inventory/medicines')}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={tabAddSaving}
+                  className="px-5 py-2.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer"
+                >
+                  {tabAddSaving ? 'Saving to Formulary...' : 'Save to Formulary'}
+                </button>
+              </div>
+            </form>
           </div>
 
-          <form onSubmit={handleAddStockSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Medicine from Catalog *
-              </label>
-              <select
-                value={addStockForm.medicine_id}
-                onChange={(e) => setAddStockForm({ ...addStockForm, medicine_id: e.target.value })}
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
-                required
-              >
-                <option value="">Select Medicine...</option>
-                {medicines.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.serial_number || `MED-${String(m.id).padStart(5, '0')}`} — {m.medicine_name} ({m.strength || 'Standard'})
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Secondary Collapsible Section: Supplier Invoice & Batch Consignment Receipt */}
+          <div className="max-w-2xl bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => setShowBatchReceiptSection(!showBatchReceiptSection)}
+              className="w-full flex items-center justify-between text-left text-xs font-bold text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              <span>Need to log a specific supplier invoice & batch receipt? (Optional)</span>
+              <span className="text-slate-400 text-xs">{showBatchReceiptSection ? '▲ Hide' : '▼ Expand'}</span>
+            </button>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Batch Number *
-                </label>
-                <input
-                  type="text"
-                  value={addStockForm.batch_number}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, batch_number: e.target.value })}
-                  placeholder="e.g. BAT-2026-99"
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                  required
-                />
-              </div>
+            {showBatchReceiptSection && (
+              <form onSubmit={handleAddStockSubmit} className="mt-4 pt-4 border-t border-slate-100 space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Medicine from Catalog *
+                  </label>
+                  <select
+                    value={addStockForm.medicine_id}
+                    onChange={(e) => setAddStockForm({ ...addStockForm, medicine_id: e.target.value })}
+                    className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
+                    required
+                  >
+                    <option value="">Select Medicine...</option>
+                    {medicines.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.serial_number || `MED-${String(m.id).padStart(5, '0')}`} — {m.medicine_name} ({m.strength || 'Standard'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Quantity Received (Units) *
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={addStockForm.quantity}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, quantity: e.target.value })}
-                  placeholder="e.g. 50"
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                  required
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Batch Number *
+                    </label>
+                    <input
+                      type="text"
+                      value={addStockForm.batch_number}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, batch_number: e.target.value })}
+                      placeholder="e.g. BAT-2026-99"
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-mono focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                      required
+                    />
+                  </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Manufacture Date (Optional)
-                </label>
-                <input
-                  type="date"
-                  value={addStockForm.manufacture_date}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, manufacture_date: e.target.value })}
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Quantity Received (Units) *
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={addStockForm.quantity}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, quantity: e.target.value })}
+                      placeholder="e.g. 50"
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                      required
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Expiry Date *
-                </label>
-                <input
-                  type="date"
-                  value={addStockForm.expiry_date}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, expiry_date: e.target.value })}
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-bold text-red-700"
-                  required
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Manufacture Date (Optional)
+                    </label>
+                    <input
+                      type="date"
+                      value={addStockForm.manufacture_date}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, manufacture_date: e.target.value })}
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    />
+                  </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Purchase Rate (₹)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={addStockForm.purchase_rate}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, purchase_rate: e.target.value })}
-                  placeholder="0.00"
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Expiry Date *
+                    </label>
+                    <input
+                      type="date"
+                      value={addStockForm.expiry_date}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, expiry_date: e.target.value })}
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-bold text-red-700"
+                      required
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  MRP (₹)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={addStockForm.mrp}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, mrp: e.target.value })}
-                  placeholder="0.00"
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Purchase Rate (₹)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={addStockForm.purchase_rate}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, purchase_rate: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    />
+                  </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Supplier / Vendor Name
-                </label>
-                <input
-                  type="text"
-                  value={addStockForm.supplier}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, supplier: e.target.value })}
-                  placeholder="e.g. Hahnemann Laboratories"
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      MRP (₹)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={addStockForm.mrp}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, mrp: e.target.value })}
+                      placeholder="0.00"
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Invoice Number
-                </label>
-                <input
-                  type="text"
-                  value={addStockForm.invoice_number}
-                  onChange={(e) => setAddStockForm({ ...addStockForm, invoice_number: e.target.value })}
-                  placeholder="e.g. INV-9842"
-                  className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Supplier / Vendor Name
+                    </label>
+                    <input
+                      type="text"
+                      value={addStockForm.supplier}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, supplier: e.target.value })}
+                      placeholder="e.g. Hahnemann Laboratories"
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    />
+                  </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Remarks / Delivery Note
-              </label>
-              <textarea
-                rows="2"
-                value={addStockForm.remarks}
-                onChange={(e) => setAddStockForm({ ...addStockForm, remarks: e.target.value })}
-                placeholder="Optional delivery or storage notes..."
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Invoice Number
+                    </label>
+                    <input
+                      type="text"
+                      value={addStockForm.invoice_number}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, invoice_number: e.target.value })}
+                      placeholder="e.g. INV-9842"
+                      className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                    />
+                  </div>
+                </div>
 
-            <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => navigate('/pharmacy/inventory/stock')}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={addingStock}
-                className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition disabled:opacity-50"
-              >
-                {addingStock ? 'Recording Stock...' : 'Save Stock Batch'}
-              </button>
-            </div>
-          </form>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Remarks / Delivery Note
+                  </label>
+                  <textarea
+                    rows="2"
+                    value={addStockForm.remarks}
+                    onChange={(e) => setAddStockForm({ ...addStockForm, remarks: e.target.value })}
+                    placeholder="Optional delivery or storage notes..."
+                    className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                  <button
+                    type="submit"
+                    disabled={addingStock}
+                    className="px-5 py-2 text-xs font-bold text-white bg-slate-800 hover:bg-slate-900 rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer"
+                  >
+                    {addingStock ? 'Recording Stock...' : 'Save Stock Batch'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         </div>
       )}
 
-      {/* ----------------- TAB 4: EXCEL IMPORT ----------------- */}
+      {/* ----------------- TAB 4: EXCEL IMPORT (FORMULARY MASTER) ----------------- */}
       {isImportTab && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100">
               <div>
-                <h2 className="text-lg font-bold text-slate-800">Bulk Excel Stock Batch Import</h2>
+                <h2 className="text-lg font-bold text-slate-800">Import Medicines to Pharmacy Formulary</h2>
                 <p className="text-xs text-slate-500 mt-1">
-                  Upload an Excel (.xlsx, .xls) spreadsheet to batch-import medicines, stock quantities, and expiry dates.
+                  Upload an Excel (.xlsx, .xls) spreadsheet to batch-import medicines into the master formulary. Existing medicines will have quantities accumulated.
                 </p>
               </div>
               <button
+                type="button"
                 onClick={handleDownloadSample}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition shrink-0"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl transition shrink-0 cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5" />
                 <span>Download Sample Template</span>
               </button>
             </div>
 
-            {/* Drop Zone */}
-            <div className="mt-6">
-              <input
-                type="file"
-                ref={fileInputRef}
-                accept=".xlsx, .xls"
-                onChange={handleFileChange}
-                className="hidden"
-                id="excel-file-upload"
-              />
-              <label
-                htmlFor="excel-file-upload"
-                className="border-2 border-dashed border-slate-300 hover:border-blue-500 bg-slate-50 hover:bg-blue-50/40 rounded-2xl p-8 flex flex-col items-center justify-center cursor-pointer transition text-center"
-              >
-                <UploadCloud className="w-10 h-10 text-blue-600 mb-2" />
-                <p className="text-sm font-bold text-slate-800">
-                  {selectedFile ? selectedFile.name : 'Click to select or drag & drop Excel file'}
-                </p>
-                <p className="text-xs text-slate-500 mt-1">
-                  Supported columns: Medicine Name, Potency, Batch Number, Expiry Date, Quantity, MRP, Purchase Price
-                </p>
-              </label>
-            </div>
-          </div>
-
-          {/* Import Preview Card */}
-          {importPreview && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-5">
-              <div className="flex items-center justify-between">
+            {!importResult ? (
+              <div className="mt-6 space-y-6">
+                {/* File Dropzone */}
                 <div>
-                  <h3 className="text-base font-bold text-slate-800">Import Verification Summary</h3>
-                  <p className="text-xs text-slate-500">
-                    File: <span className="font-semibold text-slate-700">{importPreview.file_name}</span>
-                  </p>
-                </div>
-                <button
-                  onClick={handleConfirmImport}
-                  disabled={importing || importPreview.valid_rows === 0}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition disabled:opacity-50"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>{importing ? 'Importing...' : `Confirm Import (${importPreview.valid_rows} Valid Rows)`}</span>
-                </button>
-              </div>
-
-              {/* KPI metrics */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-center">
-                  <p className="text-2xs font-bold text-slate-400 uppercase">Total Rows</p>
-                  <p className="text-xl font-bold text-slate-800 mt-0.5">{importPreview.total_rows}</p>
-                </div>
-                <div className="p-3.5 bg-emerald-50 rounded-xl border border-emerald-200 text-center">
-                  <p className="text-2xs font-bold text-emerald-700 uppercase">Valid Rows</p>
-                  <p className="text-xl font-bold text-emerald-800 mt-0.5">{importPreview.valid_rows}</p>
-                </div>
-                <div className="p-3.5 bg-red-50 rounded-xl border border-red-200 text-center">
-                  <p className="text-2xs font-bold text-red-700 uppercase">Invalid Rows</p>
-                  <p className="text-xl font-bold text-red-800 mt-0.5">{importPreview.invalid_rows}</p>
-                </div>
-                <div className="p-3.5 bg-blue-50 rounded-xl border border-blue-200 text-center">
-                  <p className="text-2xs font-bold text-blue-700 uppercase">New Catalog Items</p>
-                  <p className="text-xl font-bold text-blue-800 mt-0.5">{importPreview.new_medicines_count}</p>
-                </div>
-              </div>
-
-              {/* Failed Rows Report */}
-              {importPreview.failed_rows_report && importPreview.failed_rows_report.length > 0 && (
-                <div className="border border-red-200 bg-red-50/50 rounded-xl p-4">
-                  <h4 className="text-xs font-bold text-red-800 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-red-600" />
-                    Failed Rows Validation Report ({importPreview.failed_rows_report.length})
-                  </h4>
-                  <div className="max-h-40 overflow-y-auto space-y-1 text-2xs text-red-700">
-                    {importPreview.failed_rows_report.map((fail, idx) => (
-                      <div key={idx} className="flex items-center gap-2">
-                        <span className="font-bold">Row {fail.row}:</span>
-                        <span>{fail.reason}</span>
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      const file = e.dataTransfer?.files?.[0];
+                      if (file) handleProcessFile(file);
+                    }}
+                    className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-2xl p-8 text-center transition-colors bg-slate-50/50"
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      id="pharmacy-excel-upload"
+                      accept=".xlsx, .xls"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+                    <label
+                      htmlFor="pharmacy-excel-upload"
+                      className="cursor-pointer flex flex-col items-center justify-center gap-2"
+                    >
+                      <FileSpreadsheet className="w-10 h-10 text-emerald-600" />
+                      <div>
+                        <span className="font-bold text-blue-600 hover:underline">Click to browse</span>
+                        <span className="text-slate-500"> or drag and drop your Excel file here</span>
                       </div>
-                    ))}
+                      <p className="text-xs text-slate-400">Supported formats: .xlsx, .xls (Columns: Sl.No, Medicine Name, Potency, Quantity)</p>
+                    </label>
+                  </div>
+
+                  {selectedFile && (
+                    <div className="mt-3 flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-3">
+                      <div className="flex items-center gap-2.5 truncate">
+                        <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span className="font-semibold text-emerald-950 truncate text-xs">{selectedFile.name}</span>
+                        <span className="text-2xs text-emerald-700 font-medium">({(selectedFile.size / 1024).toFixed(1)} KB)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleRemoveFile}
+                        className="text-slate-400 hover:text-red-500 p-1 rounded-lg cursor-pointer transition-colors"
+                        title="Remove file"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Validation Preview Details */}
+                {previewData && (
+                  <div className="space-y-4 pt-4 border-t border-slate-100">
+                    <div className="font-bold text-slate-800 text-xs uppercase tracking-wider">
+                      Validation & Preview Results
+                    </div>
+
+                    {/* Detected Columns */}
+                    <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs space-y-2">
+                      <span className="font-bold text-slate-700 block uppercase text-2xs">Detected Columns:</span>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>Name: <strong className="text-slate-800">{previewData.detected_columns?.medicine_name}</strong></span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                          <span>Potency: <strong className="text-slate-800">{previewData.detected_columns?.potency}</strong></span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {previewData.detected_columns?.serial ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Sl.No: <strong className="text-slate-800">{previewData.detected_columns?.serial}</strong></span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block shrink-0" />
+                              <span className="text-slate-400">Sl.No: None</span>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {previewData.detected_columns?.quantity ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                              <span>Qty: <strong className="text-slate-800">{previewData.detected_columns?.quantity}</strong></span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="w-3.5 h-3.5 rounded-full border border-slate-300 inline-block shrink-0" />
+                              <span className="text-slate-400">Qty: None</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Summary Counters */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                      <div className="p-3 rounded-xl border border-slate-200 bg-slate-50">
+                        <div className="text-2xs uppercase font-bold text-slate-400">Total Rows</div>
+                        <div className="text-lg font-extrabold text-slate-800">{previewData.total_rows}</div>
+                      </div>
+                      <div className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/60">
+                        <div className="text-2xs uppercase font-bold text-emerald-600">New Items</div>
+                        <div className="text-lg font-extrabold text-emerald-700">{previewData.new_items_count ?? previewData.valid_rows}</div>
+                      </div>
+                      <div className="p-3 rounded-xl border border-blue-200 bg-blue-50/60">
+                        <div className="text-2xs uppercase font-bold text-blue-600">Merged / Added Stock</div>
+                        <div className="text-lg font-extrabold text-blue-700">{previewData.merged_count ?? previewData.duplicate_rows}</div>
+                      </div>
+                      <div className="p-3 rounded-xl border border-red-200 bg-red-50/60">
+                        <div className="text-2xs uppercase font-bold text-red-600">Invalid Rows</div>
+                        <div className="text-lg font-extrabold text-red-700">{previewData.invalid_rows}</div>
+                      </div>
+                    </div>
+
+                    {/* Row Issues Breakdown */}
+                    {previewData.row_issues && previewData.row_issues.length > 0 && (
+                      <div className="border border-amber-200 bg-amber-50/40 rounded-xl p-4">
+                        <div className="flex items-center gap-1.5 font-bold text-amber-900 text-xs mb-2">
+                          <AlertTriangle className="w-4 h-4 text-amber-600" />
+                          <span>Notices & Issues ({previewData.row_issues.length}):</span>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto space-y-2 pr-1 text-xs">
+                          {previewData.row_issues.map((issue, idx) => (
+                            <div key={idx} className="flex items-start justify-between gap-2 p-2.5 bg-white rounded-lg border border-amber-100 shadow-2xs">
+                              <div className="truncate">
+                                <span className="font-bold text-slate-700">Row {issue.row}: </span>
+                                <span className="text-slate-900 font-semibold">{issue.medicine_name || '(empty name)'} </span>
+                                <span className="text-slate-500 font-mono text-2xs">({issue.potency || 'no potency'})</span>
+                              </div>
+                              <span className={`px-2 py-0.5 rounded text-2xs font-bold shrink-0 ${
+                                issue.status === 'will_merge'
+                                  ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                                  : issue.status === 'duplicate' 
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200' 
+                                  : 'bg-red-100 text-red-800 border border-red-200'
+                              }`}>
+                                {issue.reason}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Valid Items Table Preview */}
+                    {previewData.valid_items && previewData.valid_items.length > 0 && (
+                      <div className="border border-slate-200 rounded-xl overflow-hidden">
+                        <div className="bg-slate-50 px-4 py-2 border-b border-slate-200 font-bold text-slate-700 text-xs">
+                          Valid Items Ready for Import ({previewData.valid_items.length})
+                        </div>
+                        <div className="max-h-56 overflow-y-auto">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-500 text-2xs font-bold uppercase">
+                                <th className="p-2.5">Row</th>
+                                <th className="p-2.5">Medicine Name</th>
+                                <th className="p-2.5">Potency</th>
+                                <th className="p-2.5">Quantity</th>
+                                <th className="p-2.5">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {previewData.valid_items.map((itm, i) => (
+                                <tr key={i} className="hover:bg-slate-50/50">
+                                  <td className="p-2.5 font-mono text-slate-400">{itm.row}</td>
+                                  <td className="p-2.5 font-bold text-slate-800">{itm.medicine_name}</td>
+                                  <td className="p-2.5 font-mono text-slate-600">{itm.strength || itm.potency}</td>
+                                  <td className="p-2.5 font-mono font-bold text-slate-900">{itm.quantity ?? '—'}</td>
+                                  <td className="p-2.5">
+                                    <span className={`px-2 py-0.5 rounded text-2xs font-bold ${
+                                      itm.action === 'merge'
+                                        ? 'bg-blue-100 text-blue-800'
+                                        : 'bg-emerald-100 text-emerald-800'
+                                    }`}>
+                                      {itm.action === 'merge' ? `Merge (${itm.existing_serial || 'Existing'})` : 'New Item'}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Bottom Action Buttons */}
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => navigate('/pharmacy/inventory/medicines')}
+                    disabled={validatingFile || importingMedicines}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+
+                  {!previewData ? (
+                    <button
+                      type="button"
+                      onClick={handleValidatePreview}
+                      disabled={!selectedFile || validatingFile}
+                      className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                    >
+                      {validatingFile ? <LoadingSpinner size="sm" /> : <UploadCloud className="w-4 h-4" />}
+                      <span>{validatingFile ? 'Analyzing & Validating...' : 'Analyze & Preview Import'}</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleConfirmImport}
+                      disabled={previewData.valid_rows === 0 || importingMedicines}
+                      className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                    >
+                      {importingMedicines ? <LoadingSpinner size="sm" /> : <CheckCircle2 className="w-4 h-4" />}
+                      <span>
+                        {importingMedicines
+                          ? 'Importing into Formulary...'
+                          : `Confirm & Import ${previewData.valid_rows} Item(s)`}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* Success Result Summary */
+              <div className="mt-6 space-y-5">
+                <div className="flex items-center gap-3 p-4 bg-emerald-50 border border-emerald-200 rounded-2xl">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-600 shrink-0" />
+                  <div>
+                    <div className="font-bold text-emerald-950 text-sm">Formulary Import Completed Successfully</div>
+                    <div className="text-xs text-emerald-700 mt-0.5">
+                      Master formulary catalog updated. New medicines were assigned sequential serial numbers, and existing medicines had stock quantities consolidated.
+                    </div>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center">
+                  <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50">
+                    <div className="text-2xs uppercase font-bold text-emerald-700">Successfully Created</div>
+                    <div className="text-xl font-extrabold text-emerald-800">{importResult.successfully_imported || 0}</div>
+                  </div>
+                  <div className="p-4 rounded-xl border border-blue-200 bg-blue-50">
+                    <div className="text-2xs uppercase font-bold text-blue-700">Merged / Added Stock</div>
+                    <div className="text-xl font-extrabold text-blue-800">{importResult.successfully_merged ?? 0}</div>
+                  </div>
+                  <div className="p-4 rounded-xl border border-red-200 bg-red-50">
+                    <div className="text-2xs uppercase font-bold text-red-700">Invalid / Skipped Rows</div>
+                    <div className="text-xl font-extrabold text-red-800">{importResult.invalid_rows || 0}</div>
+                  </div>
+                </div>
+
+                {importResult.details && importResult.details.length > 0 && (
+                  <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50">
+                    <span className="font-bold text-slate-800 text-xs block mb-2">Imported & Merged Items:</span>
+                    <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 text-xs">
+                      {importResult.details.map((item, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-slate-200 text-xs">
+                          <div className="flex items-center gap-2 truncate">
+                            {item.serial_number && (
+                              <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 text-2xs">
+                                {item.serial_number}
+                              </span>
+                            )}
+                            <span className="font-bold text-slate-800">{item.medicine_name}</span>
+                            <span className="text-slate-500 font-mono text-2xs">({item.potency || item.strength})</span>
+                          </div>
+                          <span className={`px-2.5 py-0.5 rounded text-2xs font-bold ${
+                            item.status === 'imported' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' :
+                            item.status === 'merged' ? 'bg-blue-100 text-blue-800 border border-blue-200' :
+                            'bg-red-100 text-red-800 border border-red-200'
+                          }`}>
+                            {item.status === 'imported' ? 'Created (New)' :
+                             item.status === 'merged' ? 'Merged (+ Stock)' : item.reason || item.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setPreviewData(null);
+                      setImportResult(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+                  >
+                    Import Another File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/pharmacy/inventory/medicines')}
+                    className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition cursor-pointer"
+                  >
+                    View Formulary Catalog
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

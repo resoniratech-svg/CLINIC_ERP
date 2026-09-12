@@ -159,42 +159,32 @@ describe('Pharmacy Portal — Inventory & Formulary Module Integration Suite', (
   });
 
   // --------------------------------------------------------------------------
-  // 4. EXCEL IMPORT SCHEMA & ROW VALIDATION
+  // 4. EXCEL IMPORT SCHEMA & ROW VALIDATION (FORMULARY MASTER)
   // --------------------------------------------------------------------------
   describe('4. Excel Stock Import Structure & Row Parser', () => {
-    const requiredExcelColumns = [
+    const formularyTemplateColumns = [
+      'Sl.No',
       'Medicine Name',
-      'Batch Number',
-      'Expiry Date',
+      'Potency',
       'Quantity'
     ];
 
-    const sampleRow = {
+    const sampleFormularyRow = {
+      'Sl.No': 1,
       'Medicine Name': 'Arnica Montana',
-      'Potency': '200CH',
-      'Unit': 'bottle',
-      'Category': 'Homeopathic Dilution',
-      'Batch Number': 'ARN-2026-01',
-      'Manufacture Date': '2026-01-01',
-      'Expiry Date': '2028-12-31',
+      'Potency': '200C',
       'Quantity': 50,
-      'Purchase Price': 85.00,
-      'MRP': 140.00,
     };
 
-    test('4.1 Sample template contains all mandatory import columns', () => {
-      requiredExcelColumns.forEach(col => {
-        assert.ok(col in sampleRow, `Sample template must contain column: ${col}`);
+    test('4.1 Sample template contains all canonical formulary import columns', () => {
+      formularyTemplateColumns.forEach(col => {
+        assert.ok(col in sampleFormularyRow, `Formulary template must contain column: ${col}`);
       });
     });
 
-    test('4.2 Parses numeric quantities and currency fields accurately', () => {
-      const parsedQty = parseInt(sampleRow['Quantity']);
-      const parsedPurchase = parseFloat(sampleRow['Purchase Price']);
-      const parsedMrp = parseFloat(sampleRow['MRP']);
+    test('4.2 Parses numeric quantities accurately', () => {
+      const parsedQty = parseInt(sampleFormularyRow['Quantity'], 10);
       assert.strictEqual(parsedQty, 50);
-      assert.strictEqual(parsedPurchase, 85.0);
-      assert.strictEqual(parsedMrp, 140.0);
     });
   });
 
