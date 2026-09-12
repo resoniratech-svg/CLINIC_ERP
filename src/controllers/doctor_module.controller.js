@@ -131,7 +131,7 @@ async function getDashboard(req, res) {
   }
 }
 
-// 2. Today's Appointments
+// 2. Today's Appointments (also handles any single date via ?date=YYYY-MM-DD)
 async function getTodayAppointments(req, res) {
   try {
     const userId = req.user.user_id;
@@ -144,10 +144,13 @@ async function getTodayAppointments(req, res) {
     let query = `
       SELECT a.appointment_id, a.appointment_id as token_number, a.patient_id,
              p.registration_id, p.full_name as patient_name, p.age, p.gender,
-             a.appointment_time, a.appointment_type, a.status, a.created_at as checkin_time,
+             a.appointment_date, a.appointment_time, a.appointment_type, a.status, a.created_at as checkin_time,
+             u.full_name as doctor_name, d.specialization,
              c.consultation_id
       FROM appointments a
       JOIN patients p ON a.patient_id = p.patient_id
+      JOIN doctors d ON a.doctor_id = d.doctor_id
+      JOIN users u ON d.user_id = u.user_id
       LEFT JOIN LATERAL (
         SELECT consultation_id FROM consultations 
         WHERE appointment_id = a.appointment_id 
@@ -172,6 +175,56 @@ async function getTodayAppointments(req, res) {
     return res.json(formatResponse(true, result.rows, 'Doctor appointments retrieved successfully'));
   } catch (err) {
     console.error('getTodayAppointments error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+// 2b. Upcoming Appointments — returns all active appointments from today onward (next 60 days)
+// This is critical for Doctor B to discover newly-reassigned future appointments
+async function getUpcomingAppointments(req, res) {
+  try {
+    const userId = req.user.user_id;
+    const docId = await resolveDoctorId(userId);
+    const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
+
+    const { type, days = 60 } = req.query;
+    const today = new Date().toISOString().split('T')[0];
+    const maxDays = Math.min(parseInt(days) || 60, 180); // cap at 180 days
+    const endDate = new Date(Date.now() + maxDays * 86400000).toISOString().split('T')[0];
+
+    let query = `
+      SELECT a.appointment_id, a.patient_id,
+             p.registration_id, p.full_name as patient_name, p.age, p.gender,
+             a.appointment_date, a.appointment_time, a.appointment_type, a.status,
+             u.full_name as doctor_name, d.specialization,
+             c.consultation_id
+      FROM appointments a
+      JOIN patients p ON a.patient_id = p.patient_id
+      JOIN doctors d ON a.doctor_id = d.doctor_id
+      JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN LATERAL (
+        SELECT consultation_id FROM consultations
+        WHERE appointment_id = a.appointment_id
+        ORDER BY consultation_id DESC LIMIT 1
+      ) c ON true
+      WHERE ($1::integer IS NULL OR a.doctor_id = $1)
+        AND a.appointment_date >= $2
+        AND a.appointment_date <= $3
+        AND a.status NOT IN ('cancelled', 'completed', 'doctor_completed', 'pro_completed', 'dispensed')
+    `;
+    const params = [doctorFilterId, today, endDate];
+
+    if (type) {
+      params.push(type);
+      query += ` AND a.appointment_type = $${params.length}`;
+    }
+
+    query += ` ORDER BY a.appointment_date ASC, a.appointment_time ASC`;
+    const result = await db.query(query, params);
+
+    return res.json(formatResponse(true, result.rows, 'Upcoming appointments retrieved successfully'));
+  } catch (err) {
+    console.error('getUpcomingAppointments error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -2256,6 +2309,7 @@ async function reassignDoctor(req, res) {
 module.exports = {
   getDashboard,
   getTodayAppointments,
+  getUpcomingAppointments,
   getPatientQueue,
   getPatients,
   getPatientOverview,

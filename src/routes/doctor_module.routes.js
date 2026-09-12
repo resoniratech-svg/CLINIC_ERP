@@ -15,6 +15,7 @@ router.get('/dashboard', authorizeRoles('doctor', 'super_admin'), doctorControll
 
 // Appointments & Queue
 router.get('/appointments/today', authorizeRoles('doctor', 'super_admin'), doctorController.getTodayAppointments);
+router.get('/appointments/upcoming', authorizeRoles('doctor', 'super_admin'), doctorController.getUpcomingAppointments);
 router.post('/appointments/:id/reschedule', authorizeRoles('doctor', 'super_admin'), doctorController.rescheduleAppointment);
 router.post('/appointments/:id/reassign-doctor', authorizeRoles('doctor', 'super_admin'), doctorController.reassignDoctor);
 router.put('/appointments/:id/reassign-doctor', authorizeRoles('doctor', 'super_admin'), doctorController.reassignDoctor);
