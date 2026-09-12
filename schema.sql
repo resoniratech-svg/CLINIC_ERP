@@ -747,3 +747,13 @@ CREATE INDEX IF NOT EXISTS idx_coupon_redemptions_bill_id ON coupon_redemptions(
 -- BILLS COUPON LINK
 ALTER TABLE bills ADD COLUMN IF NOT EXISTS coupon_id INTEGER REFERENCES coupons(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_bills_coupon_id ON bills(coupon_id);
+
+-- PRO BILLING: TREATMENT PLAN BILLING STATUS TRACKING
+-- billing_status: awaiting_billing | billed
+ALTER TABLE treatment_plans ADD COLUMN IF NOT EXISTS billing_status VARCHAR(30) NOT NULL DEFAULT 'awaiting_billing';
+ALTER TABLE treatment_plans ADD COLUMN IF NOT EXISTS billed_in_bill_id INTEGER REFERENCES bills(bill_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_treatment_plans_billing_status ON treatment_plans(billing_status);
+
+-- PRO BILLING: BILL ITEMS TRACEABILITY — link each item back to its source treatment plan
+ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS treatment_plan_id INTEGER REFERENCES treatment_plans(treatment_id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS idx_bill_items_treatment_plan ON bill_items(treatment_plan_id);

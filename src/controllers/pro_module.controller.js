@@ -717,105 +717,143 @@ async function getPrescriptionItemModifications(req, res) {
 async function createBill(req, res) {
   const client = await db.pool.connect();
   try {
-    const { patient_id, doctor_id, appointment_id, bill_type, items, discount_amount, package_id, coupon_code, coupon_id } = req.body;
+    const { patient_id, doctor_id, bill_type, items, discount_amount, package_id, coupon_code, coupon_id, treatment_plan_ids } = req.body;
 
-    if (!patient_id || !bill_type || !items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json(formatResponse(false, null, 'patient_id, bill_type, and items array are required'));
+    if (!patient_id || !bill_type) {
+      return res.status(400).json(formatResponse(false, null, 'patient_id and bill_type are required'));
     }
 
-    // RULE 2: Block consultation bill type for PRO
     if (bill_type === 'consultation') {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Consultation fee billing is handled by Receptionist only'));
     }
 
     await client.query('BEGIN');
 
-    let subtotal = 0;
-    for (const item of items) {
-      const lineTotal = parseFloat(item.unit_price || item.amount || 0) * parseInt(item.quantity || 1);
-      subtotal += lineTotal;
+    // ── TREATMENT PLAN CONSOLIDATION ──────────────────────────────────────
+    let planRows = [];
+    if (treatment_plan_ids && Array.isArray(treatment_plan_ids) && treatment_plan_ids.length > 0) {
+      const cleanIds = treatment_plan_ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id) && id > 0);
+      if (cleanIds.length === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'treatment_plan_ids must be valid positive integers'));
+      }
+
+      const planRes = await client.query(
+        `SELECT treatment_id, patient_id, treatment_name, treatment_type, billing_status
+         FROM treatment_plans WHERE treatment_id = ANY($1::int[]) FOR UPDATE`,
+        [cleanIds]
+      );
+
+      if (planRes.rows.length !== cleanIds.length) {
+        await client.query('ROLLBACK');
+        return res.status(404).json(formatResponse(false, null, 'One or more treatment plan IDs not found'));
+      }
+
+      for (const plan of planRes.rows) {
+        if (parseInt(plan.patient_id, 10) !== parseInt(patient_id, 10)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, `Treatment plan "${plan.treatment_name}" does not belong to patient #${patient_id}`));
+        }
+        if (plan.billing_status === 'billed') {
+          await client.query('ROLLBACK');
+          return res.status(409).json(formatResponse(false, null, `Treatment plan "${plan.treatment_name}" has already been billed. Duplicate billing is not allowed.`));
+        }
+      }
+
+      planRows = planRes.rows;
     }
 
+    const manualItems = Array.isArray(items) ? items : [];
+
+    if (planRows.length === 0 && manualItems.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Either treatment_plan_ids or items array is required'));
+    }
+
+    // ── BUILD ITEMS LIST & SUBTOTAL ───────────────────────────────────────
+    let subtotal = 0;
+    const allItems = [];
+
+    if (planRows.length > 0 && manualItems.length > 0) {
+      planRows.forEach((plan, idx) => {
+        const itemForPlan = manualItems.find(it => parseInt(it.treatment_plan_id, 10) === plan.treatment_id)
+          || manualItems[idx]
+          || {};
+        const price = Math.max(0, parseFloat(itemForPlan.unit_price || itemForPlan.amount || 0));
+        subtotal += price;
+        allItems.push({
+          charge_type: plan.treatment_type || itemForPlan.charge_type || 'homeopathy',
+          description: plan.treatment_name,
+          amount: price,
+          treatment_plan_id: plan.treatment_id
+        });
+      });
+      manualItems
+        .filter(it => !it.treatment_plan_id || !planRows.find(p => p.treatment_id === parseInt(it.treatment_plan_id, 10)))
+        .forEach(it => {
+          const price = Math.max(0, parseFloat(it.unit_price || it.amount || 0) * parseInt(it.quantity || 1));
+          subtotal += price;
+          allItems.push({ charge_type: it.charge_type || 'Service', description: it.description || it.item_name || 'Service', amount: price, treatment_plan_id: null });
+        });
+    } else if (planRows.length > 0) {
+      planRows.forEach(plan => {
+        allItems.push({ charge_type: plan.treatment_type || 'homeopathy', description: plan.treatment_name, amount: 0, treatment_plan_id: plan.treatment_id });
+      });
+    } else {
+      for (const it of manualItems) {
+        const price = Math.max(0, parseFloat(it.unit_price || it.amount || 0) * parseInt(it.quantity || 1));
+        subtotal += price;
+        allItems.push({ charge_type: it.charge_type || it.item_name || 'Service', description: it.description || it.item_name || 'Service Item', amount: price, treatment_plan_id: null });
+      }
+    }
+
+    // ── COUPON VALIDATION ─────────────────────────────────────────────────
     let discAmt = parseFloat(discount_amount || 0);
     let resolvedCoupon = null;
 
-    // Atomic Coupon Validation & Lock
     if (coupon_code || coupon_id) {
-      const cRes = await client.query(`
-        SELECT * FROM coupons 
-        WHERE (id = $1 OR LOWER(coupon_code) = LOWER($2))
-        FOR UPDATE
-      `, [coupon_id ? parseInt(coupon_id, 10) : -1, coupon_code ? String(coupon_code).trim() : '']);
+      const cRes = await client.query(
+        `SELECT * FROM coupons WHERE (id = $1 OR LOWER(coupon_code) = LOWER($2)) FOR UPDATE`,
+        [coupon_id ? parseInt(coupon_id, 10) : -1, coupon_code ? String(coupon_code).trim() : '']
+      );
 
-      if (cRes.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return res.status(404).json(formatResponse(false, null, 'Referral coupon not found'));
-      }
-
+      if (cRes.rows.length === 0) { await client.query('ROLLBACK'); return res.status(404).json(formatResponse(false, null, 'Referral coupon not found')); }
       resolvedCoupon = cRes.rows[0];
 
-      // Verify coupon belongs to this patient (Patient A is referring_patient_id)
       if (parseInt(resolvedCoupon.referring_patient_id, 10) !== parseInt(patient_id, 10)) {
         await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(
-          false, 
-          null, 
-          `This referral coupon belongs to Patient #${resolvedCoupon.referring_patient_id} and cannot be used for Patient #${patient_id}`
-        ));
+        return res.status(400).json(formatResponse(false, null, `This referral coupon belongs to Patient #${resolvedCoupon.referring_patient_id} and cannot be used for Patient #${patient_id}`));
       }
+      if (resolvedCoupon.status === 'redeemed') { await client.query('ROLLBACK'); return res.status(400).json(formatResponse(false, null, 'This referral coupon has already been redeemed')); }
+      if (resolvedCoupon.status !== 'active') { await client.query('ROLLBACK'); return res.status(400).json(formatResponse(false, null, `Cannot redeem coupon with status "${resolvedCoupon.status}"`)); }
 
-      if (resolvedCoupon.status === 'redeemed') {
-        await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, 'This referral coupon has already been redeemed and cannot be reused'));
-      }
-
-      if (resolvedCoupon.status !== 'active') {
-        await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, `Cannot redeem coupon with status "${resolvedCoupon.status}"`));
-      }
-
-      const vFromStr = resolvedCoupon.valid_from instanceof Date ? resolvedCoupon.valid_from.toISOString().split('T')[0] : String(resolvedCoupon.valid_from).split('T')[0];
-      const vUntilStr = resolvedCoupon.valid_until instanceof Date ? resolvedCoupon.valid_until.toISOString().split('T')[0] : String(resolvedCoupon.valid_until).split('T')[0];
+      const vFrom = resolvedCoupon.valid_from instanceof Date ? resolvedCoupon.valid_from.toISOString().split('T')[0] : String(resolvedCoupon.valid_from).split('T')[0];
+      const vUntil = resolvedCoupon.valid_until instanceof Date ? resolvedCoupon.valid_until.toISOString().split('T')[0] : String(resolvedCoupon.valid_until).split('T')[0];
       const today = new Date().toISOString().split('T')[0];
 
-      if (vFromStr > today) {
-        await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, `This coupon is not valid until ${vFromStr}`));
-      }
-
-      if (vUntilStr < today) {
+      if (vFrom > today) { await client.query('ROLLBACK'); return res.status(400).json(formatResponse(false, null, `Coupon not valid until ${vFrom}`)); }
+      if (vUntil < today) {
         await client.query(`UPDATE coupons SET status = 'expired' WHERE id = $1`, [resolvedCoupon.id]);
         await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, `This coupon expired on ${vUntilStr}`));
+        return res.status(400).json(formatResponse(false, null, `Coupon expired on ${vUntil}`));
       }
 
-      // Calculate discount server-side
-      const discountVal = parseFloat(resolvedCoupon.discount_value);
-      let calculatedDiscount = 0;
-      if (resolvedCoupon.discount_type === 'percentage') {
-        calculatedDiscount = (subtotal * discountVal) / 100;
-        if (resolvedCoupon.max_discount_limit && parseFloat(resolvedCoupon.max_discount_limit) > 0) {
-          calculatedDiscount = Math.min(calculatedDiscount, parseFloat(resolvedCoupon.max_discount_limit));
-        }
-      } else {
-        calculatedDiscount = discountVal;
+      const dv = parseFloat(resolvedCoupon.discount_value);
+      let calc = resolvedCoupon.discount_type === 'percentage' ? (subtotal * dv) / 100 : dv;
+      if (resolvedCoupon.max_discount_limit && parseFloat(resolvedCoupon.max_discount_limit) > 0) {
+        calc = Math.min(calc, parseFloat(resolvedCoupon.max_discount_limit));
       }
-
-      // Cap discount at subtotal
-      discAmt = Math.round(Math.min(calculatedDiscount, subtotal) * 100) / 100;
+      discAmt = Math.round(Math.min(calc, subtotal) * 100) / 100;
     }
 
     const totalAmount = Math.max(0, Math.round((subtotal - discAmt) * 100) / 100);
-
     const billNo = 'BILL-PRO-' + Date.now();
     const createdBy = req.user.user_id;
-
     const docIdToUse = doctor_id ? parseInt(doctor_id) : 1;
+
     const billRes = await client.query(`
-      INSERT INTO bills (
-        bill_number, patient_id, doctor_id, bill_type, amount, discount_amount,
-        final_amount, created_by, branch_id, package_id, status, coupon_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, 'created'::bill_status, $10)
+      INSERT INTO bills (bill_number, patient_id, doctor_id, bill_type, amount, discount_amount, final_amount, created_by, branch_id, package_id, status, coupon_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, 'created'::bill_status, $10)
       RETURNING *
     `, [billNo, patient_id, docIdToUse, bill_type, subtotal, discAmt, totalAmount, createdBy, package_id || null, resolvedCoupon ? resolvedCoupon.id : null]);
 
@@ -823,57 +861,84 @@ async function createBill(req, res) {
     bill.subtotal = subtotal;
     bill.total_amount = totalAmount;
     bill.paid_amount = 0;
-    bill.payment_status = 'pending';
-    if (resolvedCoupon) {
-      bill.coupon_code = resolvedCoupon.coupon_code;
-      bill.coupon_id = resolvedCoupon.id;
-      bill.discount_amount = discAmt;
+    bill.balance_due = totalAmount;
+    bill.payment_status = 'unpaid';
+    if (resolvedCoupon) { bill.coupon_code = resolvedCoupon.coupon_code; bill.coupon_id = resolvedCoupon.id; bill.discount_amount = discAmt; }
+
+    // ── INSERT BILL ITEMS ─────────────────────────────────────────────────
+    for (const item of allItems) {
+      await client.query(
+        `INSERT INTO bill_items (bill_id, charge_type, description, amount, treatment_plan_id) VALUES ($1, $2, $3, $4, $5)`,
+        [bill.bill_id, item.charge_type, item.description, item.amount, item.treatment_plan_id || null]
+      );
     }
 
-    for (const item of items) {
-      const lineTotal = parseFloat(item.unit_price || item.amount || 0) * parseInt(item.quantity || 1);
-      const chargeType = item.charge_type || item.item_name || 'Service';
-      const desc = item.description || item.item_name || 'Service Item';
-      await client.query(`
-        INSERT INTO bill_items (
-          bill_id, charge_type, description, amount
-        ) VALUES ($1, $2, $3, $4)
-      `, [bill.bill_id, chargeType, desc, lineTotal]);
+    // ── MARK TREATMENT PLANS AS BILLED ───────────────────────────────────
+    if (planRows.length > 0) {
+      const planIds = planRows.map(p => p.treatment_id);
+      await client.query(
+        `UPDATE treatment_plans SET billing_status = 'billed', billed_in_bill_id = $1, updated_at = now() WHERE treatment_id = ANY($2::int[])`,
+        [bill.bill_id, planIds]
+      );
     }
 
-    // Atomic Coupon Redemption
+    // ── COUPON REDEMPTION ─────────────────────────────────────────────────
     if (resolvedCoupon) {
-      await client.query(`
-        UPDATE coupons 
-        SET status = 'redeemed', updated_by = $1, updated_at = now() 
-        WHERE id = $2
-      `, [createdBy, resolvedCoupon.id]);
-
-      await client.query(`
-        INSERT INTO coupon_redemptions (
-          coupon_id, patient_id, bill_id, bill_amount, discount_amount, final_payable, redeemed_by, remarks
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [
-        resolvedCoupon.id,
-        patient_id,
-        bill.bill_id,
-        subtotal,
-        discAmt,
-        totalAmount,
-        createdBy,
-        `Redeemed in PRO Billing (Bill: ${billNo})`
-      ]);
+      await client.query(`UPDATE coupons SET status = 'redeemed', updated_by = $1, updated_at = now() WHERE id = $2`, [createdBy, resolvedCoupon.id]);
+      await client.query(
+        `INSERT INTO coupon_redemptions (coupon_id, patient_id, bill_id, bill_amount, discount_amount, final_payable, redeemed_by, remarks)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [resolvedCoupon.id, patient_id, bill.bill_id, subtotal, discAmt, totalAmount, createdBy, `Redeemed in PRO Billing (Bill: ${billNo})`]
+      );
     }
 
     await client.query('COMMIT');
     res.locals.auditEntry = { module: 'PRO Billing', action: 'Create Bill', recordId: bill.bill_id, newValue: bill };
-    return res.status(201).json(formatResponse(true, bill, resolvedCoupon ? `Bill created and coupon ${resolvedCoupon.coupon_code} redeemed successfully` : 'Bill created successfully'));
+    const msg = resolvedCoupon
+      ? `Bill created and coupon ${resolvedCoupon.coupon_code} redeemed successfully`
+      : planRows.length > 1
+        ? `Consolidated bill created with ${planRows.length} treatment plans`
+        : 'Bill created successfully';
+    return res.status(201).json(formatResponse(true, bill, msg));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('createBill error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   } finally {
     client.release();
+  }
+}
+
+// Get treatment plans for a patient available for billing (consolidated multi-select)
+async function getTreatmentPlansForBilling(req, res) {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!patientId || isNaN(patientId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
+    }
+
+    const result = await db.query(`
+      SELECT
+        tp.treatment_id, tp.treatment_name, tp.treatment_type,
+        tp.duration, tp.duration_unit, tp.start_date, tp.end_date,
+        tp.status, tp.billing_status, tp.billed_in_bill_id, tp.doctor_id,
+        u.full_name as doctor_name, tp.instructions, tp.created_at
+      FROM treatment_plans tp
+      LEFT JOIN doctors d ON tp.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      WHERE tp.patient_id = $1
+      ORDER BY tp.billing_status ASC, tp.treatment_id DESC
+    `, [patientId]);
+
+    const plans = result.rows.map(tp => ({
+      ...tp,
+      is_billable: tp.billing_status === 'awaiting_billing' && tp.status === 'active'
+    }));
+
+    return res.json(formatResponse(true, plans, 'Treatment plans for billing retrieved successfully'));
+  } catch (err) {
+    console.error('getTreatmentPlansForBilling error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
 
@@ -973,6 +1038,30 @@ async function recordPayment(req, res) {
     }
     const bill = billRes.rows[0];
 
+    // ── PAYMENT METHOD VALIDATION ────────────────────────────────────────
+    const VALID_METHODS = ['cash', 'card', 'upi', 'razorpay', 'bajaj_pay'];
+    for (const p of payList) {
+      const m = p.payment_method || p.payment_mode || '';
+      if (!m || !VALID_METHODS.includes(m)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `Invalid payment method "${m}". Allowed: ${VALID_METHODS.join(', ')}`));
+      }
+      if (!p.amount || parseFloat(p.amount) <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, 'Payment amount must be a positive number'));
+      }
+    }
+
+    // ── OVERPAYMENT PROTECTION ────────────────────────────────────────────
+    const prevPayCheck = await client.query(`SELECT COALESCE(SUM(amount), 0) as prev_paid FROM payments WHERE bill_id = $1`, [bill_id]);
+    const prevPaidTotal = parseFloat(prevPayCheck.rows[0].prev_paid);
+    const newPaymentTotal = payList.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
+    if (prevPaidTotal + newPaymentTotal > parseFloat(bill.final_amount) + 0.01) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Payment of ₹${newPaymentTotal} would exceed the remaining due of ₹${(parseFloat(bill.final_amount) - prevPaidTotal).toFixed(2)}`));
+    }
+
+
     // Business Rule: PRO must never collect or record consultation payments (Receptionist responsibility)
     if (bill.bill_type === 'consultation') {
       await client.query('ROLLBACK');
@@ -1054,7 +1143,14 @@ async function recordPayment(req, res) {
       updated_bill_status: newStatus,
       paid_total: newPaidTotal,
       remaining_due: shortfall > 0 ? shortfall : 0,
-      bill: { status: newStatus, due_amount: shortfall > 0 ? shortfall : 0 }
+      bill: {
+        bill_id: bill.bill_id,
+        bill_number: bill.bill_number,
+        final_amount: parseFloat(bill.final_amount),
+        paid_amount: newPaidTotal,
+        balance_due: shortfall > 0 ? shortfall : 0,
+        payment_status: newStatus
+      }
     }, 'Payment recorded successfully'));
   } catch (err) {
     await client.query('ROLLBACK');
@@ -2762,6 +2858,7 @@ module.exports = {
   getPROChecklist,
   completePRO,
   getPatientHistory,
+  getTreatmentPlansForBilling,
   getBillDetails,
   getOperationalReports,
   getProfile,

@@ -17,6 +17,7 @@ router.get('/queue', proController.getPatientQueue);
 router.get('/patients/search', proController.searchPatients);
 
 // 3. Patient 360° Overview & History
+router.get('/patients/:id/treatment-plans-for-billing', proController.getTreatmentPlansForBilling);
 router.get('/patients/:id', proController.getPatientOverview);
 router.get('/patients/:id/overview', proController.getPatientOverview);
 router.get('/patients/:id/history', proController.getPatientHistory);
