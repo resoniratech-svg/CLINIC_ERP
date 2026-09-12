@@ -412,6 +412,9 @@ export const proApi = {
   getBillDetails: (billId) => axiosClient.get(`/pro/bills/${billId}`),
   getOperationalReports: (params) => axiosClient.get('/pro/reports/operational', { params }),
 
+  // 13c. Treatment plans available for billing (consolidated multi-select)
+  getTreatmentPlansForBilling: (patientId) => axiosClient.get(`/pro/patients/${patientId}/treatment-plans-for-billing`),
+
   // 14. PRO Profile
   getProfile: () => axiosClient.get('/pro/profile'),
   updateProfile: (data) => axiosClient.put('/pro/profile', data)

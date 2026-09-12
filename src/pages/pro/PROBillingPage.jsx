@@ -22,6 +22,7 @@ import { proApi, settingsApi, couponsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
+import { PROPaymentModal } from '../../components/common/PROPaymentModal';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 
 const formatCurrency = (val) =>
@@ -72,6 +73,13 @@ const PROBillingPageContent = () => {
   const [patientCoupons, setPatientCoupons] = useState([]);
   const [loadingCoupons, setLoadingCoupons] = useState(false);
   const [selectedCoupon, setSelectedCoupon] = useState(null);
+
+  // Multi-select treatment plan billing state
+  const [selectedPlanIds, setSelectedPlanIds] = useState([]);
+
+  // Inline payment modal state (replaces navigation to /pro/payments)
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentModalBill, setPaymentModalBill] = useState(null);
 
   // Fetch master charge types on mount
   useEffect(() => {
@@ -249,22 +257,57 @@ const PROBillingPageContent = () => {
     }
   }, [searchParams, verifyPatient]);
 
-  const applyTreatmentPlan = (tp) => {
+  // Toggle treatment plan checkbox selection (APPEND/REMOVE - not replace!)
+  const toggleTreatmentPlan = (tp) => {
     if (!tp) return;
+    const planId = tp.treatment_id;
+    const isSelected = selectedPlanIds.includes(planId);
+
+    if (isSelected) {
+      // Deselect: remove plan
+      setSelectedPlanIds(prev => prev.filter(id => id !== planId));
+      setForm(prev => ({
+        ...prev,
+        items: prev.items.filter(it => it.treatment_plan_id !== planId)
+      }));
+    } else {
+      // Select: append plan
+      setSelectedPlanIds(prev => [...prev, planId]);
+      setForm(prev => ({
+        ...prev,
+        bill_type: 'treatment',
+        doctor_id: tp.doctor_id ? String(tp.doctor_id) : prev.doctor_id,
+        items: [
+          ...prev.items.filter(it => it.item_name !== 'Treatment Session' || prev.items.length > 1 || parseFloat(it.unit_price) !== 2000),
+          {
+            item_name: tp.treatment_name || 'Prescribed Treatment',
+            description: tp.treatment_name || 'Prescribed Treatment',
+            charge_type: tp.treatment_type || 'homeopathy',
+            quantity: 1,
+            unit_price: 0,
+            treatment_plan_id: planId
+          }
+        ]
+      }));
+      showToast(`Added "${tp.treatment_name}" to bill`, 'info');
+    }
+  };
+
+  const selectAllPlans = () => {
+    const billable = (prescribedTreatments || []).filter(tp => tp.billing_status !== 'billed');
+    billable.forEach(tp => {
+      if (!selectedPlanIds.includes(tp.treatment_id)) {
+        toggleTreatmentPlan(tp);
+      }
+    });
+  };
+
+  const clearPlanSelections = () => {
+    setSelectedPlanIds([]);
     setForm(prev => ({
       ...prev,
-      bill_type: 'treatment',
-      doctor_id: tp.doctor_id ? String(tp.doctor_id) : prev.doctor_id,
-      items: [
-        {
-          item_name: tp.treatment_name || 'Prescribed Treatment',
-          charge_type: tp.treatment_type || 'Treatment',
-          quantity: 1,
-          unit_price: 2000
-        }
-      ]
+      items: [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 0 }]
     }));
-    showToast(`Applied doctor prescribed treatment: ${tp.treatment_name}`, 'info');
   };
 
   const handlePackageSelect = (pkgId) => {
@@ -447,12 +490,14 @@ const PROBillingPageContent = () => {
         doctor_id: form.doctor_id ? parseInt(form.doctor_id) : 1,
         bill_type: form.bill_type,
         items: form.items.map(it => ({
-          item_name: it.item_name.trim(),
-          description: it.item_name.trim(),
+          item_name: (it.item_name || '').trim(),
+          description: (it.item_name || '').trim(),
           charge_type: it.charge_type || 'Treatment',
           quantity: parseInt(it.quantity || 1),
-          unit_price: parseFloat(it.unit_price || 0)
+          unit_price: parseFloat(it.unit_price || 0),
+          ...(it.treatment_plan_id ? { treatment_plan_id: it.treatment_plan_id } : {})
         })),
+        ...(selectedPlanIds.length > 0 ? { treatment_plan_ids: selectedPlanIds } : {}),
         discount_amount: discount,
         package_id: form.package_id ? parseInt(form.package_id) : null,
         coupon_code: selectedCoupon ? selectedCoupon.coupon_code : undefined,
@@ -475,9 +520,11 @@ const PROBillingPageContent = () => {
           items: [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 2000 }]
         });
         setSelectedCoupon(null);
+        setSelectedPlanIds([]);
         setPatientCoupons([]);
         setPatientLookup({ loading: false, patient: null, error: null });
         setAvailablePackages([]);
+        setPrescribedTreatments([]);
         handleTabChange('pending');
       }
     } catch (err) {
@@ -703,38 +750,80 @@ const PROBillingPageContent = () => {
             </div>
           </div>
 
-          {/* Doctor Prescribed Treatments Banner */}
+          {/* Doctor Prescribed Treatments — Multi-Select Checkbox UI */}
           {prescribedTreatments.length > 0 && (
-            <div className="p-4 bg-blue-50/80 border border-blue-200 rounded-2xl space-y-2">
-              <div className="flex items-center justify-between">
+            <div className="p-4 bg-blue-50/80 border border-blue-200 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
                 <span className="text-xs font-black text-[#1565C0] flex items-center gap-1.5">
                   <Stethoscope className="w-4 h-4 text-[#1565C0]" />
-                  <span>Doctor Prescribed Treatments ({prescribedTreatments.length})</span>
+                  <span>Doctor Prescribed Treatments — Select to Consolidate ({prescribedTreatments.length})</span>
                 </span>
-                {consultingDoctor?.doctor_name && (
-                  <span className="text-[11px] text-slate-600 font-medium">
-                    Prescribed by: <strong>Dr. {consultingDoctor.doctor_name}</strong>
-                  </span>
-                )}
+                <div className="flex items-center gap-3">
+                  {consultingDoctor?.doctor_name && (
+                    <span className="text-[11px] text-slate-600 font-medium">
+                      By: <strong>Dr. {consultingDoctor.doctor_name}</strong>
+                    </span>
+                  )}
+                  {prescribedTreatments.filter(tp => tp.billing_status !== 'billed').length > 0 && (
+                    <button type="button" onClick={selectAllPlans} className="text-[11px] font-bold text-blue-700 hover:underline cursor-pointer">
+                      Select All
+                    </button>
+                  )}
+                  {selectedPlanIds.length > 0 && (
+                    <button type="button" onClick={clearPlanSelections} className="text-[11px] font-bold text-red-600 hover:underline cursor-pointer">
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-slate-600">
-                Click a prescribed plan below to auto-populate invoice line items:
+                Check the plans to include in ONE consolidated bill. Set price per line item below.
               </p>
-              <div className="flex flex-wrap gap-2 pt-1">
-                {prescribedTreatments.map(tp => (
-                  <button
-                    key={tp.treatment_id}
-                    type="button"
-                    onClick={() => applyTreatmentPlan(tp)}
-                    className="px-3 py-1.5 bg-white hover:bg-blue-100 text-[#1565C0] border border-blue-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Apply "{tp.treatment_name}" ({tp.treatment_type || 'Treatment'})</span>
-                  </button>
-                ))}
+              <div className="space-y-2">
+                {prescribedTreatments.map(tp => {
+                  const isAlreadyBilled = tp.billing_status === 'billed';
+                  const isChecked = selectedPlanIds.includes(tp.treatment_id);
+                  return (
+                    <label
+                      key={tp.treatment_id}
+                      className={`flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition select-none ${
+                        isAlreadyBilled
+                          ? 'bg-slate-50 border-slate-200 opacity-50 cursor-not-allowed'
+                          : isChecked
+                          ? 'bg-emerald-50 border-emerald-400 shadow-xs'
+                          : 'bg-white border-blue-200 hover:border-blue-400 hover:bg-blue-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        disabled={isAlreadyBilled}
+                        onChange={() => !isAlreadyBilled && toggleTreatmentPlan(tp)}
+                        className="w-4 h-4 accent-emerald-600 flex-shrink-0"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">{tp.treatment_name}</p>
+                        <p className="text-[11px] text-slate-500 capitalize">{tp.treatment_type} · {tp.duration} {tp.duration_unit}</p>
+                      </div>
+                      {isAlreadyBilled ? (
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-300 px-2 py-0.5 rounded-full flex-shrink-0">✓ BILLED</span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-300 px-2 py-0.5 rounded-full flex-shrink-0">AWAITING</span>
+                      )}
+                    </label>
+                  );
+                })}
               </div>
+              {selectedPlanIds.length > 0 && (
+                <p className="text-xs text-emerald-700 font-bold flex items-center gap-1.5">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  {selectedPlanIds.length} plan(s) selected — set price per line item in the section below
+                </p>
+              )}
             </div>
           )}
+
+
 
           {/* Dynamic Bill Items Section */}
           <div className="space-y-3">
@@ -1129,12 +1218,16 @@ const PROBillingPageContent = () => {
                                 <span>Invoice</span>
                               </button>
                               {!isFullyPaid ? (
-                                <Link
-                                  to={`/pro/payments?bill_id=${b.bill_id}&amount=${dueAmt}`}
-                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition"
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setPaymentModalBill(b);
+                                    setShowPaymentModal(true);
+                                  }}
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition cursor-pointer"
                                 >
                                   Record Payment
-                                </Link>
+                                </button>
                               ) : (
                                 <span className="text-[11px] text-slate-400 font-medium px-1">Settled</span>
                               )}

@@ -29,6 +29,7 @@ import { proApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
+import { PROPaymentModal } from '../../components/common/PROPaymentModal';
 
 const formatCurrency = (val) =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
@@ -47,10 +48,15 @@ export const PROPatientOverviewPage = () => {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState(null);
   const [showInvoiceModal, setShowInvoiceModal] = useState(false);
 
+  // Inline payment modal state (replaces navigation to /pro/payments)
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentModalBill, setPaymentModalBill] = useState(null);
+
   // Search state when no paramPatientId
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [queuePatients, setQueuePatients] = useState([]);
+
 
   useEffect(() => {
     if (paramPatientId) {
@@ -709,12 +715,16 @@ export const PROPatientOverviewPage = () => {
                                   <span>Invoice</span>
                                 </button>
                                 {!isPaid ? (
-                                  <Link
-                                    to={`/pro/payments?bill_id=${b.bill_id}&amount=${due}`}
-                                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition"
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPaymentModalBill(b);
+                                      setShowPaymentModal(true);
+                                    }}
+                                    className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition cursor-pointer"
                                   >
                                     Collect Payment
-                                  </Link>
+                                  </button>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-bold px-1.5">
                                     <CheckCircle className="w-3.5 h-3.5" />
@@ -1199,6 +1209,26 @@ export const PROPatientOverviewPage = () => {
           setSelectedInvoiceId(null);
         }}
       />
+
+      {/* Inline Payment Modal — no page navigation */}
+      {showPaymentModal && paymentModalBill && (
+        <PROPaymentModal
+          isOpen={showPaymentModal}
+          bill={paymentModalBill}
+          billId={paymentModalBill.bill_id}
+          onPaymentRecorded={() => {
+            setShowPaymentModal(false);
+            setPaymentModalBill(null);
+            showToast('Payment recorded successfully!', 'success');
+            // Refresh Patient 360 so financials tab shows updated status
+            if (patientId) loadOverview(patientId);
+          }}
+          onClose={() => {
+            setShowPaymentModal(false);
+            setPaymentModalBill(null);
+          }}
+        />
+      )}
     </div>
   );
 };
