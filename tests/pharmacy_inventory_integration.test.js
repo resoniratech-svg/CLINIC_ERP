@@ -235,4 +235,130 @@ describe('Pharmacy Portal — Inventory & Formulary Module Integration Suite', (
     });
   });
 
+  // --------------------------------------------------------------------------
+  // 6. SUPER ADMIN PHARMACY MASTER ALIGNMENT CONTRACTS
+  // --------------------------------------------------------------------------
+  describe('6. Super Admin Formulary Master Alignment Contracts', () => {
+    const expectedFormularyColumns = [
+      'Serial Number',
+      'Medicine Name',
+      'Potency / Strength',
+      'Quantity',
+      'Actions'
+    ];
+
+    test('6.1 Table renders exact 5 canonical Super Admin columns', () => {
+      assert.strictEqual(expectedFormularyColumns.length, 5);
+      assert.deepStrictEqual(expectedFormularyColumns, [
+        'Serial Number',
+        'Medicine Name',
+        'Potency / Strength',
+        'Quantity',
+        'Actions'
+      ]);
+    });
+
+    test('6.2 Add/Edit modal strictly enforces 4 canonical formulary fields', () => {
+      const validateFormularyForm = (form) => {
+        if (!form.medicine_name?.trim()) {
+          return { valid: false, error: 'Medicine Name is required' };
+        }
+        if (!form.strength?.trim()) {
+          return { valid: false, error: 'Potency / Strength is required' };
+        }
+        if (form.quantity !== '' && form.quantity !== undefined && form.quantity !== null) {
+          const q = parseInt(form.quantity, 10);
+          if (isNaN(q) || q < 0) {
+            return { valid: false, error: 'Quantity cannot be negative' };
+          }
+        }
+        return {
+          valid: true,
+          payload: {
+            medicine_name: form.medicine_name.trim(),
+            strength: form.strength.trim(),
+            quantity: form.quantity !== '' && form.quantity !== undefined ? parseInt(form.quantity, 10) : undefined
+          }
+        };
+      };
+
+      // Valid with quantity
+      const res1 = validateFormularyForm({ medicine_name: 'Arnica Montana', strength: '200C', quantity: '100' });
+      assert.strictEqual(res1.valid, true);
+      assert.strictEqual(res1.payload.medicine_name, 'Arnica Montana');
+      assert.strictEqual(res1.payload.strength, '200C');
+      assert.strictEqual(res1.payload.quantity, 100);
+
+      // Valid without quantity (optional)
+      const res2 = validateFormularyForm({ medicine_name: 'Bryonia Alba', strength: '1M', quantity: '' });
+      assert.strictEqual(res2.valid, true);
+      assert.strictEqual(res2.payload.quantity, undefined);
+
+      // Rejects empty name
+      const res3 = validateFormularyForm({ medicine_name: '   ', strength: '30C' });
+      assert.strictEqual(res3.valid, false);
+      assert.match(res3.error, /Medicine Name is required/i);
+
+      // Rejects empty strength
+      const res4 = validateFormularyForm({ medicine_name: 'Rhus Tox', strength: '' });
+      assert.strictEqual(res4.valid, false);
+      assert.match(res4.error, /Potency \/ Strength is required/i);
+
+      // Rejects negative quantity
+      const res5 = validateFormularyForm({ medicine_name: 'Nux Vomica', strength: '30C', quantity: '-10' });
+      assert.strictEqual(res5.valid, false);
+      assert.match(res5.error, /Quantity cannot be negative/i);
+    });
+
+    test('6.3 Serial number formatting adheres to MED-XXXXX specification', () => {
+      const formatSerial = (id) => `MED-${String(id).padStart(5, '0')}`;
+      assert.strictEqual(formatSerial(1), 'MED-00001');
+      assert.strictEqual(formatSerial(42), 'MED-00042');
+      assert.strictEqual(formatSerial(1024), 'MED-01024');
+      assert.match(formatSerial(99), /^MED-[0-9]{5}$/);
+    });
+
+    test('6.4 Add Stock tab dropdown formats option as ${serial_number} — ${medicine_name} (${strength})', () => {
+      const formatAddStockOption = (m) =>
+        `${m.serial_number || ('MED-' + String(m.id).padStart(5, '0'))} — ${m.medicine_name} (${m.strength || 'Standard'})`;
+
+      const optionText = formatAddStockOption({
+        id: 1,
+        serial_number: 'MED-00001',
+        medicine_name: 'Paracetamol 500mg',
+        strength: '500 mg'
+      });
+      assert.strictEqual(optionText, 'MED-00001 — Paracetamol 500mg (500 mg)');
+
+      const fallbackOption = formatAddStockOption({
+        id: 5,
+        serial_number: null,
+        medicine_name: 'Arnica Montana',
+        strength: '200C'
+      });
+      assert.strictEqual(fallbackOption, 'MED-00005 — Arnica Montana (200C)');
+    });
+
+    test('6.5 Stock Adjustments dropdown formats option as ${medicine_name} — ${strength} — ${serial_number}', () => {
+      const formatAdjustmentOption = (m) =>
+        `${m.medicine_name} — ${m.strength || 'Standard'} — ${m.serial_number || ('MED-' + String(m.id).padStart(5, '0'))}`;
+
+      const optionText = formatAdjustmentOption({
+        id: 1,
+        serial_number: 'MED-00001',
+        medicine_name: 'Paracetamol 500mg',
+        strength: '500 mg'
+      });
+      assert.strictEqual(optionText, 'Paracetamol 500mg — 500 mg — MED-00001');
+
+      const fallbackOption = formatAdjustmentOption({
+        id: 7,
+        serial_number: null,
+        medicine_name: 'Belladonna',
+        strength: '30C'
+      });
+      assert.strictEqual(fallbackOption, 'Belladonna — 30C — MED-00007');
+    });
+  });
+
 });

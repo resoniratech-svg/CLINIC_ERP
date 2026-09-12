@@ -16,6 +16,7 @@ import {
   Download,
   Search,
   Edit2,
+  Edit3,
   RefreshCw,
   Eye,
   Clock
@@ -40,15 +41,12 @@ export const PharmacyInventoryHubPage = () => {
   const [editingMed, setEditingMed] = useState(null);
   const [medFormData, setMedFormData] = useState({
     medicine_name: '',
-    generic_name: '',
-    medicine_type: 'dilution',
-    strength: '30C',
-    unit: 'bottle',
-    category: 'Homeopathic Dilution',
-    manufacturer: 'Dr. Reckeweg',
-    reorder_level: 20,
-    status: 'active',
+    strength: '',
+    quantity: '',
   });
+  const [nextSerial, setNextSerial] = useState('');
+  const [loadingSerial, setLoadingSerial] = useState(false);
+  const [savingMed, setSavingMed] = useState(false);
 
   // Stock Detail Modal state
   const [selectedMedStock, setSelectedMedStock] = useState(null);
@@ -134,68 +132,95 @@ export const PharmacyInventoryHubPage = () => {
   }, [activeTab, search]);
 
   // Handlers for Medicine Master
-  const handleOpenMedModal = (med = null) => {
+  const handleOpenMedModal = async (med = null) => {
     if (med) {
       setEditingMed(med);
       setMedFormData({
         medicine_name: med.medicine_name || '',
-        generic_name: med.generic_name || '',
-        medicine_type: med.medicine_type || 'dilution',
-        strength: med.strength || '30C',
-        unit: med.unit || 'bottle',
-        category: med.category || 'Homeopathic Dilution',
-        manufacturer: med.manufacturer || 'Dr. Reckeweg',
-        reorder_level: med.reorder_level || 20,
-        status: med.status || 'active',
+        strength: med.strength || '',
+        quantity: med.quantity !== null && med.quantity !== undefined ? med.quantity : '',
+        serial_number: med.serial_number || `MED-${String(med.id).padStart(5, '0')}`,
       });
+      setIsMedModalOpen(true);
     } else {
       setEditingMed(null);
       setMedFormData({
         medicine_name: '',
-        generic_name: '',
-        medicine_type: 'dilution',
-        strength: '30C',
-        unit: 'bottle',
-        category: 'Homeopathic Dilution',
-        manufacturer: 'Dr. Reckeweg',
-        reorder_level: 20,
-        status: 'active',
+        strength: '',
+        quantity: '',
       });
+      setNextSerial('Loading...');
+      setLoadingSerial(true);
+      setIsMedModalOpen(true);
+      try {
+        const res = await pharmacyApi.getNextMedicineSerial();
+        if (res.success && res.data?.serial_number) {
+          setNextSerial(res.data.serial_number);
+        } else {
+          setNextSerial('AUTOMATICALLY GENERATED');
+        }
+      } catch (e) {
+        setNextSerial('AUTOMATICALLY GENERATED');
+      } finally {
+        setLoadingSerial(false);
+      }
     }
-    setIsMedModalOpen(true);
   };
 
   const handleSaveMedicine = async (e) => {
     e.preventDefault();
     if (!medFormData.medicine_name.trim()) {
-      showToast('Medicine name is required', 'warning');
+      showToast('Medicine Name is required', 'warning');
+      return;
+    }
+    if (!medFormData.strength.trim()) {
+      showToast('Potency / Strength is required', 'warning');
+      return;
+    }
+    if (medFormData.quantity !== '' && parseInt(medFormData.quantity, 10) < 0) {
+      showToast('Quantity cannot be negative', 'warning');
       return;
     }
 
+    setSavingMed(true);
     try {
       if (editingMed) {
         const res = await pharmacyApi.updateMedicine(editingMed.id, {
-          ...medFormData,
-          reorder_level: parseInt(medFormData.reorder_level) || 10,
+          medicine_name: medFormData.medicine_name.trim(),
+          strength: medFormData.strength.trim(),
+          quantity: medFormData.quantity !== '' ? parseInt(medFormData.quantity, 10) : undefined,
         });
         if (res.success) {
-          showToast('Medicine catalog item updated', 'success');
+          showToast(res.message || 'Medicine details updated successfully', 'success');
           setIsMedModalOpen(false);
+          setEditingMed(null);
           fetchData();
+        } else {
+          showToast(res.message || 'Failed to update medicine', 'error');
         }
       } else {
         const res = await pharmacyApi.createMedicine({
-          ...medFormData,
-          reorder_level: parseInt(medFormData.reorder_level) || 10,
+          medicine_name: medFormData.medicine_name.trim(),
+          strength: medFormData.strength.trim(),
+          quantity: medFormData.quantity !== '' ? parseInt(medFormData.quantity, 10) : undefined,
         });
         if (res.success) {
-          showToast('New medicine added to catalog', 'success');
+          showToast(res.message || `Medicine added to formulary: ${res.data?.serial_number || res.data?.medicine_name}`, 'success');
           setIsMedModalOpen(false);
+          setMedFormData({
+            medicine_name: '',
+            strength: '',
+            quantity: '',
+          });
           fetchData();
+        } else {
+          showToast(res.message || 'Failed to add medicine', 'error');
         }
       }
     } catch (err) {
-      showToast(err.message || 'Failed to save medicine', 'error');
+      showToast(err.response?.data?.message || err.message || 'Failed to save medicine', 'error');
+    } finally {
+      setSavingMed(false);
     }
   };
 
@@ -474,50 +499,54 @@ export const PharmacyInventoryHubPage = () => {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
+                <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider">
-                      <th className="p-4">ID</th>
-                      <th className="p-4">Medicine Name</th>
-                      <th className="p-4">Generic Name</th>
-                      <th className="p-4">Potency / Strength</th>
-                      <th className="p-4">Unit</th>
-                      <th className="p-4">Category</th>
-                      <th className="p-4">Manufacturer</th>
-                      <th className="p-4">Reorder Level</th>
-                      <th className="p-4 text-right">Actions</th>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      <th className="py-3.5 px-4">Serial Number</th>
+                      <th className="py-3.5 px-4">Medicine Name</th>
+                      <th className="py-3.5 px-4">Potency / Strength</th>
+                      <th className="py-3.5 px-4">Quantity</th>
+                      <th className="py-3.5 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-slate-100 text-xs">
                     {medicines.map((m) => (
-                      <tr key={m.id} className="hover:bg-slate-50/70 transition">
-                        <td className="p-4 font-bold text-slate-400">#{m.id}</td>
-                        <td className="p-4 font-bold text-slate-800 text-sm">{m.medicine_name}</td>
-                        <td className="p-4 text-slate-500">{m.generic_name || '—'}</td>
-                        <td className="p-4">
-                          <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">
-                            {m.strength || 'Standard'}
+                      <tr key={m.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3.5 px-4 font-mono font-bold">
+                          <span className="font-bold text-blue-700 bg-blue-50 px-2 py-1 rounded-lg border border-blue-200 text-xs inline-block">
+                            {m.serial_number || `MED-${String(m.id).padStart(5, '0')}`}
                           </span>
                         </td>
-                        <td className="p-4 text-slate-600">{m.unit || 'pcs'}</td>
-                        <td className="p-4 text-slate-600">{m.category || 'Homeopathy'}</td>
-                        <td className="p-4 text-slate-600">{m.manufacturer || 'Dr. Reckeweg'}</td>
-                        <td className="p-4 font-bold text-amber-700">{m.reorder_level || 10}</td>
-                        <td className="p-4 text-right">
-                          <div className="inline-flex items-center gap-1 justify-end">
+                        <td className="py-3.5 px-4 font-bold text-slate-900">
+                          <div>{m.medicine_name}</div>
+                        </td>
+                        <td className="py-3.5 px-4 font-mono font-semibold text-slate-700">
+                          {m.strength || '—'}
+                        </td>
+                        <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
+                          {m.quantity !== null && m.quantity !== undefined ? (
+                            <span>{m.quantity}</span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">—</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
                             <button
+                              type="button"
                               onClick={() => handleViewStockDetail(m)}
-                              className="inline-flex items-center gap-1 p-1.5 text-slate-600 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition"
-                              title="View Stock Batches"
+                              title="View Details"
+                              className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
                             <button
+                              type="button"
                               onClick={() => handleOpenMedModal(m)}
-                              className="inline-flex items-center gap-1 p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition"
-                              title="Edit Medicine"
+                              title="Edit Formulary Item"
+                              className="p-1.5 text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
                             >
-                              <Edit2 className="w-4 h-4" />
+                              <Edit3 className="w-4 h-4" />
                             </button>
                           </div>
                         </td>
@@ -681,7 +710,7 @@ export const PharmacyInventoryHubPage = () => {
                 <option value="">Select Medicine...</option>
                 {medicines.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.medicine_name} — {m.strength || '30C'} ({m.category || 'Dilution'})
+                    {m.serial_number || `MED-${String(m.id).padStart(5, '0')}`} — {m.medicine_name} ({m.strength || 'Standard'})
                   </option>
                 ))}
               </select>
@@ -1100,118 +1129,86 @@ export const PharmacyInventoryHubPage = () => {
       <Modal
         isOpen={isMedModalOpen}
         onClose={() => setIsMedModalOpen(false)}
-        title={editingMed ? 'Edit Medicine Master Item' : 'Add New Medicine to Formulary'}
+        title={editingMed ? `Edit Formulary Item: ${editingMed?.medicine_name}` : 'Add Medicine to Pharmacy Formulary'}
+        maxWidth="max-w-md"
       >
-        <form onSubmit={handleSaveMedicine} className="space-y-4">
+        <form onSubmit={handleSaveMedicine} className="space-y-4 text-xs text-slate-700">
           <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
               Medicine Name *
             </label>
             <input
               type="text"
+              required
               value={medFormData.medicine_name}
               onChange={(e) => setMedFormData({ ...medFormData, medicine_name: e.target.value })}
               placeholder="e.g. Arnica Montana"
-              className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              required
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none font-semibold"
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Generic Name
-              </label>
-              <input
-                type="text"
-                value={medFormData.generic_name}
-                onChange={(e) => setMedFormData({ ...medFormData, generic_name: e.target.value })}
-                placeholder="e.g. Leopard's Bane"
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Potency / Strength
-              </label>
-              <input
-                type="text"
-                value={medFormData.strength}
-                onChange={(e) => setMedFormData({ ...medFormData, strength: e.target.value })}
-                placeholder="e.g. 30C, 200CH, 1M"
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
+          <div>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Potency / Strength *
+            </label>
+            <input
+              type="text"
+              required
+              value={medFormData.strength}
+              onChange={(e) => setMedFormData({ ...medFormData, strength: e.target.value })}
+              placeholder="e.g. 30C, 200C, 1M, Q"
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Unit</label>
-              <input
-                type="text"
-                value={medFormData.unit}
-                onChange={(e) => setMedFormData({ ...medFormData, unit: e.target.value })}
-                placeholder="e.g. bottle, vial, box"
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Category
-              </label>
-              <input
-                type="text"
-                value={medFormData.category}
-                onChange={(e) => setMedFormData({ ...medFormData, category: e.target.value })}
-                placeholder="e.g. Homeopathic Dilution"
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
+          <div>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Quantity (Optional)
+            </label>
+            <input
+              type="number"
+              min="0"
+              value={medFormData.quantity ?? ''}
+              onChange={(e) => setMedFormData({ ...medFormData, quantity: e.target.value })}
+              placeholder="e.g. 100 (leave empty if no initial stock)"
+              className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Manufacturer
-              </label>
-              <input
-                type="text"
-                value={medFormData.manufacturer}
-                onChange={(e) => setMedFormData({ ...medFormData, manufacturer: e.target.value })}
-                placeholder="e.g. Dr. Reckeweg, SBL"
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Reorder Threshold
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={medFormData.reorder_level}
-                onChange={(e) => setMedFormData({ ...medFormData, reorder_level: e.target.value })}
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              />
-            </div>
+          <div>
+            <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
+              Serial Number
+            </label>
+            <input
+              type="text"
+              readOnly
+              disabled
+              value={editingMed ? (medFormData.serial_number || '') : (nextSerial || 'AUTOMATICALLY GENERATED')}
+              className="w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border border-slate-200 bg-slate-100 text-slate-600 cursor-not-allowed select-none"
+            />
+            <p className="text-[10px] text-slate-400 mt-1">
+              AUTOMATICALLY GENERATED — READ ONLY
+            </p>
           </div>
 
-          <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+          <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-200">
             <button
               type="button"
               onClick={() => setIsMedModalOpen(false)}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+              className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl font-medium cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs transition"
+              disabled={savingMed}
+              className={`px-5 py-2.5 text-white font-bold rounded-xl shadow-xs disabled:opacity-50 cursor-pointer ${
+                editingMed ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
-              Save Medicine
+              {savingMed
+                ? (editingMed ? 'Saving Changes...' : 'Saving to Formulary...')
+                : (editingMed ? 'Save Changes' : 'Save to Formulary')}
             </button>
           </div>
         </form>
@@ -1231,20 +1228,22 @@ export const PharmacyInventoryHubPage = () => {
           {selectedMedStock?.medicine && (
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs">
               <div>
-                <span className="text-2xs text-slate-400 uppercase font-bold block">Generic</span>
-                <span className="font-semibold text-slate-700">{selectedMedStock.medicine.generic_name || '—'}</span>
+                <span className="text-2xs text-slate-400 uppercase font-bold block">Medicine Name</span>
+                <span className="font-bold text-slate-800 truncate block">{selectedMedStock.medicine.medicine_name}</span>
               </div>
               <div>
-                <span className="text-2xs text-slate-400 uppercase font-bold block">Category</span>
-                <span className="font-semibold text-slate-700">{selectedMedStock.medicine.category || 'Homeopathy'}</span>
+                <span className="text-2xs text-slate-400 uppercase font-bold block">Serial Number</span>
+                <span className="font-mono font-bold text-blue-700">
+                  {selectedMedStock.medicine.serial_number || `MED-${String(selectedMedStock.medicine.id || 0).padStart(5, '0')}`}
+                </span>
               </div>
               <div>
-                <span className="text-2xs text-slate-400 uppercase font-bold block">Unit</span>
-                <span className="font-semibold text-slate-700">{selectedMedStock.medicine.unit || 'pcs'}</span>
+                <span className="text-2xs text-slate-400 uppercase font-bold block">Potency / Strength</span>
+                <span className="font-semibold text-slate-700">{selectedMedStock.medicine.strength || '—'}</span>
               </div>
               <div>
-                <span className="text-2xs text-slate-400 uppercase font-bold block">Reorder Level</span>
-                <span className="font-bold text-amber-700">{selectedMedStock.medicine.reorder_level || 10} units</span>
+                <span className="text-2xs text-slate-400 uppercase font-bold block">Total Stock</span>
+                <span className="font-bold text-emerald-700">{selectedMedStock.batches?.reduce((acc, b) => acc + (parseInt(b.quantity, 10) || 0), 0) ?? 0} units</span>
               </div>
             </div>
           )}

@@ -387,7 +387,14 @@ export const StockAdjustmentsPage = () => {
                       </td>
                       <td className="p-4">
                         <div className="font-bold text-slate-800 text-sm">{a.medicine_name}</div>
-                        <div className="text-slate-400 text-2xs">{a.potency || '30C'}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {a.serial_number && (
+                            <span className="font-mono text-[10px] font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200">
+                              {a.serial_number}
+                            </span>
+                          )}
+                          <span className="text-slate-500 font-mono text-2xs">{a.potency || '30C'}</span>
+                        </div>
                       </td>
                       <td className="p-4 font-mono font-semibold text-slate-700">{a.batch_number || 'N/A'}</td>
                       <td className="p-4 text-center font-semibold text-slate-600">{a.system_quantity}</td>
@@ -483,7 +490,7 @@ export const StockAdjustmentsPage = () => {
               <option value="">Select Medicine...</option>
               {medicines.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.medicine_name} {m.strength && `— ${m.strength}`} ({m.dosage_form || 'Form'})
+                  {m.medicine_name} — {m.strength || 'Standard'} — {m.serial_number || `MED-${String(m.id).padStart(5, '0')}`}
                 </option>
               ))}
             </select>
