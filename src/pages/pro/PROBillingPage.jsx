@@ -264,7 +264,7 @@ const PROBillingPageContent = () => {
     const isSelected = selectedPlanIds.includes(planId);
 
     if (isSelected) {
-      // Deselect: remove plan
+      // Deselect: remove this plan's item
       setSelectedPlanIds(prev => prev.filter(id => id !== planId));
       setForm(prev => ({
         ...prev,
@@ -273,25 +273,36 @@ const PROBillingPageContent = () => {
     } else {
       // Select: append plan
       setSelectedPlanIds(prev => [...prev, planId]);
-      setForm(prev => ({
-        ...prev,
-        bill_type: 'treatment',
-        doctor_id: tp.doctor_id ? String(tp.doctor_id) : prev.doctor_id,
-        items: [
-          ...prev.items.filter(it => it.item_name !== 'Treatment Session' || prev.items.length > 1 || parseFloat(it.unit_price) !== 2000),
-          {
-            item_name: tp.treatment_name || 'Prescribed Treatment',
-            description: tp.treatment_name || 'Prescribed Treatment',
-            charge_type: tp.treatment_type || 'homeopathy',
-            quantity: 1,
-            unit_price: 0,
-            treatment_plan_id: planId
-          }
-        ]
-      }));
+      setForm(prev => {
+        // If this is the FIRST plan being selected, clear all unlinked items
+        // (they are either the default "Treatment Session" or URL-prepopulated items).
+        // If plans are already selected, keep existing items so manual rows are preserved.
+        const hasExistingPlanItems = prev.items.some(it => it.treatment_plan_id);
+        const baseItems = hasExistingPlanItems
+          ? prev.items                                     // already has plans — keep everything
+          : prev.items.filter(it => it.treatment_plan_id); // first plan — discard non-plan rows
+
+        return {
+          ...prev,
+          bill_type: 'treatment',
+          doctor_id: tp.doctor_id ? String(tp.doctor_id) : prev.doctor_id,
+          items: [
+            ...baseItems,
+            {
+              item_name: tp.treatment_name || 'Prescribed Treatment',
+              description: tp.treatment_name || 'Prescribed Treatment',
+              charge_type: tp.treatment_type || 'homeopathy',
+              quantity: 1,
+              unit_price: 0,
+              treatment_plan_id: planId
+            }
+          ]
+        };
+      });
       showToast(`Added "${tp.treatment_name}" to bill`, 'info');
     }
   };
+
 
   const selectAllPlans = () => {
     const billable = (prescribedTreatments || []).filter(tp => tp.billing_status !== 'billed');
