@@ -731,6 +731,18 @@ async function createBill(req, res) {
 
     // ── TREATMENT PLAN CONSOLIDATION ──────────────────────────────────────
     let planRows = [];
+
+    // Detect whether the new columns exist on this DB (production may not be migrated yet)
+    const colCheck = await client.query(`
+      SELECT
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'treatment_plans' AND column_name = 'billing_status')    AS has_billing_status,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'treatment_plans' AND column_name = 'billed_in_bill_id') AS has_billed_in_bill_id,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'bill_items'      AND column_name = 'treatment_plan_id')  AS has_treatment_plan_id
+    `);
+    const hasBillingStatus   = colCheck.rows[0].has_billing_status;
+    const hasBilledInBillId  = colCheck.rows[0].has_billed_in_bill_id;
+    const hasTreatmentPlanId = colCheck.rows[0].has_treatment_plan_id;
+
     if (treatment_plan_ids && Array.isArray(treatment_plan_ids) && treatment_plan_ids.length > 0) {
       const cleanIds = treatment_plan_ids.map(id => parseInt(id, 10)).filter(id => !isNaN(id) && id > 0);
       if (cleanIds.length === 0) {
@@ -738,9 +750,13 @@ async function createBill(req, res) {
         return res.status(400).json(formatResponse(false, null, 'treatment_plan_ids must be valid positive integers'));
       }
 
+      // Build SELECT dynamically — only request billing_status if column exists
+      const selectCols = hasBillingStatus
+        ? 'treatment_id, patient_id, treatment_name, treatment_type, billing_status'
+        : 'treatment_id, patient_id, treatment_name, treatment_type';
+
       const planRes = await client.query(
-        `SELECT treatment_id, patient_id, treatment_name, treatment_type, billing_status
-         FROM treatment_plans WHERE treatment_id = ANY($1::int[]) FOR UPDATE`,
+        `SELECT ${selectCols} FROM treatment_plans WHERE treatment_id = ANY($1::int[]) FOR UPDATE`,
         [cleanIds]
       );
 
@@ -754,7 +770,8 @@ async function createBill(req, res) {
           await client.query('ROLLBACK');
           return res.status(400).json(formatResponse(false, null, `Treatment plan "${plan.treatment_name}" does not belong to patient #${patient_id}`));
         }
-        if (plan.billing_status === 'billed') {
+        // Duplicate-billing check — only possible if column exists
+        if (hasBillingStatus && plan.billing_status === 'billed') {
           await client.query('ROLLBACK');
           return res.status(409).json(formatResponse(false, null, `Treatment plan "${plan.treatment_name}" has already been billed. Duplicate billing is not allowed.`));
         }
@@ -785,7 +802,7 @@ async function createBill(req, res) {
           charge_type: plan.treatment_type || itemForPlan.charge_type || 'homeopathy',
           description: plan.treatment_name,
           amount: price,
-          treatment_plan_id: plan.treatment_id
+          treatment_plan_id: hasTreatmentPlanId ? plan.treatment_id : null
         });
       });
       manualItems
@@ -797,7 +814,7 @@ async function createBill(req, res) {
         });
     } else if (planRows.length > 0) {
       planRows.forEach(plan => {
-        allItems.push({ charge_type: plan.treatment_type || 'homeopathy', description: plan.treatment_name, amount: 0, treatment_plan_id: plan.treatment_id });
+        allItems.push({ charge_type: plan.treatment_type || 'homeopathy', description: plan.treatment_name, amount: 0, treatment_plan_id: hasTreatmentPlanId ? plan.treatment_id : null });
       });
     } else {
       for (const it of manualItems) {
@@ -867,19 +884,30 @@ async function createBill(req, res) {
 
     // ── INSERT BILL ITEMS ─────────────────────────────────────────────────
     for (const item of allItems) {
-      await client.query(
-        `INSERT INTO bill_items (bill_id, charge_type, description, amount, treatment_plan_id) VALUES ($1, $2, $3, $4, $5)`,
-        [bill.bill_id, item.charge_type, item.description, item.amount, item.treatment_plan_id || null]
-      );
+      if (hasTreatmentPlanId) {
+        await client.query(
+          `INSERT INTO bill_items (bill_id, charge_type, description, amount, treatment_plan_id) VALUES ($1, $2, $3, $4, $5)`,
+          [bill.bill_id, item.charge_type, item.description, item.amount, item.treatment_plan_id || null]
+        );
+      } else {
+        // Production DB not yet migrated — insert without treatment_plan_id
+        await client.query(
+          `INSERT INTO bill_items (bill_id, charge_type, description, amount) VALUES ($1, $2, $3, $4)`,
+          [bill.bill_id, item.charge_type, item.description, item.amount]
+        );
+      }
     }
 
     // ── MARK TREATMENT PLANS AS BILLED ───────────────────────────────────
     if (planRows.length > 0) {
       const planIds = planRows.map(p => p.treatment_id);
-      await client.query(
-        `UPDATE treatment_plans SET billing_status = 'billed', billed_in_bill_id = $1, updated_at = now() WHERE treatment_id = ANY($2::int[])`,
-        [bill.bill_id, planIds]
-      );
+      if (hasBillingStatus && hasBilledInBillId) {
+        await client.query(
+          `UPDATE treatment_plans SET billing_status = 'billed', billed_in_bill_id = $1, updated_at = now() WHERE treatment_id = ANY($2::int[])`,
+          [bill.bill_id, planIds]
+        );
+      }
+      // If columns don't exist yet, skip silently — migration will add them later
     }
 
     // ── COUPON REDEMPTION ─────────────────────────────────────────────────
@@ -917,17 +945,33 @@ async function getTreatmentPlansForBilling(req, res) {
       return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
     }
 
+    // Detect schema columns
+    const colCheck = await db.query(`
+      SELECT
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'treatment_plans' AND column_name = 'billing_status')    AS has_billing_status,
+        EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'treatment_plans' AND column_name = 'billed_in_bill_id') AS has_billed_in_bill_id
+    `);
+    const hasBillingStatus  = colCheck.rows[0].has_billing_status;
+    const hasBilledInBillId = colCheck.rows[0].has_billed_in_bill_id;
+
+    const extraCols = [
+      hasBillingStatus  ? 'tp.billing_status'    : `'awaiting_billing' AS billing_status`,
+      hasBilledInBillId ? 'tp.billed_in_bill_id' : `NULL AS billed_in_bill_id`
+    ].join(', ');
+
+    const orderBy = hasBillingStatus ? 'tp.billing_status ASC, tp.treatment_id DESC' : 'tp.treatment_id DESC';
+
     const result = await db.query(`
       SELECT
         tp.treatment_id, tp.treatment_name, tp.treatment_type,
         tp.duration, tp.duration_unit, tp.start_date, tp.end_date,
-        tp.status, tp.billing_status, tp.billed_in_bill_id, tp.doctor_id,
+        tp.status, ${extraCols}, tp.doctor_id,
         u.full_name as doctor_name, tp.instructions, tp.created_at
       FROM treatment_plans tp
       LEFT JOIN doctors d ON tp.doctor_id = d.doctor_id
       LEFT JOIN users u ON d.user_id = u.user_id
       WHERE tp.patient_id = $1
-      ORDER BY tp.billing_status ASC, tp.treatment_id DESC
+      ORDER BY ${orderBy}
     `, [patientId]);
 
     const plans = result.rows.map(tp => ({
