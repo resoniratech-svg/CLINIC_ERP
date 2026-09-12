@@ -121,12 +121,12 @@ export function LoginHistoryPage() {
                       <td className="px-6 py-4">
                         <div className="font-bold text-slate-900">{log.full_name || log.username || 'User'}</div>
                         <div className="text-[11px] text-slate-400 font-mono">
-                          {log.employee_id || 'EMP000'} • @{log.username || 'admin'}
+                          {log.employee_id || 'EMP000'} • @{log.username || 'user'}
                         </div>
                       </td>
                       <td className="px-6 py-4">
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold text-indigo-600 bg-indigo-50 border border-indigo-100 capitalize">
-                          {log.role ? log.role.replace('_', ' ') : 'super admin'}
+                          {log.role ? log.role.replace('_', ' ') : 'user'}
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-slate-500 font-medium">

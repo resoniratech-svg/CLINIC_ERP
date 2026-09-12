@@ -40,6 +40,14 @@ export const AuthProvider = ({ children }) => {
       setUser(null);
       localStorage.removeItem('clinic_token');
       localStorage.removeItem('clinic_user');
+      localStorage.removeItem('username');
+      localStorage.removeItem('password');
+      localStorage.removeItem('remember_me');
+      try {
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.clear();
+        }
+      } catch (e) {}
     }
   };
 

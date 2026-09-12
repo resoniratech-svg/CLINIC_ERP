@@ -339,7 +339,7 @@ export const ProfileSettingsPage = () => {
               <div className="pt-4 border-t border-slate-100 space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400 font-medium">Username</span>
-                  <span className="font-mono font-bold text-slate-800">@{displayUser?.username || 'admin'}</span>
+                  <span className="font-mono font-bold text-slate-800">@{displayUser?.username || 'user'}</span>
                 </div>
 
                 <div className="flex justify-between items-center">

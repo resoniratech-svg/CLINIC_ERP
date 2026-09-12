@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -7,15 +7,15 @@ import { ChangePasswordModal } from './ChangePasswordModal';
 import { ShieldCheck, Lock, User, Loader2, ArrowRight } from 'lucide-react';
 
 export const LoginPage = () => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('SuperAdmin@123');
-  const [rememberMe, setRememberMe] = useState(true);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
   const [isMustChangeOpen, setIsMustChangeOpen] = useState(false);
   const [pendingUser, setPendingUser] = useState(null);
 
-  const { login } = useAuth();
+  const { login, user, token } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -42,6 +42,12 @@ export const LoginPage = () => {
     }
   };
 
+
+  useEffect(() => {
+    if (token && user) {
+      routeUser(user);
+    }
+  }, [token, user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -93,7 +99,7 @@ export const LoginPage = () => {
           {/* Login Form */}
           <form onSubmit={handleSubmit} className="p-8 space-y-5">
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              <label htmlFor="username" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 Username or Mobile
               </label>
               <div className="relative">
@@ -101,18 +107,21 @@ export const LoginPage = () => {
                   <User className="w-4 h-4" />
                 </div>
                 <input
+                  id="username"
+                  name="username"
                   type="text"
                   required
+                  autoComplete="username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
-                  placeholder="admin"
+                  placeholder="Enter username or mobile"
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+              <label htmlFor="password" className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 Password
               </label>
               <div className="relative">
@@ -120,11 +129,14 @@ export const LoginPage = () => {
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
+                  id="password"
+                  name="password"
                   type="password"
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="Enter password"
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 />
               </div>

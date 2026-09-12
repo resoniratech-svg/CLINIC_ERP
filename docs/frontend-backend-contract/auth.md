@@ -7,8 +7,8 @@
 - **Request Body**:
   ```json
   {
-    "username": "admin",
-    "password": "SuperAdmin@123"
+    "username": "user",
+    "password": "<user_password>"
   }
   ```
 - **Response Structure (200 OK)**:
