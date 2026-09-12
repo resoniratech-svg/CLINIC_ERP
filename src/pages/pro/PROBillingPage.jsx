@@ -1454,6 +1454,22 @@ const PROBillingPageContent = () => {
           setSelectedInvoiceId(null);
         }}
       />
+
+      {/* Inline Payment Modal — opened by Record Payment button on pending/partial bills */}
+      <PROPaymentModal
+        isOpen={showPaymentModal}
+        billId={paymentModalBill?.bill_id}
+        bill={paymentModalBill}
+        onPaymentRecorded={() => {
+          setShowPaymentModal(false);
+          setPaymentModalBill(null);
+          fetchBills(activeTab);
+        }}
+        onClose={() => {
+          setShowPaymentModal(false);
+          setPaymentModalBill(null);
+        }}
+      />
     </div>
   );
 };
