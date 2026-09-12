@@ -23,6 +23,7 @@ router.get('/patient-queue', authorizeRoles('doctor', 'super_admin'), doctorCont
 
 // Doctors directory & slots
 router.get('/doctors', authorizeRoles('doctor', 'super_admin'), doctorController.getActiveDoctors);
+router.get('/active-doctors', authorizeRoles('doctor', 'super_admin'), doctorController.getActiveDoctors);
 router.get('/doctors/:id/available-slots', authorizeRoles('doctor', 'super_admin'), doctorController.getDoctorAvailableSlots);
 
 // Patient Search & Overview

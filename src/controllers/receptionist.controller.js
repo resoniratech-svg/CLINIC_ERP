@@ -810,9 +810,9 @@ async function updatePatient(req, res) {
     let cleanAge = currentPatient.age;
     if (age !== undefined && age !== null && age !== '') {
       const parsedAge = parseInt(age);
-      if (isNaN(parsedAge) || parsedAge <= 0 || parsedAge > 120) {
+      if (isNaN(parsedAge) || parsedAge < 0 || parsedAge > 120) {
         await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, 'Age must be a valid number between 1 and 120'));
+        return res.status(400).json(formatResponse(false, null, 'Age must be a valid number between 0 and 120'));
       }
       cleanAge = parsedAge;
     }

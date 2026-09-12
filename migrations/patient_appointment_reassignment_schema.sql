@@ -3,14 +3,18 @@
 -- Database: hospital_erp_db
 -- ============================================================
 
--- 1. Safely add nullable appointment_id foreign key to bills table
+-- 1. Safely add nullable appointment_id foreign key to bills table with ON DELETE SET NULL
 DO $$ 
 BEGIN 
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns 
         WHERE table_name = 'bills' AND column_name = 'appointment_id'
     ) THEN
-        ALTER TABLE bills ADD COLUMN appointment_id INTEGER REFERENCES appointments(appointment_id);
+        ALTER TABLE bills ADD COLUMN appointment_id INTEGER REFERENCES appointments(appointment_id) ON DELETE SET NULL;
+    ELSE
+        -- Ensure existing constraint has ON DELETE SET NULL
+        ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_appointment_id_fkey;
+        ALTER TABLE bills ADD CONSTRAINT bills_appointment_id_fkey FOREIGN KEY (appointment_id) REFERENCES appointments(appointment_id) ON DELETE SET NULL;
     END IF;
 END $$;
 

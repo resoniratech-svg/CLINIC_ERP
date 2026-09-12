@@ -124,7 +124,7 @@ async function createUser(req, res) {
     }
 
     const passHash = await bcrypt.hash(password, 10);
-    const branchId = req.user.branch_id || 1;
+    const branchId = req.body.branch_id || req.user.branch_id || 1;
     const cleanRole = role.trim();
 
     const userRes = await client.query(`
