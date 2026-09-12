@@ -168,7 +168,7 @@ export const ReassignDoctorModal = ({
             <div className="text-right">
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Current Appointment</span>
               <span className="font-semibold text-slate-800">
-                {appointment.appointment_date} at {appointment.appointment_time?.slice(0, 5)}
+                {String(appointment.appointment_date).slice(0, 10)} at {appointment.appointment_time?.slice(0, 5)}
               </span>
             </div>
           </div>

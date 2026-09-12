@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { doctorApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { CalendarDays, Search, RefreshCw, Stethoscope, User, Clock, RotateCcw } from 'lucide-react';
+import { CalendarDays, Search, RefreshCw, Stethoscope, User, Clock, RotateCcw, ListChecks } from 'lucide-react';
 import { ReassignDoctorModal } from '../../components/common/ReassignDoctorModal';
 
 const statusColors = {
@@ -23,6 +23,7 @@ export const DoctorAppointmentsPage = () => {
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [viewMode, setViewMode] = useState('date'); // 'date' | 'upcoming'
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -35,8 +36,13 @@ export const DoctorAppointmentsPage = () => {
   const fetchAppointments = async () => {
     setLoading(true);
     try {
-      const res = await doctorApi.getTodayAppointments({ date });
-      if (res.success) setAppointments(res.data || []);
+      if (viewMode === 'upcoming') {
+        const res = await doctorApi.getUpcomingAppointments();
+        if (res.success) setAppointments(res.data || []);
+      } else {
+        const res = await doctorApi.getTodayAppointments({ date });
+        if (res.success) setAppointments(res.data || []);
+      }
     } catch (err) {
       showToast('Failed to fetch appointments', 'error');
     } finally {
@@ -44,7 +50,7 @@ export const DoctorAppointmentsPage = () => {
     }
   };
 
-  useEffect(() => { fetchAppointments(); }, [date]);
+  useEffect(() => { fetchAppointments(); }, [date, viewMode]);
 
   const handleStartConsultation = async (appt) => {
     setStartingId(appt.appointment_id);
@@ -127,43 +133,86 @@ export const DoctorAppointmentsPage = () => {
             <CalendarDays className="w-6 h-6 text-emerald-600" />
             Appointments
           </h1>
-          <p className="text-xs text-slate-500 mt-0.5">Scheduled patients for the selected date</p>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {viewMode === 'upcoming' ? 'All active appointments assigned to you — next 60 days' : 'Scheduled patients for the selected date'}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Quick Date Selectors */}
-          <button
-            type="button"
-            onClick={() => setDate(todayStr)}
-            className={`px-3 py-2 text-xs font-bold rounded-xl border transition-colors cursor-pointer ${
-              date === todayStr
-                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            Today
-          </button>
-          <button
-            type="button"
-            onClick={() => setDate(tomorrowStr)}
-            className={`px-3 py-2 text-xs font-bold rounded-xl border transition-colors cursor-pointer ${
-              date === tomorrowStr
-                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-            }`}
-          >
-            Tomorrow
-          </button>
-          <input
-            type="date"
-            value={date}
-            onChange={e => setDate(e.target.value)}
-            className="px-3 py-2 text-xs rounded-xl border border-slate-200 outline-none focus:border-emerald-400 bg-white"
-          />
+          {/* View Mode Toggle */}
+          <div className="flex items-center bg-slate-100 rounded-xl p-0.5 gap-0.5">
+            <button
+              type="button"
+              onClick={() => { setViewMode('date'); }}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+                viewMode === 'date'
+                  ? 'bg-white text-emerald-700 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <CalendarDays className="w-3 h-3" /> By Date
+            </button>
+            <button
+              type="button"
+              onClick={() => { setViewMode('upcoming'); }}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors cursor-pointer flex items-center gap-1.5 ${
+                viewMode === 'upcoming'
+                  ? 'bg-white text-indigo-700 shadow-xs'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              <ListChecks className="w-3 h-3" /> Upcoming
+            </button>
+          </div>
+
+          {/* Date controls — only in 'date' mode */}
+          {viewMode === 'date' && (
+            <>
+              <button
+                type="button"
+                onClick={() => setDate(todayStr)}
+                className={`px-3 py-2 text-xs font-bold rounded-xl border transition-colors cursor-pointer ${
+                  date === todayStr
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                Today
+              </button>
+              <button
+                type="button"
+                onClick={() => setDate(tomorrowStr)}
+                className={`px-3 py-2 text-xs font-bold rounded-xl border transition-colors cursor-pointer ${
+                  date === tomorrowStr
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                    : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                Tomorrow
+              </button>
+              <input
+                type="date"
+                value={date}
+                onChange={e => setDate(e.target.value)}
+                className="px-3 py-2 text-xs rounded-xl border border-slate-200 outline-none focus:border-emerald-400 bg-white"
+              />
+            </>
+          )}
+
           <button onClick={fetchAppointments} className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-xs rounded-xl border border-emerald-200 cursor-pointer">
             <RefreshCw className="w-3.5 h-3.5" /> Refresh
           </button>
         </div>
       </div>
+
+      {/* Upcoming mode info banner */}
+      {viewMode === 'upcoming' && (
+        <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-800 text-xs flex items-start gap-2">
+          <ListChecks className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+          <span>
+            <strong>Upcoming view</strong> shows all active appointments assigned to you from today through the next 60 days — including any appointments recently reassigned to you. Use this view to discover new assignments.
+          </span>
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -252,6 +301,9 @@ export const DoctorAppointmentsPage = () => {
                 <tr className="bg-slate-50 border-b border-slate-100">
                   <th className="px-4 py-3 text-left font-bold text-slate-600 uppercase tracking-wider">#</th>
                   <th className="px-4 py-3 text-left font-bold text-slate-600 uppercase tracking-wider">Patient</th>
+                  {viewMode === 'upcoming' && (
+                    <th className="px-4 py-3 text-left font-bold text-slate-600 uppercase tracking-wider">Date</th>
+                  )}
                   <th className="px-4 py-3 text-left font-bold text-slate-600 uppercase tracking-wider">Time</th>
                   <th className="px-4 py-3 text-left font-bold text-slate-600 uppercase tracking-wider">Type</th>
                   <th className="px-4 py-3 text-left font-bold text-slate-600 uppercase tracking-wider">Status</th>
@@ -270,6 +322,14 @@ export const DoctorAppointmentsPage = () => {
                       <div className="font-bold text-slate-900">{a.patient_name}</div>
                       <div className="text-[10px] text-slate-400">{a.registration_id} • {a.age}y • {a.gender}</div>
                     </td>
+                    {viewMode === 'upcoming' && (
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1 text-slate-700 font-mono font-bold">
+                          <CalendarDays className="w-3 h-3 text-indigo-500" />
+                          {String(a.appointment_date).slice(0, 10)}
+                        </div>
+                      </td>
+                    )}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1 text-slate-600">
                         <Clock className="w-3 h-3" />

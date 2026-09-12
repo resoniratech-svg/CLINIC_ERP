@@ -210,7 +210,7 @@ export const PatientOverviewModal = ({ isOpen, onClose, patientId, onActionTrigg
                         {formatDocName(data.upcoming_appointment.doctor_name)}
                       </span>
                       <span className="text-[11px] text-slate-500">
-                        {data.upcoming_appointment.appointment_date} at {data.upcoming_appointment.appointment_time?.slice(0, 5)}
+                        {String(data.upcoming_appointment.appointment_date).slice(0, 10)} at {data.upcoming_appointment.appointment_time?.slice(0, 5)}
                       </span>
                     </div>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 capitalize">

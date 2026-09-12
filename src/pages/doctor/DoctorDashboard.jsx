@@ -37,11 +37,19 @@ export const DoctorDashboard = () => {
   const [loading, setLoading] = useState(true);
   const { showToast } = useToast();
 
+  const [upcomingCount, setUpcomingCount] = useState(0);
+
   const fetchDashboard = async () => {
     setLoading(true);
     try {
-      const res = await doctorApi.getDashboard();
-      if (res.success) setData(res.data);
+      const [dashRes, upcomingRes] = await Promise.allSettled([
+        doctorApi.getDashboard(),
+        doctorApi.getUpcomingAppointments()
+      ]);
+      if (dashRes.status === 'fulfilled' && dashRes.value.success) setData(dashRes.value.data);
+      if (upcomingRes.status === 'fulfilled' && upcomingRes.value.success) {
+        setUpcomingCount((upcomingRes.value.data || []).length);
+      }
     } catch (err) {
       showToast(err.message || 'Failed to fetch dashboard', 'error');
     } finally {
@@ -58,6 +66,7 @@ export const DoctorDashboard = () => {
     { label: 'Waiting Queue', value: data?.waiting || 0, icon: Clock, color: 'bg-amber-100 text-amber-700', link: '/doctor/queue' },
     { label: 'In Consultation', value: data?.in_consultation || 0, icon: Activity, color: 'bg-purple-100 text-purple-700', link: '/doctor/queue' },
     { label: 'Completed Today', value: data?.completed_today || 0, icon: CheckCircle, color: 'bg-emerald-100 text-emerald-700', link: '/doctor/consultations' },
+    { label: 'Upcoming Assigned', value: upcomingCount, icon: Target, color: upcomingCount > 0 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500', link: '/doctor/appointments' },
   ];
 
   const ts = data?.target_summary;

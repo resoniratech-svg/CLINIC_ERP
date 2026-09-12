@@ -234,6 +234,7 @@ export const doctorApi = {
 
   // Appointments & Queue
   getTodayAppointments: (params) => axiosClient.get('/doctor/appointments/today', { params }),
+  getUpcomingAppointments: (params) => axiosClient.get('/doctor/appointments/upcoming', { params }),
   getPatientQueue: () => axiosClient.get('/doctor/queue'),
   getActiveDoctors: (params) => axiosClient.get('/doctor/doctors', { params }),
   getDoctorSlots: (doctorId, params) => axiosClient.get(`/doctor/doctors/${doctorId}/available-slots`, { params }),
