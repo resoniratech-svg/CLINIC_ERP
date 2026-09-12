@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
+import { ReassignDoctorModal } from '../../components/common/ReassignDoctorModal';
 import { useToast } from '../../context/ToastContext';
 import {
   Calendar,
@@ -42,7 +43,10 @@ export const ReceptionistAppointmentsPage = () => {
   // View Details Modal
   const [viewTarget, setViewTarget] = useState(null);
 
-  // Reschedule Modal
+  // Reassign / Reschedule Modal
+  const [reassignTarget, setReassignTarget] = useState(null);
+
+  // Reschedule Modal (legacy)
   const [rescheduleTarget, setRescheduleTarget] = useState(null);
   const [rescheduleData, setRescheduleData] = useState({
     appointment_date: new Date().toISOString().split('T')[0],
@@ -422,17 +426,11 @@ export const ReceptionistAppointmentsPage = () => {
                           </button>
 
                           <button
-                            onClick={() => {
-                              setRescheduleTarget(a);
-                              setRescheduleData({
-                                appointment_date: a.appointment_date ? new Date(a.appointment_date).toISOString().split('T')[0] : selectedDate,
-                                appointment_time: a.appointment_time || '10:00:00',
-                              });
-                            }}
-                            title="Reschedule Slot"
-                            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                            onClick={() => setReassignTarget(a)}
+                            title="Reassign Doctor / Reschedule Slot"
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
                           >
-                            <CalendarCheck2 className="w-4 h-4" />
+                            <RotateCcw className="w-4 h-4 text-indigo-600" />
                           </button>
 
                           <button
@@ -469,17 +467,11 @@ export const ReceptionistAppointmentsPage = () => {
                           </button>
 
                           <button
-                            onClick={() => {
-                              setRescheduleTarget(a);
-                              setRescheduleData({
-                                appointment_date: a.appointment_date ? new Date(a.appointment_date).toISOString().split('T')[0] : selectedDate,
-                                appointment_time: a.appointment_time || '10:00:00',
-                              });
-                            }}
-                            title="Reschedule Slot"
-                            className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                            onClick={() => setReassignTarget(a)}
+                            title="Reassign Doctor / Reschedule Slot"
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors cursor-pointer inline-flex items-center"
                           >
-                            <CalendarCheck2 className="w-4 h-4" />
+                            <RotateCcw className="w-4 h-4 text-indigo-600" />
                           </button>
 
                           <button
@@ -519,65 +511,17 @@ export const ReceptionistAppointmentsPage = () => {
         )}
       </div>
 
-      {/* Reschedule Modal */}
-      {rescheduleTarget && (
-        <Modal
-          isOpen={true}
-          onClose={() => setRescheduleTarget(null)}
-          title={`Reschedule Appointment #${rescheduleTarget.appointment_id}`}
-          maxWidth="max-w-md"
-        >
-          <form onSubmit={handleRescheduleSubmit} className="space-y-4 text-xs text-slate-700">
-            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-              <span className="font-bold text-slate-900 block">{rescheduleTarget.patient_name}</span>
-              <span className="text-[11px] text-slate-500">Dr. {rescheduleTarget.doctor_name}</span>
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">New Date *</label>
-              <input
-                type="date"
-                required
-                value={rescheduleData.appointment_date}
-                onChange={(e) => setRescheduleData({ ...rescheduleData, appointment_date: e.target.value })}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">New Time Slot *</label>
-              <select
-                required
-                value={rescheduleData.appointment_time}
-                onChange={(e) => setRescheduleData({ ...rescheduleData, appointment_time: e.target.value })}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono"
-              >
-                {['09:00:00', '09:30:00', '10:00:00', '10:30:00', '11:00:00', '11:30:00', '12:00:00', '14:00:00', '14:30:00', '15:00:00', '15:30:00', '16:00:00', '16:30:00', '17:00:00'].map((t) => (
-                  <option key={t} value={t}>
-                    {t.slice(0, 5)} hrs
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="pt-2 flex justify-end gap-2 border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setRescheduleTarget(null)}
-                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-xl"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={rescheduling}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md"
-              >
-                {rescheduling ? 'Saving...' : 'Confirm Reschedule'}
-              </button>
-            </div>
-          </form>
-        </Modal>
+      {/* Reassign Doctor & Reschedule Modal */}
+      {reassignTarget && (
+        <ReassignDoctorModal
+          isOpen={!!reassignTarget}
+          onClose={() => setReassignTarget(null)}
+          appointment={reassignTarget}
+          onReassigned={() => {
+            setReassignTarget(null);
+            fetchAppointments();
+          }}
+        />
       )}
 
       {/* Cancel Appointment Modal */}

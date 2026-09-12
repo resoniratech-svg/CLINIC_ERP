@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { doctorApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { CalendarDays, Search, RefreshCw, Stethoscope, User, Clock } from 'lucide-react';
+import { CalendarDays, Search, RefreshCw, Stethoscope, User, Clock, RotateCcw } from 'lucide-react';
+import { ReassignDoctorModal } from '../../components/common/ReassignDoctorModal';
 
 const statusColors = {
   scheduled: 'bg-blue-100 text-blue-700',
@@ -26,6 +27,7 @@ export const DoctorAppointmentsPage = () => {
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [startingId, setStartingId] = useState(null);
+  const [reassignAppt, setReassignAppt] = useState(null);
 
   const todayStr = new Date().toISOString().split('T')[0];
   const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
@@ -326,6 +328,18 @@ export const DoctorAppointmentsPage = () => {
                           <User className="w-3 h-3 text-slate-500" />
                           <span>View Patient</span>
                         </button>
+
+                        {/* Reassign / Reschedule Doctor Button */}
+                        {['waiting', 'checked_in', 'scheduled'].includes(a.status) && (
+                          <button
+                            onClick={() => setReassignAppt(a)}
+                            title="Reassign to another Doctor or Reschedule Slot"
+                            className="flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[10px] font-bold rounded-lg transition-colors cursor-pointer"
+                          >
+                            <RotateCcw className="w-3 h-3 text-indigo-600" />
+                            <span>Reassign</span>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -334,6 +348,20 @@ export const DoctorAppointmentsPage = () => {
             </table>
           </div>
         </div>
+      )}
+
+      {/* Doctor Reassign & Reschedule Modal */}
+      {reassignAppt && (
+        <ReassignDoctorModal
+          isOpen={!!reassignAppt}
+          onClose={() => setReassignAppt(null)}
+          appointment={reassignAppt}
+          role="doctor"
+          onReassigned={() => {
+            setReassignAppt(null);
+            fetchAppointments();
+          }}
+        />
       )}
     </div>
   );

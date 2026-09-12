@@ -17,13 +17,18 @@ import {
   Building,
   CheckCircle2,
   XCircle,
-  History
+  History,
+  Edit2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { EditPatientModal } from '../../components/common/EditPatientModal';
+import { ReassignDoctorModal } from '../../components/common/ReassignDoctorModal';
 
 export const PatientOverviewModal = ({ isOpen, onClose, patientId, onActionTriggered }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [isEditingPatient, setIsEditingPatient] = useState(false);
+  const [reassignAppt, setReassignAppt] = useState(null);
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -122,6 +127,14 @@ export const PatientOverviewModal = ({ isOpen, onClose, patientId, onActionTrigg
 
             <div className="flex flex-wrap items-center gap-2">
               <button
+                onClick={() => setIsEditingPatient(true)}
+                className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Edit Details</span>
+              </button>
+
+              <button
                 onClick={() => {
                   onClose();
                   navigate('/receptionist/appointments', { state: { patient: profile } });
@@ -214,6 +227,16 @@ export const PatientOverviewModal = ({ isOpen, onClose, patientId, onActionTrigg
                       <span>Check-in Patient Now (Waiting Queue)</span>
                     </button>
                   )}
+
+                  {['scheduled', 'waiting', 'confirmed', 'checked_in', 'pending'].includes(data.upcoming_appointment.status?.toLowerCase()) && (
+                    <button
+                      onClick={() => setReassignAppt(data.upcoming_appointment)}
+                      className="w-full mt-1.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Reassign / Reschedule Doctor</span>
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="text-slate-400 text-xs py-3">No upcoming appointment scheduled.</div>
@@ -273,6 +296,32 @@ export const PatientOverviewModal = ({ isOpen, onClose, patientId, onActionTrigg
             )}
           </div>
         </div>
+      )}
+
+      {/* Edit Patient Demographic Details Modal */}
+      <EditPatientModal
+        isOpen={isEditingPatient}
+        onClose={() => setIsEditingPatient(false)}
+        patient={profile}
+        onPatientUpdated={() => {
+          setIsEditingPatient(false);
+          fetchOverview();
+          if (onActionTriggered) onActionTriggered();
+        }}
+      />
+
+      {/* Reassign / Reschedule Doctor Modal */}
+      {reassignAppt && (
+        <ReassignDoctorModal
+          isOpen={!!reassignAppt}
+          onClose={() => setReassignAppt(null)}
+          appointment={reassignAppt}
+          onReassigned={() => {
+            setReassignAppt(null);
+            fetchOverview();
+            if (onActionTriggered) onActionTriggered();
+          }}
+        />
       )}
     </Modal>
   );

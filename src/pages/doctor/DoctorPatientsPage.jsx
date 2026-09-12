@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { doctorApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { Users, Search, RefreshCw, ChevronRight, User } from 'lucide-react';
+import { Users, Search, RefreshCw, ChevronRight, User, Edit2 } from 'lucide-react';
+import { EditPatientModal } from '../../components/common/EditPatientModal';
 
 export const DoctorPatientsPage = () => {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ export const DoctorPatientsPage = () => {
   const [selected, setSelected] = useState(null);
   const [overview, setOverview] = useState(null);
   const [loadingOverview, setLoadingOverview] = useState(false);
+  const [isEditingPatient, setIsEditingPatient] = useState(false);
 
   const fetchPatients = useCallback(async (q = '') => {
     setLoading(true);
@@ -135,10 +137,19 @@ export const DoctorPatientsPage = () => {
 
         {/* Patient Overview Panel */}
         <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-          <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+          <div className="px-4 py-3 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               {selected ? `Patient Overview — ${selected.patient_name}` : 'Select a patient to view overview'}
             </h3>
+            {overview?.patient && (
+              <button
+                onClick={() => setIsEditingPatient(true)}
+                className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 font-bold rounded-lg text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <Edit2 className="w-3 h-3" />
+                <span>Edit Patient</span>
+              </button>
+            )}
           </div>
 
           {!selected ? (
@@ -223,6 +234,21 @@ export const DoctorPatientsPage = () => {
           ) : null}
         </div>
       </div>
+
+      {/* Edit Patient Demographic Details Modal */}
+      {overview?.patient && (
+        <EditPatientModal
+          isOpen={isEditingPatient}
+          onClose={() => setIsEditingPatient(false)}
+          patient={overview.patient}
+          apiUpdateFn={doctorApi.updatePatient}
+          onPatientUpdated={(updated) => {
+            setIsEditingPatient(false);
+            loadOverview({ ...selected, ...updated });
+            fetchPatients(search);
+          }}
+        />
+      )}
     </div>
   );
 };

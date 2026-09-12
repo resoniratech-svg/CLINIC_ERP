@@ -208,7 +208,10 @@ export const receptionistApi = {
   getActiveDoctors: (params) => axiosClient.get('/receptionist/doctors', { params }),
   getAppointments: (params) => axiosClient.get('/receptionist/appointments', { params }),
   createAppointment: (data) => axiosClient.post('/receptionist/appointments', data),
+  updatePatient: (id, data) => axiosClient.put(`/receptionist/patients/${id}`, data),
+  getDoctorSlots: (doctorId, params) => axiosClient.get(`/receptionist/doctors/${doctorId}/available-slots`, { params }),
   rescheduleAppointment: (id, data) => axiosClient.post(`/receptionist/appointments/${id}/reschedule`, data),
+  reassignDoctor: (id, data) => axiosClient.post(`/receptionist/appointments/${id}/reassign-doctor`, data),
   cancelAppointment: (id, data) => axiosClient.post(`/receptionist/appointments/${id}/cancel`, data),
   getConsultationBills: (params) => axiosClient.get('/receptionist/billing/bills', { params }),
   getPatientInvoices: (id) => axiosClient.get(`/receptionist/patients/${id}/invoices`),
@@ -232,10 +235,15 @@ export const doctorApi = {
   // Appointments & Queue
   getTodayAppointments: (params) => axiosClient.get('/doctor/appointments/today', { params }),
   getPatientQueue: () => axiosClient.get('/doctor/queue'),
+  getActiveDoctors: (params) => axiosClient.get('/doctor/doctors', { params }),
+  getDoctorSlots: (doctorId, params) => axiosClient.get(`/doctor/doctors/${doctorId}/available-slots`, { params }),
+  rescheduleAppointment: (id, data) => axiosClient.post(`/doctor/appointments/${id}/reschedule`, data),
+  reassignDoctor: (id, data) => axiosClient.post(`/doctor/appointments/${id}/reassign-doctor`, data),
 
   // Patients
   getPatients: (params) => axiosClient.get('/doctor/patients', { params }),
   getPatientOverview: (id) => axiosClient.get(`/doctor/patients/${id}/overview`),
+  updatePatient: (id, data) => axiosClient.put(`/doctor/patients/${id}`, data),
 
   // Consultation Lifecycle
   startConsultation: (data) => axiosClient.post('/doctor/consultations/start', data),

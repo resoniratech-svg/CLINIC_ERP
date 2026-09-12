@@ -6,6 +6,7 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { useToast } from '../../context/ToastContext';
 import { PatientOverviewModal } from './PatientOverviewModal';
 import { PatientInvoiceReceiptModal } from './PatientInvoiceReceiptModal';
+import { EditPatientModal } from '../../components/common/EditPatientModal';
 import {
   Search,
   UserPlus,
@@ -18,7 +19,8 @@ import {
   RotateCcw,
   ArrowRight,
   ShieldCheck,
-  FileText
+  FileText,
+  Edit2
 } from 'lucide-react';
 
 export const PatientSearchPage = () => {
@@ -28,6 +30,7 @@ export const PatientSearchPage = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [selectedPatientId, setSelectedPatientId] = useState(null);
   const [selectedInvoicePatient, setSelectedInvoicePatient] = useState(null);
+  const [editingPatient, setEditingPatient] = useState(null);
 
   const { showToast } = useToast();
   const navigate = useNavigate();
@@ -241,6 +244,15 @@ export const PatientSearchPage = () => {
 
                       <td className="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap">
                         <button
+                          onClick={() => setEditingPatient(p)}
+                          title="Edit Patient Demographic Details"
+                          className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 font-bold rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 text-[11px] border border-amber-200"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
                           onClick={() => setSelectedInvoicePatient(p)}
                           title="View & Print Consultation Invoice Receipt"
                           className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1 text-[11px] border border-emerald-200"
@@ -280,6 +292,14 @@ export const PatientSearchPage = () => {
         isOpen={!!selectedInvoicePatient}
         onClose={() => setSelectedInvoicePatient(null)}
         patient={selectedInvoicePatient}
+      />
+
+      {/* Edit Patient Demographic Details Modal */}
+      <EditPatientModal
+        isOpen={!!editingPatient}
+        onClose={() => setEditingPatient(null)}
+        patient={editingPatient}
+        onPatientUpdated={() => handleSearch()}
       />
     </div>
   );
