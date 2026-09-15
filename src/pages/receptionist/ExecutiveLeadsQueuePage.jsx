@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
-import { Modal } from '../../components/common/Modal';
 import { useToast } from '../../context/ToastContext';
 import {
   Users,
@@ -15,7 +14,6 @@ import {
   Building,
   UserCheck,
   Filter,
-  Stethoscope,
   Sparkles,
   Clock
 } from 'lucide-react';
@@ -26,10 +24,6 @@ export const ExecutiveLeadsQueuePage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [doctors, setDoctors] = useState([]);
-  const [assignModalLead, setAssignModalLead] = useState(null);
-  const [selectedDoctorId, setSelectedDoctorId] = useState('');
-  const [assignRemarks, setAssignRemarks] = useState('');
-  const [assigning, setAssigning] = useState(false);
 
   const { showToast } = useToast();
   const navigate = useNavigate();
@@ -96,39 +90,6 @@ export const ExecutiveLeadsQueuePage = () => {
         source: 'Call Center Executive Lead',
       },
     });
-  };
-
-  const handleOpenAssignModal = (lead) => {
-    setAssignModalLead(lead);
-    setSelectedDoctorId('');
-    setAssignRemarks('');
-  };
-
-  const handleConfirmAssignDoctor = async () => {
-    if (!selectedDoctorId) {
-      showToast('Please select a doctor to assign', 'warning');
-      return;
-    }
-
-    setAssigning(true);
-    try {
-      const res = await receptionistApi.assignExecutiveLeadDoctor(assignModalLead.lead_id, {
-        doctor_id: parseInt(selectedDoctorId),
-        remarks: assignRemarks
-      });
-
-      if (res.success) {
-        showToast('Doctor assigned to executive lead successfully', 'success');
-        setAssignModalLead(null);
-        fetchLeads();
-      } else {
-        showToast(res.message || 'Failed to assign doctor', 'error');
-      }
-    } catch (err) {
-      showToast(err.message || 'Failed to assign doctor', 'error');
-    } finally {
-      setAssigning(false);
-    }
   };
 
   const totalLeads = leads.length;
@@ -281,23 +242,13 @@ export const ExecutiveLeadsQueuePage = () => {
 
                     <td className="py-3.5 px-4 text-right">
                       {lead.status !== 'converted' ? (
-                        <div className="flex items-center justify-end gap-2">
-                          <button
-                            onClick={() => handleOpenAssignModal(lead)}
-                            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg transition-colors cursor-pointer text-[11px] inline-flex items-center gap-1"
-                            title="Assign Doctor directly"
-                          >
-                            <Stethoscope className="w-3.5 h-3.5 text-slate-500" />
-                            <span>Assign Doc</span>
-                          </button>
-                          <button
-                            onClick={() => handleOpenLead(lead)}
-                            className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-sm transition-colors cursor-pointer inline-flex items-center gap-1.5 text-[11px]"
-                          >
-                            <UserPlus className="w-3.5 h-3.5" />
-                            <span>Register / Assign</span>
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => handleOpenLead(lead)}
+                          className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg shadow-sm transition-colors cursor-pointer inline-flex items-center gap-1.5 text-[11px]"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          <span>Register / Assign</span>
+                        </button>
                       ) : (
                         <div className="text-right">
                           <span className="text-emerald-700 font-semibold text-[11px] inline-flex items-center gap-1">
@@ -314,79 +265,6 @@ export const ExecutiveLeadsQueuePage = () => {
           </div>
         )}
       </div>
-
-      {/* Assign Doctor Modal */}
-      {assignModalLead && (
-        <Modal
-          isOpen={!!assignModalLead}
-          onClose={() => setAssignModalLead(null)}
-          title={`Assign Doctor to Lead #${assignModalLead.lead_id}`}
-        >
-          <div className="space-y-4 text-xs">
-            <div className="bg-purple-50/70 p-3.5 rounded-xl border border-purple-100 space-y-1">
-              <div className="font-bold text-slate-800 text-sm">{assignModalLead.lead_name}</div>
-              <div className="text-slate-600 flex items-center gap-2">
-                <span>Mobile: <strong className="font-mono">{assignModalLead.mobile_number}</strong></span>
-                <span>•</span>
-                <span>Executive: <strong>{assignModalLead.executive_name || 'Call Center'}</strong></span>
-              </div>
-              {(assignModalLead.requirement || assignModalLead.problem) && (
-                <div className="text-slate-700 pt-0.5">
-                  <span className="font-bold text-purple-900">Requirement / Ailment:</span>{' '}
-                  <span className="font-semibold text-purple-800">{assignModalLead.requirement || assignModalLead.problem}</span>
-                </div>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-slate-700 font-bold mb-1.5">Select Active Doctor <span className="text-red-500">*</span></label>
-              <select
-                value={selectedDoctorId}
-                onChange={(e) => setSelectedDoctorId(e.target.value)}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 font-medium"
-              >
-                <option value="">-- Choose Doctor --</option>
-                {doctors.map((doc) => (
-                  <option key={doc.doctor_id} value={doc.doctor_id}>
-                    Dr. {doc.full_name} ({doc.specialization || 'Consultant'}) - ₹{doc.new_consultation_fee || 500}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-700 font-bold mb-1.5">Assignment Remarks / Instructions</label>
-              <textarea
-                rows={3}
-                value={assignRemarks}
-                onChange={(e) => setAssignRemarks(e.target.value)}
-                placeholder="Optional notes regarding patient symptoms, scheduled date or preferences..."
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setAssignModalLead(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmAssignDoctor}
-                disabled={assigning}
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
-              >
-                {assigning ? <LoadingSpinner size="sm" /> : <UserCheck className="w-4 h-4" />}
-                <span>Confirm Assignment</span>
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
     </div>
   );
 };
-
