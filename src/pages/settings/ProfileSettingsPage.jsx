@@ -70,8 +70,8 @@ export const ProfileSettingsPage = () => {
               username: profileObj.username || '',
               mobile_number: profileObj.mobile_number || '',
               branch_id: profileObj.branch_id || 1,
-              branch_name: activeBranchInfo?.branch_name || profileObj.branch_name || 'Hyderabad Main Branch',
-              branch_code: activeBranchInfo?.branch_code || profileObj.branch_code || 'HYD001',
+              branch_name: activeBranchInfo?.branch_name || profileObj.branch_name || '',
+              branch_code: activeBranchInfo?.branch_code || profileObj.branch_code || '',
               department: profileObj.department || 'Administration',
             });
             if (updateUser) updateUser(profileObj);
@@ -83,8 +83,8 @@ export const ProfileSettingsPage = () => {
               username: user.username || '',
               mobile_number: user.mobile_number || '',
               branch_id: user.branch_id || 1,
-              branch_name: activeBranchInfo?.branch_name || user.branch_name || 'Hyderabad Main Branch',
-              branch_code: activeBranchInfo?.branch_code || user.branch_code || 'HYD001',
+              branch_name: activeBranchInfo?.branch_name || user.branch_name || '',
+              branch_code: activeBranchInfo?.branch_code || user.branch_code || '',
               department: user.department || 'Administration',
             });
           }
@@ -111,8 +111,8 @@ export const ProfileSettingsPage = () => {
       username: current?.username || '',
       mobile_number: current?.mobile_number || '',
       branch_id: current?.branch_id || 1,
-      branch_name: branchInfo?.branch_name || current?.branch_name || 'Hyderabad Main Branch',
-      branch_code: branchInfo?.branch_code || current?.branch_code || 'HYD001',
+      branch_name: branchInfo?.branch_name || current?.branch_name || '',
+      branch_code: branchInfo?.branch_code || current?.branch_code || '',
       department: current?.department || 'Administration',
     });
     setIsEditing(true);
@@ -127,8 +127,8 @@ export const ProfileSettingsPage = () => {
       username: current?.username || '',
       mobile_number: current?.mobile_number || '',
       branch_id: current?.branch_id || 1,
-      branch_name: branchInfo?.branch_name || current?.branch_name || 'Hyderabad Main Branch',
-      branch_code: branchInfo?.branch_code || current?.branch_code || 'HYD001',
+      branch_name: branchInfo?.branch_name || current?.branch_name || '',
+      branch_code: branchInfo?.branch_code || current?.branch_code || '',
       department: current?.department || 'Administration',
     });
     setIsEditing(false);
@@ -349,14 +349,14 @@ export const ProfileSettingsPage = () => {
 
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400 font-medium">Assigned Branch</span>
-                  <span className="font-bold text-slate-800">{currentBranch?.branch_name || displayUser?.branch_name || 'Hyderabad Main Branch'}</span>
+                  <span className="font-bold text-slate-800">{currentBranch?.branch_name || displayUser?.branch_name || ''}</span>
                 </div>
 
                 <div className="flex justify-between items-center">
                   <span className="text-slate-400 font-medium">Branch Code</span>
                   <div className="flex items-center gap-1.5">
                     <span className="font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded text-[11px]">
-                      {currentBranch?.branch_code || displayUser?.branch_code || 'HYD001'}
+                      {currentBranch?.branch_code || displayUser?.branch_code || ''}
                     </span>
                     <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-500 border border-slate-200">
                       READ ONLY

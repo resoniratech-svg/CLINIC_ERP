@@ -278,7 +278,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
               <input
                 type="text"
                 disabled
-                value={user?.branch_name ? `${user.branch_name} (${user.branch_code || 'HYD001'})` : 'Hyderabad Main Branch (HYD001)'}
+                value={user?.branch_name ? `${user.branch_name} (${user.branch_code || ''})` : '—'}
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 bg-slate-100 text-slate-500 font-medium"
               />
             </div>

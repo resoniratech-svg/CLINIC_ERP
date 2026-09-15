@@ -74,7 +74,7 @@ export const SuperAdminDashboard = () => {
               WeCare Homeopathy
             </span>
             <span className="text-blue-200 text-xs font-semibold">
-              {user?.branch_name || 'Hyderabad Main Branch'} ({user?.branch_code || 'HYD001'})
+              {user?.branch_name || '—'} {user?.branch_code ? `(${user.branch_code})` : ''}
             </span>
           </div>
           <h1 className="text-2xl font-black tracking-tight text-white">
