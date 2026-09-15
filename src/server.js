@@ -13,6 +13,11 @@ async function bootstrap() {
     await db.query("ALTER TABLE outbound_leads ADD COLUMN IF NOT EXISTS problem TEXT");
     await db.query("ALTER TABLE patients ADD COLUMN IF NOT EXISTS village_id INTEGER");
     await db.query("ALTER TABLE patients ADD COLUMN IF NOT EXISTS mandal_id INTEGER");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT false");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN NOT NULL DEFAULT false");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_hash VARCHAR(255)");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_expires_at TIMESTAMP WITH TIME ZONE");
+    await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_used_at TIMESTAMP WITH TIME ZONE");
 
     // Auto-apply additive migration files safely
     const migDir = path.join(__dirname, '../migrations');

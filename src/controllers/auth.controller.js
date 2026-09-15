@@ -271,9 +271,16 @@ async function logout(req, res) {
 
 async function changePassword(req, res) {
   try {
-    const { old_password, new_password } = req.body;
+    const old_password = req.body.old_password || req.body.current_password || req.body.currentPassword;
+    const new_password = req.body.new_password || req.body.newPassword;
+    const confirm_password = req.body.confirm_password || req.body.confirmPassword;
+
     if (!old_password || !new_password) {
-      return res.status(400).json(formatResponse(false, null, 'Old password and new password are required'));
+      return res.status(400).json(formatResponse(false, null, 'Current password and new password are required'));
+    }
+
+    if (confirm_password && new_password !== confirm_password) {
+      return res.status(400).json(formatResponse(false, null, 'New password and confirm password do not match'));
     }
 
     if (String(new_password).length < 6) {
@@ -284,9 +291,13 @@ async function changePassword(req, res) {
       return res.status(400).json(formatResponse(false, null, 'New password must be different from current password'));
     }
 
-    const userId = req.user.user_id;
+    const userId = req.user && req.user.user_id;
+    if (!userId) {
+      return res.status(401).json(formatResponse(false, null, 'Authentication required'));
+    }
+
     const userRes = await db.query(
-      `SELECT password_hash, temporary_password_hash, role, branch_id FROM users WHERE user_id = $1`,
+      `SELECT u.* FROM users u WHERE u.user_id = $1`,
       [userId]
     );
     if (userRes.rows.length === 0) {
@@ -294,44 +305,85 @@ async function changePassword(req, res) {
     }
     const user = userRes.rows[0];
 
-    const isMatchNormal = await bcrypt.compare(old_password, user.password_hash);
-    const isMatchTemp = user.temporary_password_hash
-      ? await bcrypt.compare(old_password, user.temporary_password_hash)
-      : false;
+    if (!user.password_hash) {
+      return res.status(400).json(formatResponse(false, null, 'No password set for this account. Please contact administrator'));
+    }
+
+    let isMatchNormal = false;
+    try {
+      isMatchNormal = await bcrypt.compare(old_password, user.password_hash);
+    } catch (cmpErr) {
+      console.error('Password hash comparison error:', cmpErr.message);
+    }
+
+    let isMatchTemp = false;
+    if (user.temporary_password_hash && typeof user.temporary_password_hash === 'string') {
+      try {
+        isMatchTemp = await bcrypt.compare(old_password, user.temporary_password_hash);
+      } catch (cmpErr) {
+        console.error('Temporary password hash comparison error:', cmpErr.message);
+      }
+    }
 
     if (!isMatchNormal && !isMatchTemp) {
       return res.status(400).json(formatResponse(false, null, 'Incorrect current password'));
     }
 
     const newHash = await bcrypt.hash(new_password, 10);
-    await db.query(`
-      UPDATE users
-      SET password_hash = $1,
-          must_change_password = false,
-          password_reset_required = false,
-          temporary_password_hash = NULL,
-          temporary_password_expires_at = NULL,
-          temporary_password_used_at = NULL,
-          updated_at = now()
-      WHERE user_id = $2
-    `, [newHash, userId]);
+
+    // Dynamically check which optional columns exist in users table to prevent SQL errors if migrations are in-flight
+    const colCheck = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'users' 
+        AND column_name IN ('temporary_password_hash', 'must_change_password', 'password_reset_required', 'temporary_password_expires_at', 'temporary_password_used_at')
+    `);
+    const existingCols = new Set(colCheck.rows.map(r => r.column_name));
+
+    let updateSql = `UPDATE users SET password_hash = $1, updated_at = now()`;
+    if (existingCols.has('must_change_password')) {
+      updateSql += `, must_change_password = false`;
+    }
+    if (existingCols.has('password_reset_required')) {
+      updateSql += `, password_reset_required = false`;
+    }
+    if (existingCols.has('temporary_password_hash')) {
+      updateSql += `, temporary_password_hash = NULL`;
+    }
+    if (existingCols.has('temporary_password_expires_at')) {
+      updateSql += `, temporary_password_expires_at = NULL`;
+    }
+    if (existingCols.has('temporary_password_used_at')) {
+      updateSql += `, temporary_password_used_at = NULL`;
+    }
+    updateSql += ` WHERE user_id = $2`;
+
+    await db.query(updateSql, [newHash, userId]);
 
     if (user.role === 'super_admin') {
-      await db.query(`
-        UPDATE super_admin_password_recovery
-        SET recovery_status = 'completed', completed_at = now(), updated_at = now()
-        WHERE user_id = $1 AND recovery_status IN ('sent', 'used')
-      `, [userId]);
+      try {
+        await db.query(`
+          UPDATE super_admin_password_recovery
+          SET recovery_status = 'completed', completed_at = now(), updated_at = now()
+          WHERE user_id = $1 AND recovery_status IN ('sent', 'used')
+        `, [userId]);
+      } catch (recErr) {
+        // Table may not exist in legacy setups
+      }
 
-      await logAuditEvent({
-        userId,
-        role: user.role,
-        action: 'SUPER_ADMIN_PASSWORD_CHANGED',
-        recordId: userId,
-        remarks: 'Super Admin password successfully changed. Temporary credentials cleared.',
-        ip: req.ip || '127.0.0.1',
-        branchId: user.branch_id
-      });
+      try {
+        await logAuditEvent({
+          userId,
+          role: user.role,
+          action: 'SUPER_ADMIN_PASSWORD_CHANGED',
+          recordId: userId,
+          remarks: 'Super Admin password successfully changed. Temporary credentials cleared.',
+          ip: req.ip || '127.0.0.1',
+          branchId: user.branch_id
+        });
+      } catch (auditErr) {
+        // Non-blocking audit logging
+      }
     }
 
     return res.json(formatResponse(true, null, 'Password changed successfully'));
