@@ -26,7 +26,8 @@ import {
   AlertCircle,
   CreditCard,
   Receipt,
-  ShieldAlert
+  ShieldAlert,
+  History
 } from 'lucide-react';
 
 export const ReceptionistAppointmentsPage = () => {
@@ -61,6 +62,7 @@ export const ReceptionistAppointmentsPage = () => {
   // Cancel Modal
   const [cancelTarget, setCancelTarget] = useState(null);
   const [cancelling, setCancelling] = useState(false);
+  const [cancellationReason, setCancellationReason] = useState('');
 
   // New Appointment Modal for quick booking
   const [isNewBookingOpen, setIsNewBookingOpen] = useState(false);
