@@ -425,7 +425,7 @@ export const PrescriptionQueuePage = () => {
                             ) : (
                               <>
                                 <Pill className="w-3.5 h-3.5" />
-                                <span>Process</span>
+                                <span>Dispense Medicines</span>
                                 <ArrowRight className="w-3.5 h-3.5" />
                               </>
                             )}
@@ -492,12 +492,12 @@ export const PrescriptionQueuePage = () => {
                         {isDispensed ? (
                           <>
                             <Eye className="w-3.5 h-3.5 text-slate-500" />
-                            <span>View</span>
+                            <span>View Details</span>
                           </>
                         ) : (
                           <>
                             <Pill className="w-3.5 h-3.5" />
-                            <span>Process</span>
+                            <span>Dispense Medicines</span>
                             <ArrowRight className="w-3 h-3" />
                           </>
                         )}

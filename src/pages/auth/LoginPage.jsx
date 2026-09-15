@@ -15,7 +15,7 @@ export const LoginPage = () => {
   const [isMustChangeOpen, setIsMustChangeOpen] = useState(false);
   const [pendingUser, setPendingUser] = useState(null);
 
-  const { login, user, token } = useAuth();
+  const { login, user, token, updateUser } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -200,7 +200,10 @@ export const LoginPage = () => {
         isForced={true}
         onSuccess={() => {
           setIsMustChangeOpen(false);
-          routeUser(pendingUser);
+          if (updateUser) {
+            updateUser({ must_change_password: false, requires_password_change: false });
+          }
+          routeUser({ ...(pendingUser || user), must_change_password: false });
         }}
       />
     </div>

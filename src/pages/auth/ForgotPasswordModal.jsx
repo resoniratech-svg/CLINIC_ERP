@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { Modal } from '../../components/common/Modal';
 import { authApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
@@ -9,6 +9,7 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
   const [reason, setReason] = useState('Password Forgotten');
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [workflowResult, setWorkflowResult] = useState(null);
 
   const { showToast } = useToast();
 
@@ -21,13 +22,22 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
 
     setLoading(true);
     try {
-      const res = await authApi.forgotPassword({ identifier, reason });
-      if (res.success) {
+      const res = await authApi.forgotPassword({ identifier: identifier.trim(), reason: reason.trim() });
+      if (res?.success) {
         setSubmitted(true);
-        showToast('Password reset request submitted successfully', 'success');
+        const wf = res.data?.workflow || 'authorization_queue';
+        setWorkflowResult({
+          workflow: wf,
+          email: res.data?.recovery_email || 'wecarehomeopathyknr@gmail.com'
+        });
+        if (wf === 'self_email') {
+          showToast('Recovery instructions dispatched to administrator email', 'success');
+        } else {
+          showToast('Password reset request submitted successfully', 'success');
+        }
       }
     } catch (err) {
-      showToast(err.message || 'Failed to submit reset request', 'error');
+      showToast(err?.response?.data?.message || err.message || 'Failed to submit reset request', 'error');
     } finally {
       setLoading(false);
     }
@@ -35,6 +45,7 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
 
   const handleClose = () => {
     setSubmitted(false);
+    setWorkflowResult(null);
     setIdentifier('');
     onClose();
   };
@@ -46,7 +57,7 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
           <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 leading-relaxed">
             <p className="font-semibold">Authorization Workflow:</p>
             <p className="text-[11px] mt-0.5">
-              Reset requests are forwarded to the Super Admin Authorization Queue. Upon identity confirmation, a one-time temporary password will be issued.
+              Reset requests for clinic staff are forwarded to the Super Admin Authorization Queue. Super Admin accounts receive a one-time temporary password via registered administrator email.
             </p>
           </div>
 
@@ -89,10 +100,34 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
               disabled={loading}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-xs disabled:opacity-50 cursor-pointer"
             >
-              {loading ? 'Submitting...' : 'Submit to Super Admin'}
+              {loading ? 'Submitting...' : 'Submit Request'}
             </button>
           </div>
         </form>
+      ) : workflowResult?.workflow === 'self_email' ? (
+        <div className="space-y-4 text-center py-4 text-xs text-slate-700">
+          <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+            <CheckCircle2 className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-900">Recovery Email Dispatched</h3>
+            <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+              A secure one-time temporary password has been sent to the configured administrator recovery email:
+            </p>
+            <div className="mt-2.5 p-2.5 bg-blue-50 border border-blue-200 rounded-xl font-mono font-bold text-blue-900 text-xs select-all">
+              {workflowResult?.email}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-2.5 leading-normal">
+              Please check your Gmail inbox (and spam folder). Copy the temporary password to sign in on the login page and set a new permanent password.
+            </p>
+          </div>
+          <button
+            onClick={handleClose}
+            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl cursor-pointer transition"
+          >
+            Return to Login
+          </button>
+        </div>
       ) : (
         <div className="space-y-4 text-center py-4 text-xs text-slate-700">
           <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">

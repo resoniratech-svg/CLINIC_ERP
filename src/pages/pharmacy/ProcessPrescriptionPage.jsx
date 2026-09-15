@@ -337,7 +337,7 @@ export const ProcessPrescriptionPage = () => {
                     : 'bg-blue-100 text-blue-800'
                 }`}
               >
-                {prescriptionData.pharmacy_status || 'Processing'}
+                {prescriptionData.pharmacy_status || 'Pending'}
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -350,7 +350,8 @@ export const ProcessPrescriptionPage = () => {
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => handleOpenClarificationModal(null)}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition"
+            disabled={prescriptionData.pharmacy_status === 'dispensed'}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition disabled:opacity-50"
           >
             <HelpCircle className="w-4 h-4 text-amber-600" />
             <span>Raise Clarification</span>
@@ -369,10 +370,29 @@ export const ProcessPrescriptionPage = () => {
             className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition disabled:opacity-50"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>{submitting ? 'Dispensing...' : 'Complete Dispense'}</span>
+            <span>
+              {prescriptionData.pharmacy_status === 'dispensed'
+                ? 'Already Dispensed'
+                : submitting
+                ? 'Dispensing...'
+                : 'Dispense Medicines'}
+            </span>
           </button>
         </div>
       </div>
+
+      {/* Dispensed Status Alert Banner */}
+      {prescriptionData.pharmacy_status === 'dispensed' && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-3 text-xs text-emerald-800 shadow-2xs">
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+          <div>
+            <span className="font-bold">Prescription Dispensed:</span>
+            <span className="ml-1">
+              Medicines for this prescription have already been issued to the patient and inventory stock has been deducted. Re-dispensing is locked.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Patient & Handoff Banner */}
       <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs">
@@ -498,13 +518,15 @@ export const ProcessPrescriptionPage = () => {
                           {item.duration_days || Math.max(1, Math.round(item.quantity / 2))}
                         </span>
                         <span className="text-slate-500 text-xs">days</span>
-                        <button
-                          onClick={() => handleOpenModifyModal(item)}
-                          className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition"
-                          title="Modify Duration Days"
-                        >
-                          <FileEdit className="w-3.5 h-3.5" />
-                        </button>
+                        {prescriptionData.pharmacy_status !== 'dispensed' && (
+                          <button
+                            onClick={() => handleOpenModifyModal(item)}
+                            className="p-1 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition"
+                            title="Modify Duration Days"
+                          >
+                            <FileEdit className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
 
@@ -541,13 +563,14 @@ export const ProcessPrescriptionPage = () => {
                         <div>
                           <select
                             value={selectedBatches[item.id] || ''}
+                            disabled={prescriptionData.pharmacy_status === 'dispensed'}
                             onChange={(e) =>
                               setSelectedBatches({
                                 ...selectedBatches,
                                 [item.id]: e.target.value,
                               })
                             }
-                            className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-lg p-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
+                            className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-lg p-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                           >
                             {availableBatches.map((batch) => {
                               const expDate = batch.expiry_date
@@ -580,6 +603,7 @@ export const ProcessPrescriptionPage = () => {
                       <input
                         type="number"
                         min="1"
+                        disabled={prescriptionData.pharmacy_status === 'dispensed'}
                         value={dispenseQtys[item.id] !== undefined ? dispenseQtys[item.id] : item.quantity}
                         onChange={(e) =>
                           setDispenseQtys({
@@ -587,7 +611,7 @@ export const ProcessPrescriptionPage = () => {
                             [item.id]: e.target.value,
                           })
                         }
-                        className="w-16 text-center bg-white border border-slate-200 text-slate-800 text-xs rounded-lg p-1.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
+                        className="w-16 text-center bg-white border border-slate-200 text-slate-800 text-xs rounded-lg p-1.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
                       />
                     </td>
 
@@ -595,7 +619,8 @@ export const ProcessPrescriptionPage = () => {
                     <td className="p-3.5 text-right whitespace-nowrap">
                       <button
                         onClick={() => handleOpenClarificationModal(item)}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-2xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition"
+                        disabled={prescriptionData.pharmacy_status === 'dispensed'}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-2xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition disabled:opacity-50"
                       >
                         <HelpCircle className="w-3 h-3 text-amber-600" />
                         <span>Clarify</span>
