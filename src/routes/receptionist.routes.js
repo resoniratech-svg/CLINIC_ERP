@@ -32,6 +32,7 @@ router.post('/patients/register', requireReceptionistPermission('registration'),
 router.put('/patients/:id',       requireReceptionistPermission('registration'), receptionistController.updatePatient);
 router.patch('/patients/:id',     requireReceptionistPermission('registration'), receptionistController.updatePatient);
 router.post('/register-walkin',   requireReceptionistPermission('registration'), receptionistController.registerPatient);
+router.post('/patients/walk-in',  requireReceptionistPermission('registration'), receptionistController.registerPatient);
 router.post('/register',          requireReceptionistPermission('registration'), receptionistController.registerPatient);
 
 // ──────────────────────────────────────────────────────────────────────────────
