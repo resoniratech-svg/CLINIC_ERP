@@ -9,9 +9,6 @@ import {
   CreditCard,
   Calculator,
   PhoneCall,
-  CheckSquare,
-  Star,
-  AlertTriangle,
   User,
   LogOut,
   Building,
@@ -199,24 +196,6 @@ export const PROSidebar = ({ isMobileOpen, onCloseMobile }) => {
               }`}
             />
             <span>CRM / Calling</span>
-          </NavLink>
-
-          {/* My Tasks */}
-          <NavLink to="/pro/tasks" className={navLinkClasses}>
-            <CheckSquare className="w-4 h-4 text-[#1565C0]" />
-            <span>My Tasks</span>
-          </NavLink>
-
-          {/* Feedback */}
-          <NavLink to="/pro/feedback" className={navLinkClasses}>
-            <Star className="w-4 h-4 text-[#1565C0]" />
-            <span>Patient Feedback</span>
-          </NavLink>
-
-          {/* Complaints / Escalations */}
-          <NavLink to="/pro/complaints" className={navLinkClasses}>
-            <AlertTriangle className="w-4 h-4 text-[#D32F2F]" />
-            <span>Complaints</span>
           </NavLink>
 
           {/* My Profile */}
