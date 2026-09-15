@@ -160,7 +160,7 @@ describe('Pharmacy Module End-to-End Business Rules Verification', () => {
 
     const processRes2 = await request(app).get(`/api/v1/pharmacy/prescriptions/${testPrescriptionId}/process`).set('Authorization', `Bearer ${pharmacyToken}`);
     expect(processRes2.status).toBe(200);
-    expect(processRes2.body.data.prescription.pharmacy_status).toBe('processing');
+    expect(processRes2.body.data.prescription.pharmacy_status).toBe('pending');
   });
 
   test('Rule 3: Pharmacy prohibited actions return 403', async () => {
@@ -265,6 +265,15 @@ describe('Pharmacy Module End-to-End Business Rules Verification', () => {
     expect(txnRes.status).toBe(200);
     const outTxn = txnRes.body.data.find(t => t.transaction_type === 'out');
     expect(outTxn).toBeDefined();
+  });
+
+  test('Rule 10b: Duplicate complete dispensing on already dispensed prescription is rejected safely', async () => {
+    const dupRes = await request(app).post(`/api/v1/pharmacy/prescriptions/${testPrescriptionId}/dispense/complete`).set('Authorization', `Bearer ${pharmacyToken}`).send({
+      items: [{ item_id: testItemId, stock_id: testStockId, dispense_quantity: 14 }]
+    });
+    expect(dupRes.status).toBe(400);
+    expect(dupRes.body.success).toBe(false);
+    expect(dupRes.body.message).toMatch(/already been dispensed/i);
   });
 
   test('Rule 11: Concurrency protection — simultaneous complete dispense against limited stock', async () => {

@@ -720,7 +720,7 @@ async function createBill(req, res) {
     const { patient_id, doctor_id, bill_type, items, discount_amount, package_id, coupon_code, coupon_id, treatment_plan_ids } = req.body;
 
     if (!patient_id || !bill_type) {
-      return res.status(400).json(formatResponse(false, null, 'patient_id and bill_type are required'));
+      return res.status(400).json(formatResponse(false, null, 'patient_id, bill_type, and items array are required'));
     }
 
     if (bill_type === 'consultation') {
@@ -784,7 +784,7 @@ async function createBill(req, res) {
 
     if (planRows.length === 0 && manualItems.length === 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json(formatResponse(false, null, 'Either treatment_plan_ids or items array is required'));
+      return res.status(400).json(formatResponse(false, null, 'Either treatment_plan_ids or items array are required'));
     }
 
     // ── BUILD ITEMS LIST & SUBTOTAL ───────────────────────────────────────
@@ -1193,7 +1193,9 @@ async function recordPayment(req, res) {
         final_amount: parseFloat(bill.final_amount),
         paid_amount: newPaidTotal,
         balance_due: shortfall > 0 ? shortfall : 0,
-        payment_status: newStatus
+        due_amount: shortfall > 0 ? shortfall : 0,
+        payment_status: newStatus,
+        status: newStatus
       }
     }, 'Payment recorded successfully'));
   } catch (err) {

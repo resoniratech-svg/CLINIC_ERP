@@ -122,14 +122,15 @@ async function getPrescriptionQueue(req, res) {
       WITH ranked_rx AS (
         SELECT p.*,
                ROW_NUMBER() OVER (
-                 PARTITION BY p.appointment_id
+                 PARTITION BY p.appointment_id, p.pharmacy_status
                  ORDER BY
                    CASE
-                     WHEN p.pharmacy_status = 'dispensed' THEN 1
-                     WHEN p.pharmacy_status = 'partially_dispensed' THEN 2
-                     WHEN p.pharmacy_status = 'processing' THEN 3
+                     WHEN p.pharmacy_status = 'pending' THEN 1
+                     WHEN p.pharmacy_status = 'processing' THEN 2
+                     WHEN p.pharmacy_status = 'partially_dispensed' THEN 3
                      WHEN p.pharmacy_status = 'on_hold' THEN 4
-                     ELSE 5
+                     WHEN p.pharmacy_status = 'dispensed' THEN 5
+                     ELSE 6
                    END ASC,
                    p.id DESC
                ) as rn
@@ -233,11 +234,7 @@ async function processPrescription(req, res) {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Prescription cannot be processed prior to PRO completed status'));
     }
 
-    // Update status to processing if currently pending
-    if (rx.pharmacy_status === 'pending') {
-      await db.query(`UPDATE prescriptions SET pharmacy_status = 'processing' WHERE id = $1`, [rxId]);
-      rx.pharmacy_status = 'processing';
-    }
+    // Note: Fetching/viewing a prescription must NEVER mutate its status. Status remains strictly unchanged on GET.
 
     // Get items
     const itemsRes = await db.query(`
@@ -487,10 +484,16 @@ async function completeDispensing(req, res) {
 
     await client.query('BEGIN');
 
-    const rxRes = await client.query(`SELECT * FROM prescriptions WHERE id = $1`, [rxId]);
+    const rxRes = await client.query(`SELECT * FROM prescriptions WHERE id = $1 FOR UPDATE`, [rxId]);
     if (rxRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json(formatResponse(false, null, 'Prescription not found'));
+    }
+
+    const rx = rxRes.rows[0];
+    if (rx.pharmacy_status === 'dispensed') {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Prescription has already been dispensed'));
     }
 
     const allRxItems = await client.query(`SELECT * FROM prescription_items WHERE prescription_id = $1`, [rxId]);

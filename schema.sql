@@ -757,3 +757,33 @@ CREATE INDEX IF NOT EXISTS idx_treatment_plans_billing_status ON treatment_plans
 -- PRO BILLING: BILL ITEMS TRACEABILITY — link each item back to its source treatment plan
 ALTER TABLE bill_items ADD COLUMN IF NOT EXISTS treatment_plan_id INTEGER REFERENCES treatment_plans(treatment_id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_bill_items_treatment_plan ON bill_items(treatment_plan_id);
+
+-- SUPER ADMIN SELF-EMAIL PASSWORD RECOVERY
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_required BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_hash VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_used_at TIMESTAMP WITH TIME ZONE;
+
+CREATE TABLE IF NOT EXISTS super_admin_password_recovery (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL DEFAULT 'super_admin',
+    identifier_type VARCHAR(50),
+    submitted_identifier VARCHAR(150),
+    reason TEXT,
+    recovery_status VARCHAR(50) NOT NULL DEFAULT 'pending',
+    email_destination VARCHAR(255) NOT NULL,
+    temporary_password_created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    temporary_password_expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    temporary_password_used_at TIMESTAMP WITH TIME ZONE,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    ip_address VARCHAR(50),
+    user_agent TEXT,
+    failure_reason TEXT,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sa_recovery_user_id ON super_admin_password_recovery(user_id);
+CREATE INDEX IF NOT EXISTS idx_sa_recovery_status ON super_admin_password_recovery(recovery_status);
+CREATE INDEX IF NOT EXISTS idx_sa_recovery_created_at ON super_admin_password_recovery(created_at);
