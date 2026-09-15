@@ -209,6 +209,178 @@ async function searchPatients(req, res) {
 }
 
 
+// 3.3b Authoritative Visit Completion Status Helper
+async function getPatientVisitStatusHelper(patientId, excludeAppointmentId = null, client = null) {
+  const runner = client || db;
+  const pId = parseInt(patientId);
+
+  // Find the latest relevant previous appointment for this patient
+  let query = `
+    SELECT a.*, u.full_name as doctor_name, d.specialization
+    FROM appointments a
+    JOIN doctors d ON a.doctor_id = d.doctor_id
+    JOIN users u ON d.user_id = u.user_id
+    WHERE a.patient_id = $1 AND a.status NOT IN ('cancelled')
+  `;
+  const params = [pId];
+  if (excludeAppointmentId) {
+    params.push(parseInt(excludeAppointmentId));
+    query += ` AND a.appointment_id != $2`;
+  }
+  query += ` ORDER BY a.appointment_date DESC, a.appointment_time DESC, a.appointment_id DESC LIMIT 1`;
+
+  const apptRes = await runner.query(query, params);
+  if (apptRes.rows.length === 0) {
+    return {
+      has_previous_visit: false,
+      overall_status: 'completed',
+      is_ready_for_followup: true,
+      pending_reason: null,
+      steps: [
+        { name: 'Doctor Consultation', status: 'completed', completed: true, label: 'Not Applicable' },
+        { name: 'Treatment / Plan', status: 'completed', completed: true, label: 'Not Applicable' },
+        { name: 'Billing', status: 'completed', completed: true, label: 'Not Applicable' },
+        { name: 'Payment', status: 'paid', completed: true, label: 'Not Applicable' },
+        { name: 'Pharmacy', status: 'not_applicable', completed: true, label: 'Not Applicable' }
+      ]
+    };
+  }
+
+  const prevAppt = apptRes.rows[0];
+  const apptId = prevAppt.appointment_id;
+
+  // 1. Doctor Consultation status
+  let doctorCompleted = ['doctor_completed', 'pro_completed', 'completed'].includes(prevAppt.status);
+  if (!doctorCompleted) {
+    const consultRes = await runner.query(
+      `SELECT status FROM consultations WHERE appointment_id = $1 OR (patient_id = $2 AND status = 'completed') ORDER BY created_at DESC LIMIT 1`,
+      [apptId, pId]
+    );
+    if (consultRes.rows.length > 0 && consultRes.rows[0].status === 'completed') {
+      doctorCompleted = true;
+    }
+  }
+
+  // 2. Treatment / Plan status
+  const planRes = await runner.query(
+    `SELECT treatment_id, status FROM treatment_plans WHERE patient_id = $1 ORDER BY created_at DESC`,
+    [pId]
+  );
+  let treatmentStatus = 'completed';
+  if (planRes.rows.length > 0 && !doctorCompleted) {
+    treatmentStatus = 'pending';
+  }
+
+  // 3. Billing & Payment status
+  const billRes = await runner.query(
+    `SELECT b.bill_id, b.final_amount,
+            COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount,
+            COALESCE((SELECT due_amount FROM due_patients WHERE bill_id = b.bill_id AND status = 'pending' LIMIT 1), 0) as due_amount
+     FROM bills b
+     WHERE b.appointment_id = $1 OR b.patient_id = $2
+     ORDER BY b.created_at DESC LIMIT 5`,
+    [apptId, pId]
+  );
+  let billingStatus = 'completed';
+  let paymentStatus = 'paid';
+
+  if (billRes.rows.length > 0) {
+    const latestBill = billRes.rows[0];
+    const dueAmt = parseFloat(latestBill.due_amount || 0);
+    const paidAmt = parseFloat(latestBill.paid_amount || 0);
+    const finalAmt = parseFloat(latestBill.final_amount || 0);
+    if (dueAmt > 0 || (finalAmt > 0 && paidAmt < finalAmt)) {
+      paymentStatus = 'pending';
+    }
+  }
+
+  // 4. Pharmacy status
+  const prescRes = await runner.query(
+    `SELECT pr.id, pr.pharmacy_status,
+            COUNT(pi.id)::int as total_items,
+            COUNT(CASE WHEN pi.dispensed = true THEN 1 END)::int as dispensed_items
+     FROM prescriptions pr
+     LEFT JOIN prescription_items pi ON pr.id = pi.prescription_id
+     WHERE pr.appointment_id = $1 OR pr.patient_id = $2
+     GROUP BY pr.id, pr.pharmacy_status, pr.created_at
+     ORDER BY pr.created_at DESC LIMIT 1`,
+    [apptId, pId]
+  );
+
+  let pharmacyStatus = 'not_applicable';
+  let pharmacyCompleted = true;
+
+  if (prescRes.rows.length > 0) {
+    const rx = prescRes.rows[0];
+    if (rx.total_items > 0) {
+      if (rx.pharmacy_status === 'dispensed' && rx.dispensed_items >= rx.total_items) {
+        pharmacyStatus = 'dispensed';
+        pharmacyCompleted = true;
+      } else {
+        pharmacyStatus = 'pending';
+        pharmacyCompleted = false;
+      }
+    }
+  }
+
+  // Determine overall readiness
+  let isReady = false;
+  let overallStatus = 'incomplete';
+  let pendingReason = null;
+
+  if (!doctorCompleted) {
+    pendingReason = 'Doctor consultation is still pending or in progress.';
+  } else if (treatmentStatus === 'pending') {
+    pendingReason = 'Treatment plan processing is pending.';
+  } else if (paymentStatus === 'pending') {
+    pendingReason = 'Outstanding payment is pending for the previous visit.';
+  } else if (!pharmacyCompleted) {
+    pendingReason = 'Previous visit is not completed. Pharmacy dispensing is still pending.';
+  } else {
+    isReady = true;
+    overallStatus = 'completed';
+  }
+
+  return {
+    has_previous_visit: true,
+    previous_appointment_id: apptId,
+    appointment_date: prevAppt.appointment_date,
+    appointment_time: prevAppt.appointment_time,
+    appointment_status: prevAppt.status,
+    doctor_name: prevAppt.doctor_name,
+    specialization: prevAppt.specialization,
+    doctor_consultation: doctorCompleted ? 'completed' : 'pending',
+    treatment_plan: treatmentStatus,
+    billing: billingStatus,
+    payment: paymentStatus,
+    pharmacy: pharmacyStatus,
+    overall_status: overallStatus,
+    is_ready_for_followup: isReady,
+    pending_reason: pendingReason,
+    steps: [
+      { name: 'Doctor Consultation', status: doctorCompleted ? 'completed' : 'pending', completed: doctorCompleted },
+      { name: 'Treatment / Plan', status: treatmentStatus, completed: treatmentStatus === 'completed' },
+      { name: 'Billing', status: billingStatus, completed: billingStatus === 'completed' },
+      { name: 'Payment', status: paymentStatus, completed: paymentStatus === 'paid' },
+      { name: 'Pharmacy', status: pharmacyStatus, completed: pharmacyCompleted }
+    ]
+  };
+}
+
+async function getPatientVisitStatus(req, res) {
+  try {
+    const patientId = parseInt(req.params.id);
+    if (!patientId || isNaN(patientId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid patient ID is required'));
+    }
+    const status = await getPatientVisitStatusHelper(patientId);
+    return res.json(formatResponse(true, status, 'Patient visit completion status retrieved successfully'));
+  } catch (err) {
+    console.error('getPatientVisitStatus error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 // 3.4 Patient Overview
 async function getPatientOverview(req, res) {
   try {
@@ -289,11 +461,14 @@ async function getPatientOverview(req, res) {
       SELECT * FROM call_records WHERE patient_id = $1 AND call_status = 'callback_requested' AND task_status = 'pending' ORDER BY callback_date ASC LIMIT 1
     `, [patientId]);
 
+    const previousVisitStatus = await getPatientVisitStatusHelper(patientId);
+
     return res.json(formatResponse(true, {
       patient,
       registration_status: regStatus,
       upcoming_appointment: apptRes.rows[0] || null,
       due_amount: parseFloat(dueRes.rows[0].total_due),
+      previous_visit_status: previousVisitStatus,
       previous_visits: visitsRes.rows,
       recent_visits: visitsRes.rows,
       previous_prescriptions: prescRes.rows,
@@ -1669,51 +1844,157 @@ async function getActiveDoctors(req, res) {
 
 // 3.10 Appointments
 async function createAppointment(req, res) {
+  const client = await db.pool.connect();
   try {
-    const { patient_id, doctor_id, appointment_date, appointment_time, appointment_type, reason, remarks } = req.body;
+    await client.query('BEGIN');
+    const {
+      patient_id,
+      doctor_id,
+      appointment_date,
+      appointment_time,
+      appointment_type,
+      reason,
+      remarks,
+      collect_payment,
+      payment_method,
+      consultation_fee,
+      discount_amount,
+      allow_override
+    } = req.body;
+
     if (!patient_id || !doctor_id || !appointment_date || !appointment_time) {
+      await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'patient_id, doctor_id, appointment_date, and appointment_time are required'));
     }
 
     const branchId = req.user.branch_id || 1;
+    const pId = parseInt(patient_id);
+    const dId = parseInt(doctor_id);
+    const apptType = (appointment_type || 'new').toLowerCase();
 
     // Check active doctor
-    const docRes = await db.query(`SELECT status FROM doctors WHERE doctor_id = $1 AND branch_id = $2`, [parseInt(doctor_id), branchId]);
+    const docRes = await client.query(`
+      SELECT doctor_id, user_id, status, new_consultation_fee, renewal_consultation_fee, followup_consultation_fee
+      FROM doctors WHERE doctor_id = $1 AND branch_id = $2
+    `, [dId, branchId]);
+
     if (docRes.rows.length === 0 || docRes.rows[0].status !== 'active') {
+      await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'Selected doctor is inactive or resigned. Please select an active doctor'));
+    }
+    const doc = docRes.rows[0];
+
+    // Gate Follow-up appointments against previous visit completion
+    if (apptType === 'followup') {
+      const visitStatus = await getPatientVisitStatusHelper(pId, null, client);
+      if (!visitStatus.is_ready_for_followup && !allow_override) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, {
+          visit_status: visitStatus,
+          can_override: true
+        }, visitStatus.pending_reason || 'Previous visit is not completed. Cannot schedule follow-up appointment.'));
+      }
     }
 
     // Check Doctor Slot Availability (Prevent Double Booking)
-    const slotCheck = await db.query(`
+    const slotCheck = await client.query(`
       SELECT appointment_id FROM appointments
       WHERE doctor_id = $1 AND appointment_date = $2 AND appointment_time::time = $3::time AND status NOT IN ('cancelled')
-    `, [parseInt(doctor_id), appointment_date, appointment_time]);
+    `, [dId, appointment_date, appointment_time]);
 
     if (slotCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, `Selected doctor is already booked at ${appointment_time} on ${appointment_date}. Double booking is not allowed. Please choose another time slot.`));
     }
 
     // Check Patient Slot Availability (Prevent Patient Double Booking)
-    const patientSlotCheck = await db.query(`
+    const patientSlotCheck = await client.query(`
       SELECT appointment_id FROM appointments
       WHERE patient_id = $1 AND appointment_date = $2 AND appointment_time::time = $3::time AND status NOT IN ('cancelled')
-    `, [parseInt(patient_id), appointment_date, appointment_time]);
+    `, [pId, appointment_date, appointment_time]);
 
     if (patientSlotCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, `Patient already has an appointment scheduled at ${appointment_time} on ${appointment_date}.`));
     }
 
-    const result = await db.query(`
+    const apptResult = await client.query(`
       INSERT INTO appointments (patient_id, doctor_id, appointment_date, appointment_time, appointment_type, status, created_by, branch_id)
       VALUES ($1, $2, $3, $4, $5, 'scheduled', $6, $7)
       RETURNING *
-    `, [parseInt(patient_id), parseInt(doctor_id), appointment_date, appointment_time, (appointment_type || 'new').toLowerCase(), req.user.user_id, branchId]);
+    `, [pId, dId, appointment_date, appointment_time, apptType, req.user.user_id, branchId]);
 
-    res.locals.auditEntry = { module: 'Appointments', action: 'Create Appointment', recordId: result.rows[0].appointment_id, newValue: result.rows[0] };
-    return res.status(201).json(formatResponse(true, result.rows[0], 'Appointment created successfully'));
+    const newAppt = apptResult.rows[0];
+    let createdBill = null;
+    let createdPayment = null;
+
+    // Handle initial consultation billing if payment requested or consultation_fee passed
+    if (collect_payment || consultation_fee !== undefined || payment_method) {
+      let defaultFee = parseFloat(doc.new_consultation_fee || 500);
+      if (apptType === 'renewal') defaultFee = parseFloat(doc.renewal_consultation_fee || 300);
+      if (apptType === 'followup') defaultFee = parseFloat(doc.followup_consultation_fee || 200);
+
+      let baseFee = defaultFee;
+      if (consultation_fee !== undefined && consultation_fee !== null && consultation_fee !== '') {
+        const parsedFee = parseFloat(consultation_fee);
+        if (!isNaN(parsedFee) && parsedFee >= 0) {
+          baseFee = parsedFee;
+        }
+      }
+
+      const discount = discount_amount ? Math.max(0, parseFloat(discount_amount)) : 0;
+      const finalFee = Math.max(0, baseFee - discount);
+      const isPaid = collect_payment !== false;
+      const paidAmt = isPaid ? finalFee : 0;
+      const dueAmt = Math.max(0, finalFee - paidAmt);
+
+      const billNum = await generateId('INV-', 'bills', client);
+
+      const billRes = await client.query(`
+        INSERT INTO bills (
+          bill_number, patient_id, doctor_id, bill_type, created_by, branch_id,
+          amount, discount_amount, final_amount, status, appointment_id
+        ) VALUES ($1, $2, $3, 'consultation', $4, $5, $6, $7, $8, 'created', $9)
+        RETURNING *
+      `, [billNum, pId, dId, req.user.user_id, branchId, baseFee, discount, finalFee, newAppt.appointment_id]);
+
+      createdBill = billRes.rows[0];
+      createdBill.due_amount = dueAmt;
+      createdBill.paid_amount = paidAmt;
+
+      if (paidAmt > 0) {
+        const payMeth = payment_method || 'cash';
+        const payRes = await client.query(`
+          INSERT INTO payments (
+            bill_id, patient_id, payment_method, amount, status, received_by, branch_id
+          ) VALUES ($1, $2, $3, $4, 'success', $5, $6)
+          RETURNING *
+        `, [createdBill.bill_id, pId, payMeth, paidAmt, req.user.user_id, branchId]);
+        createdPayment = payRes.rows[0];
+      }
+
+      if (dueAmt > 0) {
+        await client.query(`
+          INSERT INTO due_patients (patient_id, bill_id, due_amount, status, branch_id)
+          VALUES ($1, $2, $3, 'pending', $4)
+        `, [pId, createdBill.bill_id, dueAmt, branchId]);
+      }
+    }
+
+    await client.query('COMMIT');
+
+    res.locals.auditEntry = { module: 'Appointments', action: 'Create Appointment', recordId: newAppt.appointment_id, newValue: newAppt };
+    return res.status(201).json(formatResponse(true, {
+      ...newAppt,
+      bill: createdBill,
+      payment: createdPayment
+    }, 'Appointment created successfully'));
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('createAppointment error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
@@ -1723,7 +2004,43 @@ async function getAppointments(req, res) {
     const { date, doctor_id, status } = req.query;
 
     let query = `
-      SELECT a.*, p.full_name as patient_name, p.mobile_number, u.full_name as doctor_name, d.specialization
+      SELECT a.*, p.full_name as patient_name, p.mobile_number, u.full_name as doctor_name, d.specialization,
+        COALESCE(
+          (SELECT CASE 
+                    WHEN (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.bill_id = b.bill_id) >= b.final_amount 
+                         AND NOT EXISTS (SELECT 1 FROM due_patients dp WHERE dp.bill_id = b.bill_id AND dp.status = 'pending') THEN 'paid'
+                    ELSE 'pending'
+                  END
+           FROM bills b WHERE b.appointment_id = a.appointment_id AND b.bill_type = 'consultation' ORDER BY b.bill_id DESC LIMIT 1),
+          'unpaid'
+        ) as payment_status,
+        (SELECT b.final_amount FROM bills b WHERE b.appointment_id = a.appointment_id AND b.bill_type = 'consultation' ORDER BY b.bill_id DESC LIMIT 1) as consultation_fee,
+        COALESCE(
+          (SELECT pr.pharmacy_status::text FROM prescriptions pr WHERE pr.appointment_id = a.appointment_id ORDER BY pr.id DESC LIMIT 1),
+          'not_applicable'
+        ) as pharmacy_status,
+        COALESCE(
+          (
+            SELECT CASE 
+                     WHEN prev.status IN ('completed', 'pro_completed', 'doctor_completed') 
+                          AND NOT EXISTS (
+                            SELECT 1 FROM prescriptions rx 
+                            WHERE rx.appointment_id = prev.appointment_id 
+                              AND rx.pharmacy_status != 'dispensed'
+                              AND EXISTS (SELECT 1 FROM prescription_items pxi WHERE pxi.prescription_id = rx.id)
+                          ) THEN 'completed'
+                     ELSE 'incomplete'
+                   END
+            FROM appointments prev
+            WHERE prev.patient_id = a.patient_id 
+              AND prev.appointment_id != a.appointment_id 
+              AND (prev.appointment_date < a.appointment_date OR (prev.appointment_date = a.appointment_date AND prev.appointment_time < a.appointment_time) OR prev.appointment_id < a.appointment_id)
+              AND prev.status NOT IN ('cancelled')
+            ORDER BY prev.appointment_date DESC, prev.appointment_time DESC, prev.appointment_id DESC
+            LIMIT 1
+          ),
+          'none'
+        ) as previous_visit_status
       FROM appointments a
       JOIN patients p ON a.patient_id = p.patient_id
       JOIN doctors d ON a.doctor_id = d.doctor_id
@@ -2814,5 +3131,7 @@ module.exports = {
   getCallRecords,
   getMyTasks,
   completeTask,
-  rescheduleTask
+  rescheduleTask,
+  getPatientVisitStatus,
+  getPatientVisitStatusHelper
 };

@@ -18,6 +18,7 @@ router.get('/dashboard', receptionistController.getDashboard);
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/patients/search', receptionistController.searchPatients);
 router.get('/patients/:id/overview', receptionistController.getPatientOverview);
+router.get('/patients/:id/visit-status', receptionistController.getPatientVisitStatus);
 router.get('/patients/:id/invoices', receptionistController.getPatientInvoices);
 router.get('/doctors', receptionistController.getActiveDoctors);
 router.get('/active-doctors', receptionistController.getActiveDoctors);
@@ -77,6 +78,7 @@ router.get('/checkin/waiting',           requireReceptionistPermission('checkin'
 router.post('/billing/bills',   requireReceptionistPermission('consultation_fee_billing'), receptionistController.createConsultationBill);
 router.get('/billing/bills',    requireReceptionistPermission('consultation_fee_billing'), receptionistController.getConsultationBills);
 router.get('/consultation-fee', requireReceptionistPermission('consultation_fee_billing'), receptionistController.getConsultationFee);
+router.get('/billing/consultation-fee', requireReceptionistPermission('consultation_fee_billing'), receptionistController.getConsultationFee);
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Due Patients & Payment Collection  →  permission: due_management
