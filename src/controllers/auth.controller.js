@@ -44,7 +44,7 @@ async function login(req, res) {
 
     // Find user by username, mobile, employee_id, or normalized super_admin aliases
     const result = await db.query(
-      `SELECT u.*, b.branch_name
+      `SELECT u.*, b.branch_name, b.branch_code
        FROM users u
        JOIN branches b ON u.branch_id = b.branch_id
        WHERE LOWER(TRIM(u.username)) = $1
@@ -227,8 +227,13 @@ async function login(req, res) {
         user_id: user.user_id,
         employee_id: user.employee_id,
         full_name: user.full_name,
+        username: user.username,
+        mobile_number: user.mobile_number || null,
         role: user.role,
         branch_id: user.branch_id,
+        branch_name: user.branch_name || null,
+        branch_code: user.branch_code || null,
+        department: user.department || null,
         must_change_password: mustChange,
         requires_password_change: mustChange,
         ...(userPermissions && { permissions: userPermissions })
