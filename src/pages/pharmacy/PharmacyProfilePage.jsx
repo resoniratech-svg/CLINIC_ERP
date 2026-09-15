@@ -144,14 +144,21 @@ export const PharmacyProfilePage = () => {
       return;
     }
 
+    if (passwordForm.old_password === passwordForm.new_password) {
+      showToast('New password must be different from current password', 'warning');
+      return;
+    }
+
     setSavingPassword(true);
     try {
       const res = await authApi.changePassword({
         old_password: passwordForm.old_password,
+        current_password: passwordForm.old_password,
         new_password: passwordForm.new_password,
+        confirm_password: passwordForm.confirm_password,
       });
       if (res.success) {
-        showToast('Password changed successfully', 'success');
+        showToast(res.message || 'Password changed successfully', 'success');
         setPasswordForm({
           old_password: '',
           new_password: '',
@@ -161,7 +168,8 @@ export const PharmacyProfilePage = () => {
         showToast(res.message || 'Failed to change password', 'error');
       }
     } catch (err) {
-      showToast(err.message || 'Failed to update password. Check your current password.', 'error');
+      const errMsg = err.response?.data?.message || err.message || 'Failed to update password. Check your current password.';
+      showToast(errMsg, 'error');
     } finally {
       setSavingPassword(false);
     }
