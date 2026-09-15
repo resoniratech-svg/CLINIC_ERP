@@ -22,7 +22,11 @@ import {
   X,
   Eye,
   Stethoscope,
-  ArrowRight
+  ArrowRight,
+  AlertCircle,
+  CreditCard,
+  Receipt,
+  ShieldAlert
 } from 'lucide-react';
 
 export const ReceptionistAppointmentsPage = () => {
@@ -79,10 +83,59 @@ export const ReceptionistAppointmentsPage = () => {
   });
   const [creatingBooking, setCreatingBooking] = useState(false);
 
+  // Previous Visit Status for Booking Patient
+  const [patientVisitStatus, setPatientVisitStatus] = useState(null);
+  const [loadingVisitStatus, setLoadingVisitStatus] = useState(false);
+  const [allowOverride, setAllowOverride] = useState(false);
+
+  // Payment collection fields for appointment
+  const [collectPayment, setCollectPayment] = useState(true);
+  const [paymentMethod, setPaymentMethod] = useState('cash');
+  const [customFee, setCustomFee] = useState('');
+  const [discountAmount, setDiscountAmount] = useState('');
+
   const formatDocName = (name) => {
     if (!name) return 'Doctor';
     return name.trim().startsWith('Dr.') ? name.trim() : `Dr. ${name.trim()}`;
   };
+
+  const selectedDoc = doctors.find((d) => String(d.doctor_id) === String(newBookingData.doctor_id));
+  const defaultConsultationFee = selectedDoc
+    ? (newBookingData.appointment_type === 'renewal'
+        ? parseFloat(selectedDoc.renewal_consultation_fee || 300)
+        : newBookingData.appointment_type === 'followup'
+        ? parseFloat(selectedDoc.followup_consultation_fee || 200)
+        : parseFloat(selectedDoc.new_consultation_fee || 500))
+    : (newBookingData.appointment_type === 'followup' ? 200 : 500);
+
+  const effectiveFee = customFee !== '' ? Math.max(0, parseFloat(customFee) || 0) : defaultConsultationFee;
+  const effectiveDiscount = discountAmount !== '' ? Math.max(0, parseFloat(discountAmount) || 0) : 0;
+  const finalFeeAmount = Math.max(0, effectiveFee - effectiveDiscount);
+
+  useEffect(() => {
+    if (bookingPatient?.patient_id) {
+      setLoadingVisitStatus(true);
+      setAllowOverride(false);
+      receptionistApi.getPatientVisitStatus(bookingPatient.patient_id)
+        .then((res) => {
+          if (res.success) {
+            setPatientVisitStatus(res.data);
+            if (res.data?.has_previous_visit) {
+              setNewBookingData((prev) => ({ ...prev, appointment_type: 'followup' }));
+            } else {
+              setNewBookingData((prev) => ({ ...prev, appointment_type: 'new' }));
+            }
+          } else {
+            setPatientVisitStatus(null);
+          }
+        })
+        .catch(() => setPatientVisitStatus(null))
+        .finally(() => setLoadingVisitStatus(false));
+    } else {
+      setPatientVisitStatus(null);
+      setAllowOverride(false);
+    }
+  }, [bookingPatient?.patient_id]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -214,6 +267,17 @@ export const ReceptionistAppointmentsPage = () => {
       return;
     }
 
+    if (!newBookingData.doctor_id) {
+      showToast('Please select an active doctor', 'warning');
+      return;
+    }
+
+    // Client-side gating check for follow-up appointments
+    if (newBookingData.appointment_type === 'followup' && patientVisitStatus && !patientVisitStatus.is_ready_for_followup && !allowOverride) {
+      showToast(patientVisitStatus.pending_reason || 'Previous visit is not completed. Please check override if authorized.', 'error');
+      return;
+    }
+
     setCreatingBooking(true);
     try {
       const res = await receptionistApi.createAppointment({
@@ -223,12 +287,20 @@ export const ReceptionistAppointmentsPage = () => {
         appointment_time: newBookingData.appointment_time,
         appointment_type: newBookingData.appointment_type,
         remarks: newBookingData.remarks || null,
+        collect_payment: collectPayment,
+        payment_method: paymentMethod,
+        consultation_fee: effectiveFee,
+        discount_amount: effectiveDiscount,
+        allow_override: allowOverride,
       });
 
       if (res.success) {
-        showToast('New appointment booked successfully!', 'success');
+        showToast('Appointment booked successfully! Consultation invoice generated.', 'success');
         setIsNewBookingOpen(false);
         setBookingPatient(null);
+        setCustomFee('');
+        setDiscountAmount('');
+        setAllowOverride(false);
         fetchAppointments();
       }
     } catch (err) {
@@ -382,25 +454,70 @@ export const ReceptionistAppointmentsPage = () => {
                     </td>
 
                     <td className="py-3.5 px-4">
-                      <span className="capitalize font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md text-[11px]">
-                        {a.appointment_type || 'General'}
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span className="capitalize font-semibold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md text-[11px]">
+                          {a.appointment_type || 'General'}
+                        </span>
+                        {/* Payment Status Badge */}
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[9px] font-bold inline-flex items-center gap-1 ${
+                            a.payment_status === 'paid'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          <span>{a.payment_status === 'paid' ? 'Paid' : 'Unpaid'}</span>
+                          {a.consultation_fee !== null && a.consultation_fee !== undefined && (
+                            <span className="font-mono font-semibold">(₹{parseFloat(a.consultation_fee)})</span>
+                          )}
+                        </span>
+                      </div>
                     </td>
 
                     <td className="py-3.5 px-4">
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold capitalize ${
-                          a.status === 'checked_in'
-                            ? 'bg-amber-100 text-amber-800'
-                            : a.status === 'completed'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : a.status === 'cancelled'
-                            ? 'bg-red-100 text-red-700'
-                            : 'bg-blue-100 text-blue-800'
-                        }`}
-                      >
-                        {a.status?.replace('_', ' ')}
-                      </span>
+                      <div className="flex flex-col gap-1 items-start">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold capitalize ${
+                            a.status === 'checked_in'
+                              ? 'bg-amber-100 text-amber-800'
+                              : a.status === 'completed'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : a.status === 'cancelled'
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-blue-100 text-blue-800'
+                          }`}
+                        >
+                          {a.status?.replace('_', ' ')}
+                        </span>
+
+                        <div className="flex flex-wrap gap-1 text-[9px]">
+                          {/* Previous Visit Badge */}
+                          {a.previous_visit_status && a.previous_visit_status !== 'none' && (
+                            <span
+                              className={`px-1.5 py-0.2 rounded font-semibold ${
+                                a.previous_visit_status === 'completed'
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}
+                            >
+                              Prev: {a.previous_visit_status === 'completed' ? 'Done' : 'Incomplete'}
+                            </span>
+                          )}
+
+                          {/* Pharmacy Status Badge */}
+                          {a.pharmacy_status && a.pharmacy_status !== 'not_applicable' && (
+                            <span
+                              className={`px-1.5 py-0.2 rounded font-semibold ${
+                                a.pharmacy_status === 'dispensed'
+                                  ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              }`}
+                            >
+                              Rx: {a.pharmacy_status === 'dispensed' ? 'Dispensed' : 'Pending'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </td>
 
                     <td className="py-3.5 px-4 text-right space-x-1.5 whitespace-nowrap">
@@ -678,7 +795,140 @@ export const ReceptionistAppointmentsPage = () => {
             )}
           </div>
 
-          {/* Searchable Doctor Selection */}
+          {/* 2. Previous Visit Status Card (When Patient is Selected) */}
+          {bookingPatient && (
+            <div className="space-y-2">
+              {loadingVisitStatus ? (
+                <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-slate-500 text-xs text-center">
+                  Checking patient previous visit status...
+                </div>
+              ) : patientVisitStatus ? (
+                <div
+                  className={`p-3.5 rounded-2xl border ${
+                    patientVisitStatus.is_ready_for_followup
+                      ? 'bg-emerald-50/70 border-emerald-200'
+                      : !patientVisitStatus.has_previous_visit
+                      ? 'bg-slate-50 border-slate-200'
+                      : 'bg-amber-50/80 border-amber-200'
+                  } space-y-2.5`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5 text-blue-600" />
+                      <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider">
+                        Previous Visit Status
+                      </span>
+                    </div>
+
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold inline-flex items-center gap-1 ${
+                        patientVisitStatus.is_ready_for_followup
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : !patientVisitStatus.has_previous_visit
+                          ? 'bg-slate-100 text-slate-700'
+                          : 'bg-amber-100 text-amber-800'
+                      }`}
+                    >
+                      {patientVisitStatus.is_ready_for_followup ? (
+                        <>
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          <span>Ready for Follow-up</span>
+                        </>
+                      ) : !patientVisitStatus.has_previous_visit ? (
+                        <span>New Patient</span>
+                      ) : (
+                        <>
+                          <AlertCircle className="w-3 h-3 text-amber-600" />
+                          <span>Visit Incomplete</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
+
+                  {/* Pending reason alert */}
+                  {patientVisitStatus.pending_reason && (
+                    <div className="p-2 bg-amber-100/80 border border-amber-200 rounded-xl text-amber-900 text-[11px] flex items-center gap-2">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                      <span>{patientVisitStatus.pending_reason}</span>
+                    </div>
+                  )}
+
+                  {/* 5-Stage Checklist */}
+                  {patientVisitStatus.steps && (
+                    <div className="grid grid-cols-5 gap-1.5 text-center text-[9px]">
+                      {patientVisitStatus.steps.map((st, sIdx) => (
+                        <div
+                          key={sIdx}
+                          className={`p-1.5 rounded-lg border ${
+                            st.completed
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-800 font-semibold'
+                              : 'bg-amber-50 border-amber-200 text-amber-800 font-semibold'
+                          }`}
+                        >
+                          <div className="truncate">{st.name}</div>
+                          <div className="mt-0.5 font-bold flex items-center justify-center gap-0.5">
+                            {st.completed ? '✓ Done' : '⏳ Wait'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Gating Override Checkbox (When Incomplete and Follow-up) */}
+                  {!patientVisitStatus.is_ready_for_followup &&
+                    newBookingData.appointment_type === 'followup' && (
+                      <div className="p-2.5 bg-white rounded-xl border border-amber-300 flex items-start gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          id="allow-override"
+                          checked={allowOverride}
+                          onChange={(e) => setAllowOverride(e.target.checked)}
+                          className="mt-0.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                        <label htmlFor="allow-override" className="cursor-pointer text-amber-900 font-medium text-[11px] leading-snug">
+                          <strong>Allow Follow-Up Override:</strong> Patient previous visit has pending steps (e.g. pharmacy dispensing), but I authorize scheduling this follow-up appointment.
+                        </label>
+                      </div>
+                    )}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {/* 3. Consultation Type */}
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+              Consultation Type *
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'followup', label: 'Follow-up', desc: 'Standard Follow-up' },
+                { id: 'new', label: 'New Patient', desc: 'First Consultation' },
+                { id: 'renewal', label: 'Renewal', desc: 'Membership Renewal' },
+              ].map((t) => {
+                const isSelected = newBookingData.appointment_type === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setNewBookingData((prev) => ({ ...prev, appointment_type: t.id }));
+                    }}
+                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'border-blue-600 bg-blue-50/80 font-bold text-blue-900 ring-2 ring-blue-500/20'
+                        : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <div className="text-xs font-bold">{t.label}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5">{t.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 4. Searchable Doctor Selection */}
           <div className="space-y-1 relative" ref={docDropdownRef}>
             <label className="block text-[11px] font-semibold text-slate-700 mb-1">
               Doctor * (Active Doctors Only)
@@ -732,6 +982,12 @@ export const ReceptionistAppointmentsPage = () => {
                   filteredDoctors.map((doc) => {
                     const isSelected = String(doc.doctor_id) === String(newBookingData.doctor_id);
                     const name = formatDocName(doc.doctor_name || doc.full_name);
+                    const feeForType =
+                      newBookingData.appointment_type === 'renewal'
+                        ? doc.renewal_consultation_fee || 300
+                        : newBookingData.appointment_type === 'followup'
+                        ? doc.followup_consultation_fee || 200
+                        : doc.new_consultation_fee || 500;
                     return (
                       <div
                         key={doc.doctor_id}
@@ -754,7 +1010,7 @@ export const ReceptionistAppointmentsPage = () => {
                             )}
                           </div>
                           <div className="text-[10px] text-slate-400 mt-0.5">
-                            Fee: ₹{doc.new_consultation_fee || 500} • {doc.qualification || 'MBBS / BHMS'}
+                            Consultation Fee: ₹{feeForType} • {doc.qualification || 'MBBS / BHMS'}
                           </div>
                         </div>
 
@@ -769,6 +1025,82 @@ export const ReceptionistAppointmentsPage = () => {
             )}
           </div>
 
+          {/* 5. Consultation Fee Billing & Payment Section */}
+          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <Receipt className="w-3.5 h-3.5 text-blue-600" />
+                <span>Consultation Fee & Payment</span>
+              </span>
+              <span className="text-xs font-black font-mono text-blue-700">
+                ₹{finalFeeAmount}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Fee Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={customFee !== '' ? customFee : defaultConsultationFee}
+                  onChange={(e) => setCustomFee(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-300 bg-white font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
+                  Discount (₹)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={discountAmount}
+                  placeholder="0"
+                  onChange={(e) => setDiscountAmount(e.target.value)}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-300 bg-white font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Collect Payment Now Toggle */}
+            <div className="pt-2 border-t border-slate-200/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-800">
+                <input
+                  type="checkbox"
+                  checked={collectPayment}
+                  onChange={(e) => setCollectPayment(e.target.checked)}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>Collect payment at booking</span>
+              </label>
+
+              {collectPayment && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase">Method:</span>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="px-2.5 py-1 text-xs rounded-lg border border-slate-300 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="upi">UPI / QR</option>
+                    <option value="card">Card</option>
+                    <option value="net_banking">Net Banking</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
+            <p className="text-[10px] text-slate-400 leading-tight">
+              * Generates an isolated consultation bill for this appointment. Does not re-bill previous visit treatments or pharmacy medicines.
+            </p>
+          </div>
+
+          {/* 6. Date & Time Selection */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Appointment Date *</label>
@@ -798,6 +1130,17 @@ export const ReceptionistAppointmentsPage = () => {
             </div>
           </div>
 
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-700 mb-1">Reason / Remarks</label>
+            <input
+              type="text"
+              placeholder="e.g. Routine follow-up, symptom review..."
+              value={newBookingData.remarks}
+              onChange={(e) => setNewBookingData({ ...newBookingData, remarks: e.target.value })}
+              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            />
+          </div>
+
           <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
             <button
               type="button"
@@ -808,10 +1151,32 @@ export const ReceptionistAppointmentsPage = () => {
             </button>
             <button
               type="submit"
-              disabled={creatingBooking}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md cursor-pointer"
+              disabled={
+                creatingBooking ||
+                (newBookingData.appointment_type === 'followup' &&
+                  patientVisitStatus &&
+                  !patientVisitStatus.is_ready_for_followup &&
+                  !allowOverride)
+              }
+              className={`px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer ${
+                newBookingData.appointment_type === 'followup' &&
+                patientVisitStatus &&
+                !patientVisitStatus.is_ready_for_followup &&
+                !allowOverride
+                  ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                  : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20'
+              }`}
             >
-              {creatingBooking ? 'Booking...' : 'Confirm Appointment'}
+              {creatingBooking
+                ? 'Booking...'
+                : newBookingData.appointment_type === 'followup' &&
+                  patientVisitStatus &&
+                  !patientVisitStatus.is_ready_for_followup &&
+                  !allowOverride
+                ? 'Follow-Up Gated (Check Override to Book)'
+                : collectPayment
+                ? `Confirm & Collect ₹${finalFeeAmount}`
+                : 'Confirm Appointment'}
             </button>
           </div>
         </form>

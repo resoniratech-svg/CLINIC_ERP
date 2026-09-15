@@ -194,6 +194,7 @@ export const receptionistApi = {
   getDashboard: () => axiosClient.get('/receptionist/dashboard'),
   searchPatients: (params) => axiosClient.get('/receptionist/patients/search', { params }),
   getPatientOverview: (id) => axiosClient.get(`/receptionist/patients/${id}/overview`),
+  getPatientVisitStatus: (id) => axiosClient.get(`/receptionist/patients/${id}/visit-status`),
   registerPatient: (data) => axiosClient.post('/receptionist/patients/register', data),
   getEnquiries: (params) => axiosClient.get('/receptionist/enquiries', { params }),
   createEnquiry: (data) => axiosClient.post('/receptionist/enquiries', data),
