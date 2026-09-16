@@ -409,14 +409,45 @@ async function getCounsellingHistory(req, res) {
 
 // 5. Packages / Plans
 async function createPackage(req, res) {
+  const client = await db.pool.connect();
   try {
-    const { patient_id, doctor_id, package_name, package_type, from_date, to_date, package_amount, discount_amount, payment_status, remarks } = req.body;
+    const {
+      patient_id,
+      doctor_id,
+      package_name,
+      package_type,
+      from_date,
+      to_date,
+      package_amount,
+      discount_amount,
+      payment_status,
+      remarks,
+      prescription_items,
+      medicines
+    } = req.body;
+
     if (!patient_id || !package_name || !package_type || !from_date || package_amount === undefined) {
       return res.status(400).json(formatResponse(false, null, 'patient_id, package_name, package_type, from_date, and package_amount are required'));
     }
 
+    const pid = parseInt(patient_id);
+    if (!pid || isNaN(pid)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
+
     const pkgAmt = parseFloat(package_amount);
+    if (isNaN(pkgAmt) || pkgAmt < 0) {
+      return res.status(400).json(formatResponse(false, null, 'Package amount must be a non-negative number'));
+    }
+
     const discAmt = parseFloat(discount_amount || 0);
+    if (isNaN(discAmt) || discAmt < 0) {
+      return res.status(400).json(formatResponse(false, null, 'Discount amount must be a non-negative number'));
+    }
+    if (discAmt > pkgAmt) {
+      return res.status(400).json(formatResponse(false, null, 'Discount amount cannot exceed package amount'));
+    }
+
     const finalAmt = pkgAmt - discAmt; // Server-computed!
 
     let computedToDate = to_date;
@@ -450,30 +481,192 @@ async function createPackage(req, res) {
       durationDays = Math.ceil((toDt - fromDt) / (1000 * 60 * 60 * 24));
     }
 
+    // Prescription validation if provided
+    const itemsToProcess = prescription_items || medicines || [];
+    if (!Array.isArray(itemsToProcess)) {
+      return res.status(400).json(formatResponse(false, null, 'prescription_items must be an array'));
+    }
+
+    const validatedItems = [];
+    const seenMedIds = new Set();
+
+    for (let i = 0; i < itemsToProcess.length; i++) {
+      const item = itemsToProcess[i];
+      const medId = parseInt(item.medicine_id || item.id);
+      if (!medId || isNaN(medId)) {
+        return res.status(400).json(formatResponse(false, null, `Medicine item #${i + 1} has an invalid or missing medicine_id`));
+      }
+
+      if (seenMedIds.has(medId)) {
+        return res.status(400).json(formatResponse(false, null, `Duplicate medicine (ID ${medId}) detected in prescription items`));
+      }
+      seenMedIds.add(medId);
+
+      const dur = parseInt(item.duration_days || durationDays || 30);
+      if (isNaN(dur) || dur <= 0) {
+        return res.status(400).json(formatResponse(false, null, `Duration for medicine #${i + 1} must be a positive number of days`));
+      }
+
+      const qty = parseInt(item.quantity);
+      if (isNaN(qty) || qty <= 0) {
+        return res.status(400).json(formatResponse(false, null, `Quantity for medicine #${i + 1} must be a positive number`));
+      }
+
+      const dosage = String(item.dosage || '1 tab').trim();
+      const frequency = String(item.frequency || '1 time/day').trim();
+      const route = String(item.route || 'oral').trim();
+
+      validatedItems.push({
+        medicine_id: medId,
+        dosage: dosage || '1 tab',
+        frequency: frequency || '1 time/day',
+        duration_days: dur,
+        quantity: qty,
+        route: route || 'oral'
+      });
+    }
+
+    // Validate medicine existence in medicine_master
+    if (validatedItems.length > 0) {
+      const medIds = validatedItems.map(it => it.medicine_id);
+      const existingMedsRes = await db.query(
+        `SELECT id, medicine_name FROM medicine_master WHERE id = ANY($1::int[])`,
+        [medIds]
+      );
+      if (existingMedsRes.rows.length !== medIds.length) {
+        const foundIds = new Set(existingMedsRes.rows.map(m => m.id));
+        const missing = medIds.filter(id => !foundIds.has(id));
+        return res.status(400).json(formatResponse(false, null, `One or more medicines do not exist in catalog: [${missing.join(', ')}]`));
+      }
+    }
+
     const createdBy = req.user.user_id;
-    const result = await db.query(`
+    const branchId = req.user.branch_id || 1;
+
+    await client.query('BEGIN');
+
+    // 1. Insert package
+    const pkgResult = await client.query(`
       INSERT INTO packages (
         patient_id, doctor_id, package_name, package_type, from_date, to_date, duration_days,
         package_amount, discount_amount, final_amount, payment_status, status, remarks, created_by, branch_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, 1)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $14)
       RETURNING *
-    `, [patient_id, doctor_id || null, package_name, package_type, from_date, computedToDate, durationDays, pkgAmt, discAmt, finalAmt, payment_status || 'pending', remarks || null, createdBy]);
+    `, [
+      pid,
+      doctor_id || null,
+      package_name.trim(),
+      package_type,
+      from_date,
+      computedToDate,
+      durationDays,
+      pkgAmt,
+      discAmt,
+      finalAmt,
+      payment_status || 'pending',
+      remarks ? remarks.trim() : null,
+      createdBy,
+      branchId
+    ]);
 
-    const pkg = result.rows[0];
+    const pkg = pkgResult.rows[0];
+
+    // 2. If prescription items were provided, create linked prescription + items
+    let createdPrescription = null;
+    let createdItems = [];
+
+    if (validatedItems.length > 0) {
+      // Find latest appointment or consulting doctor for patient if not explicitly supplied
+      let resolvedDoctorId = doctor_id || null;
+      let resolvedAppointmentId = null;
+
+      const apptCheck = await client.query(`
+        SELECT appointment_id, doctor_id FROM appointments
+        WHERE patient_id = $1
+        ORDER BY appointment_id DESC LIMIT 1
+      `, [pid]);
+
+      if (apptCheck.rows.length > 0) {
+        resolvedAppointmentId = apptCheck.rows[0].appointment_id;
+        if (!resolvedDoctorId) {
+          resolvedDoctorId = apptCheck.rows[0].doctor_id;
+        }
+      }
+
+      // If doctor is still not found, check doctor list for branch
+      if (!resolvedDoctorId) {
+        const docFall = await client.query(`SELECT doctor_id FROM doctors LIMIT 1`);
+        if (docFall.rows.length > 0) {
+          resolvedDoctorId = docFall.rows[0].doctor_id;
+        }
+      }
+
+      const prescResult = await client.query(`
+        INSERT INTO prescriptions (
+          patient_id, doctor_id, appointment_id, package_id, created_by, branch_id, pharmacy_status
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'pending')
+        RETURNING *
+      `, [
+        pid,
+        resolvedDoctorId,
+        resolvedAppointmentId,
+        pkg.package_id,
+        createdBy,
+        branchId
+      ]);
+
+      createdPrescription = prescResult.rows[0];
+
+      // Update package with prescription_id
+      await client.query(`
+        UPDATE packages SET prescription_id = $1 WHERE package_id = $2
+      `, [createdPrescription.id, pkg.package_id]);
+      pkg.prescription_id = createdPrescription.id;
+
+      // Insert prescription items
+      for (const item of validatedItems) {
+        const itemResult = await client.query(`
+          INSERT INTO prescription_items (
+            prescription_id, medicine_id, dosage, quantity, frequency, route, duration_days, dispense_status
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+          RETURNING *
+        `, [
+          createdPrescription.id,
+          item.medicine_id,
+          item.dosage,
+          item.quantity,
+          item.frequency,
+          item.route,
+          item.duration_days
+        ]);
+        createdItems.push(itemResult.rows[0]);
+      }
+    }
+
+    await client.query('COMMIT');
+
     pkg.from_date = formatDateString(pkg.from_date);
     pkg.to_date = formatDateString(pkg.to_date);
+    pkg.prescription = createdPrescription ? {
+      ...createdPrescription,
+      items: createdItems
+    } : null;
 
     res.locals.auditEntry = { module: 'PRO Packages', action: 'Create Package', recordId: pkg.package_id, newValue: pkg };
     return res.status(201).json(formatResponse(true, pkg, 'Package created successfully'));
   } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('createPackage error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
+  } finally {
+    client.release();
   }
 }
 
 async function getPackages(req, res) {
   try {
     const patientId = req.query.patient_id ? parseInt(req.query.patient_id) : null;
+    const packageId = req.query.package_id ? parseInt(req.query.package_id) : null;
     const status = req.query.status;
 
     // Dynamic expired update check
@@ -484,9 +677,53 @@ async function getPackages(req, res) {
     `);
 
     let query = `
-      SELECT p.*, pt.full_name as patient_name
+      SELECT p.*, pt.full_name as patient_name,
+             COALESCE(pr.id, p.prescription_id) as prescription_id,
+             COALESCE(pr.pharmacy_status, 'pending') as pharmacy_status,
+             b.bill_id as invoice_id,
+             b.bill_number as invoice_number,
+             b.invoice_date,
+             b.bill_subtotal as invoice_subtotal,
+             b.bill_discount as invoice_discount,
+             b.bill_final_amount as invoice_final_amount,
+             COALESCE(b.paid_amount, 0) as invoice_paid_amount,
+             COALESCE(
+               (SELECT COUNT(*) FROM prescription_items pi WHERE pi.prescription_id = COALESCE(pr.id, p.prescription_id)),
+               0
+             ) as items_count,
+             COALESCE(
+               (
+                 SELECT json_agg(json_build_object(
+                   'id', pi.id,
+                   'medicine_id', pi.medicine_id,
+                   'medicine_name', mm.medicine_name,
+                   'generic_name', mm.generic_name,
+                   'strength', mm.strength,
+                   'dosage', pi.dosage,
+                   'frequency', pi.frequency,
+                   'duration_days', pi.duration_days,
+                   'quantity', pi.quantity,
+                   'route', pi.route,
+                   'dispense_status', pi.dispense_status
+                 ) ORDER BY pi.id ASC)
+                 FROM prescription_items pi
+                 JOIN medicine_master mm ON pi.medicine_id = mm.id
+                 WHERE pi.prescription_id = COALESCE(pr.id, p.prescription_id)
+               ),
+               '[]'::json
+             ) as prescription_medicines
       FROM packages p
       JOIN patients pt ON p.patient_id = pt.patient_id
+      LEFT JOIN prescriptions pr ON pr.package_id = p.package_id OR p.prescription_id = pr.id
+      LEFT JOIN LATERAL (
+        SELECT b_sub.bill_id, b_sub.bill_number, b_sub.created_at as invoice_date, b_sub.amount as bill_subtotal,
+               b_sub.discount_amount as bill_discount, b_sub.final_amount as bill_final_amount, b_sub.status as bill_status,
+               COALESCE((SELECT SUM(py.amount) FROM payments py WHERE py.bill_id = b_sub.bill_id AND py.status = 'success'), 0) as paid_amount
+        FROM bills b_sub
+        WHERE b_sub.package_id = p.package_id AND b_sub.status != 'cancelled'
+        ORDER BY b_sub.bill_id DESC
+        LIMIT 1
+      ) b ON true
     `;
     const params = [];
     const conditions = [];
@@ -495,9 +732,17 @@ async function getPackages(req, res) {
       conditions.push(`p.patient_id = $${params.length + 1}`);
       params.push(patientId);
     }
+    if (packageId) {
+      conditions.push(`p.package_id = $${params.length + 1}`);
+      params.push(packageId);
+    }
     if (status) {
       conditions.push(`p.status = $${params.length + 1}`);
       params.push(status);
+    }
+    if (req.user && req.user.role !== 'super_admin') {
+      conditions.push(`p.branch_id = $${params.length + 1}`);
+      params.push(req.user.branch_id || 1);
     }
 
     if (conditions.length > 0) {
@@ -506,11 +751,43 @@ async function getPackages(req, res) {
     query += ` ORDER BY p.package_id DESC`;
 
     const result = await db.query(query, params);
-    const formatted = result.rows.map(r => ({
-      ...r,
-      from_date: formatDateString(r.from_date),
-      to_date: formatDateString(r.to_date)
-    }));
+    const formatted = result.rows.map(r => {
+      const billId = r.invoice_id;
+      const billTotal = r.invoice_final_amount !== null ? parseFloat(r.invoice_final_amount) : parseFloat(r.final_amount || 0);
+      const paidAmt = parseFloat(r.invoice_paid_amount || 0);
+      const balanceDue = billId ? Math.max(0, billTotal - paidAmt) : parseFloat(r.final_amount || 0);
+
+      let billingStatus = 'unbilled';
+      if (billId) {
+        if (paidAmt >= billTotal && billTotal > 0) {
+          billingStatus = 'paid';
+        } else if (paidAmt > 0) {
+          billingStatus = 'partially_paid';
+        } else {
+          billingStatus = 'invoiced';
+        }
+      }
+
+      return {
+        ...r,
+        from_date: formatDateString(r.from_date),
+        to_date: formatDateString(r.to_date),
+        invoice_date: r.invoice_date ? formatDateString(r.invoice_date) : null,
+        items_count: parseInt(r.items_count) || 0,
+        package_amount: parseFloat(r.package_amount),
+        discount_amount: parseFloat(r.discount_amount || 0),
+        final_amount: parseFloat(r.final_amount),
+        invoice_id: billId || null,
+        invoice_number: r.invoice_number || null,
+        invoice_subtotal: r.invoice_subtotal !== null ? parseFloat(r.invoice_subtotal) : null,
+        invoice_discount: r.invoice_discount !== null ? parseFloat(r.invoice_discount) : null,
+        invoice_final_amount: r.invoice_final_amount !== null ? parseFloat(r.invoice_final_amount) : null,
+        paid_amount: paidAmt,
+        balance_due: balanceDue,
+        billing_status: billingStatus,
+        payment_status: billingStatus
+      };
+    });
 
     return res.json(formatResponse(true, formatted, 'Packages retrieved successfully'));
   } catch (err) {
@@ -780,18 +1057,83 @@ async function createBill(req, res) {
       planRows = planRes.rows;
     }
 
+    // ── PACKAGE VALIDATION & AUTHORITATIVE PRICING ────────────────────────
+    let packageRow = null;
+    if (package_id || bill_type === 'package') {
+      const cleanPkgId = package_id ? parseInt(package_id, 10) : null;
+      if (cleanPkgId) {
+        if (isNaN(cleanPkgId) || cleanPkgId <= 0) {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, 'package_id must be a valid positive integer'));
+        }
+
+        const pkgRes = await client.query(
+          `SELECT p.*, pt.full_name as patient_name FROM packages p JOIN patients pt ON p.patient_id = pt.patient_id WHERE p.package_id = $1 FOR UPDATE`,
+          [cleanPkgId]
+        );
+
+        if (pkgRes.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(404).json(formatResponse(false, null, 'Package not found'));
+        }
+
+        packageRow = pkgRes.rows[0];
+
+        if (parseInt(packageRow.patient_id, 10) !== parseInt(patient_id, 10)) {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, `Package "${packageRow.package_name}" belongs to Patient #${packageRow.patient_id} and cannot be billed to Patient #${patient_id}`));
+        }
+
+        const currentBranchId = req.user.branch_id || 1;
+        if (req.user.role !== 'super_admin' && packageRow.branch_id !== currentBranchId) {
+          await client.query('ROLLBACK');
+          return res.status(403).json(formatResponse(false, null, 'Unauthorized: Package belongs to a different clinic branch'));
+        }
+
+        if (packageRow.status === 'cancelled') {
+          await client.query('ROLLBACK');
+          return res.status(400).json(formatResponse(false, null, 'Cannot create invoice for a cancelled package'));
+        }
+
+        // Duplicate Invoice Guard: Check if package already has an active bill
+        const existingBillRes = await client.query(
+          `SELECT bill_id, bill_number, final_amount, status FROM bills WHERE package_id = $1 AND status != 'cancelled' LIMIT 1`,
+          [cleanPkgId]
+        );
+
+        if (existingBillRes.rows.length > 0) {
+          await client.query('ROLLBACK');
+          const exBill = existingBillRes.rows[0];
+          return res.status(409).json(formatResponse(false, { existing_bill: exBill }, `Invoice already exists for this package (Bill #${exBill.bill_number}). Duplicate billing is not allowed.`));
+        }
+      }
+    }
+
     const manualItems = Array.isArray(items) ? items : [];
 
-    if (planRows.length === 0 && manualItems.length === 0) {
+    if (!packageRow && planRows.length === 0 && manualItems.length === 0) {
       await client.query('ROLLBACK');
-      return res.status(400).json(formatResponse(false, null, 'Either treatment_plan_ids or items array are required'));
+      return res.status(400).json(formatResponse(false, null, 'Either treatment_plan_ids, package_id, or items array are required'));
     }
 
     // ── BUILD ITEMS LIST & SUBTOTAL ───────────────────────────────────────
     let subtotal = 0;
+    let discAmt = packageRow ? parseFloat(packageRow.discount_amount || 0) : parseFloat(discount_amount || 0);
     const allItems = [];
 
-    if (planRows.length > 0 && manualItems.length > 0) {
+    if (packageRow) {
+      // Authoritative pricing from packages table
+      subtotal = parseFloat(packageRow.package_amount);
+      discAmt = parseFloat(packageRow.discount_amount || 0);
+
+      // Package line item only (prescriptions medicines are included in the package and NOT billed separately)
+      allItems.push({
+        charge_type: 'Package',
+        description: packageRow.package_name,
+        amount: subtotal,
+        treatment_plan_id: null
+      });
+    } else if (planRows.length > 0 && manualItems.length > 0) {
       planRows.forEach((plan, idx) => {
         const itemForPlan = manualItems.find(it => parseInt(it.treatment_plan_id, 10) === plan.treatment_id)
           || manualItems[idx]
@@ -825,7 +1167,6 @@ async function createBill(req, res) {
     }
 
     // ── COUPON VALIDATION ─────────────────────────────────────────────────
-    let discAmt = parseFloat(discount_amount || 0);
     let resolvedCoupon = null;
 
     if (coupon_code || coupon_id) {
@@ -866,13 +1207,15 @@ async function createBill(req, res) {
     const totalAmount = Math.max(0, Math.round((subtotal - discAmt) * 100) / 100);
     const billNo = 'BILL-PRO-' + Date.now();
     const createdBy = req.user.user_id;
-    const docIdToUse = doctor_id ? parseInt(doctor_id) : 1;
+    const docIdToUse = doctor_id ? parseInt(doctor_id) : (packageRow && packageRow.doctor_id ? packageRow.doctor_id : null);
+    const branchId = req.user.branch_id || (packageRow ? packageRow.branch_id : 1);
+    const finalBillType = packageRow ? 'package' : bill_type;
 
     const billRes = await client.query(`
       INSERT INTO bills (bill_number, patient_id, doctor_id, bill_type, amount, discount_amount, final_amount, created_by, branch_id, package_id, status, coupon_id)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, 'created'::bill_status, $10)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'created'::bill_status, $11)
       RETURNING *
-    `, [billNo, patient_id, docIdToUse, bill_type, subtotal, discAmt, totalAmount, createdBy, package_id || null, resolvedCoupon ? resolvedCoupon.id : null]);
+    `, [billNo, patient_id, docIdToUse, finalBillType, subtotal, discAmt, totalAmount, createdBy, branchId, packageRow ? packageRow.package_id : (package_id || null), resolvedCoupon ? resolvedCoupon.id : null]);
 
     const bill = billRes.rows[0];
     bill.subtotal = subtotal;
@@ -881,6 +1224,14 @@ async function createBill(req, res) {
     bill.balance_due = totalAmount;
     bill.payment_status = 'unpaid';
     if (resolvedCoupon) { bill.coupon_code = resolvedCoupon.coupon_code; bill.coupon_id = resolvedCoupon.id; bill.discount_amount = discAmt; }
+
+    if (packageRow) {
+      await client.query(`
+        UPDATE packages 
+        SET payment_status = 'invoiced', updated_at = now() 
+        WHERE package_id = $1
+      `, [packageRow.package_id]);
+    }
 
     // ── INSERT BILL ITEMS ─────────────────────────────────────────────────
     for (const item of allItems) {
@@ -930,8 +1281,17 @@ async function createBill(req, res) {
     return res.status(201).json(formatResponse(true, bill, msg));
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('createBill error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    console.error('createBill error:', err.stack || err);
+    if (err.code === '23505') {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate record: an invoice with this identifier already exists'));
+    }
+    if (err.code === '23503') {
+      return res.status(400).json(formatResponse(false, null, `Referenced record invalid: ${err.detail || err.message}`));
+    }
+    if (err.code === '23502') {
+      return res.status(400).json(formatResponse(false, null, `Missing required field: ${err.column || err.message}`));
+    }
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
   } finally {
     client.release();
   }
@@ -990,9 +1350,11 @@ async function getPendingBills(req, res) {
   try {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
+             pkg.package_name, pkg.package_type,
              COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
+      LEFT JOIN packages pkg ON b.package_id = pkg.package_id
       WHERE b.status != 'refunded' AND b.bill_type != 'consultation' AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
       ORDER BY b.bill_id DESC
     `);
@@ -1007,9 +1369,11 @@ async function getPaidBills(req, res) {
   try {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
+             pkg.package_name, pkg.package_type,
              COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
+      LEFT JOIN packages pkg ON b.package_id = pkg.package_id
       WHERE b.final_amount <= COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
       ORDER BY b.bill_id DESC
     `);
@@ -1024,9 +1388,11 @@ async function getPartialDueBills(req, res) {
   try {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
+             pkg.package_name, pkg.package_type,
              COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
+      LEFT JOIN packages pkg ON b.package_id = pkg.package_id
       WHERE b.bill_type != 'consultation'
         AND COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) > 0
         AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
@@ -1043,9 +1409,11 @@ async function getBillingHistory(req, res) {
   try {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
+             pkg.package_name, pkg.package_type,
              COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
+      LEFT JOIN packages pkg ON b.package_id = pkg.package_id
       ORDER BY b.bill_id DESC
     `);
     return res.json(formatResponse(true, result.rows, 'Billing history retrieved successfully'));
@@ -1178,6 +1546,16 @@ async function recordPayment(req, res) {
       await client.query(`
         UPDATE due_patients SET due_amount = 0, status = 'paid' WHERE bill_id = $1
       `, [bill_id]);
+    }
+
+    // If bill is linked to a package, update package payment_status
+    if (bill.package_id) {
+      const pkgPaymentStatus = newPaidTotal >= billTotal ? 'paid' : (newPaidTotal > 0 ? 'partially_paid' : 'invoiced');
+      await client.query(`
+        UPDATE packages 
+        SET payment_status = $1, updated_at = now() 
+        WHERE package_id = $2
+      `, [pkgPaymentStatus, bill.package_id]);
     }
 
     await client.query('COMMIT');

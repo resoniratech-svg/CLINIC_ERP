@@ -294,6 +294,15 @@ async function recordPayment(req, res) {
       `, [branchId, today, payAmt]);
     }
 
+    // If bill is linked to a package, update package payment_status
+    if (bill.package_id) {
+      const pkgPayRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE bill_id = $1`, [bill_id]);
+      const totalPaid = parseFloat(pkgPayRes.rows[0].total_paid);
+      const billTotal = parseFloat(bill.final_amount);
+      const pkgPaymentStatus = totalPaid >= billTotal ? 'paid' : (totalPaid > 0 ? 'partially_paid' : 'invoiced');
+      await client.query(`UPDATE packages SET payment_status = $1, updated_at = now() WHERE package_id = $2`, [pkgPaymentStatus, bill.package_id]);
+    }
+
     await client.query('COMMIT');
 
     res.locals.auditEntry = { module: 'Billing & Finance', action: 'Record Payment', recordId: payment.payment_id, newValue: payment };

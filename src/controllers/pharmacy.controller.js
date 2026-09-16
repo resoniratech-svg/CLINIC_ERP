@@ -26,16 +26,20 @@ async function getDashboard(req, res) {
     const alertDays = settingRes.rows.length > 0 ? parseInt(settingRes.rows[0].setting_value) : 30;
 
     const pendingRxRes = await db.query(`
-      SELECT COUNT(DISTINCT a.appointment_id) FROM prescriptions p
-      JOIN appointments a ON p.appointment_id = a.appointment_id
-      WHERE a.status = 'pro_completed' AND (p.pharmacy_status = 'pending' OR p.pharmacy_status IS NULL)
+      SELECT COUNT(DISTINCT p.id) FROM prescriptions p
+      LEFT JOIN appointments a ON p.appointment_id = a.appointment_id
+      LEFT JOIN packages pkg ON p.package_id = pkg.package_id
+      WHERE ((a.status = 'pro_completed') OR (p.package_id IS NOT NULL AND (pkg.status IS NULL OR pkg.status != 'cancelled')))
+        AND (p.pharmacy_status = 'pending' OR p.pharmacy_status IS NULL)
     `);
     const pendingRx = parseInt(pendingRxRes.rows[0].count);
 
     const processingRes = await db.query(`
-      SELECT COUNT(DISTINCT a.appointment_id) FROM prescriptions p
-      JOIN appointments a ON p.appointment_id = a.appointment_id
-      WHERE a.status = 'pro_completed' AND p.pharmacy_status = 'processing'
+      SELECT COUNT(DISTINCT p.id) FROM prescriptions p
+      LEFT JOIN appointments a ON p.appointment_id = a.appointment_id
+      LEFT JOIN packages pkg ON p.package_id = pkg.package_id
+      WHERE ((a.status = 'pro_completed') OR (p.package_id IS NOT NULL AND (pkg.status IS NULL OR pkg.status != 'cancelled')))
+        AND p.pharmacy_status = 'processing'
     `);
     const processing = parseInt(processingRes.rows[0].count);
 
@@ -122,7 +126,7 @@ async function getPrescriptionQueue(req, res) {
       WITH ranked_rx AS (
         SELECT p.*,
                ROW_NUMBER() OVER (
-                 PARTITION BY p.appointment_id, p.pharmacy_status
+                 PARTITION BY COALESCE(p.appointment_id, p.id), p.pharmacy_status
                  ORDER BY
                    CASE
                      WHEN p.pharmacy_status = 'pending' THEN 1
@@ -135,17 +139,19 @@ async function getPrescriptionQueue(req, res) {
                    p.id DESC
                ) as rn
         FROM prescriptions p
-        WHERE p.appointment_id IS NOT NULL
+        WHERE p.appointment_id IS NOT NULL OR p.package_id IS NOT NULL
       )
-      SELECT p.id as prescription_id, p.patient_id, p.doctor_id, p.created_at as prescription_date,
+      SELECT p.id as prescription_id, p.patient_id, p.doctor_id, p.package_id, p.created_at as prescription_date,
              COALESCE(p.pharmacy_status, 'pending'::pharmacy_status_enum) as pharmacy_status,
              pt.full_name as patient_name, pt.mobile_number,
              pt.patient_id as registration_id,
-             u.full_name as doctor_name,
+             COALESCE(u.full_name, 'PRO Desk') as doctor_name,
              a.appointment_id as token_no,
-             a.status as appointment_status,
-             a.status as pro_status,
+             COALESCE(a.status, 'pro_completed') as appointment_status,
+             COALESCE(a.status, 'pro_completed') as pro_status,
              CASE
+               WHEN pkg.package_id IS NOT NULL THEN
+                 CASE WHEN pkg.payment_status = 'paid' THEN 'paid' ELSE 'pending' END
                WHEN b.status = 'refunded' THEN 'refunded'
                WHEN b.status = 'cancelled' THEN 'cancelled'
                WHEN b.bill_id IS NULL THEN 'unbilled'
@@ -155,12 +161,14 @@ async function getPrescriptionQueue(req, res) {
                ELSE 'pending'
              END as payment_status,
              (SELECT COUNT(*) FROM prescription_items pi WHERE pi.prescription_id = p.id) as items_count,
-             (SELECT COUNT(*) FROM prescription_clarifications pc WHERE pc.prescription_id = p.id AND pc.status = 'open') as open_clarifications_count
+             (SELECT COUNT(*) FROM prescription_clarifications pc WHERE pc.prescription_id = p.id AND pc.status = 'open') as open_clarifications_count,
+             pkg.package_name
       FROM ranked_rx p
-      JOIN appointments a ON p.appointment_id = a.appointment_id
+      LEFT JOIN appointments a ON p.appointment_id = a.appointment_id
       JOIN patients pt ON p.patient_id = pt.patient_id
-      JOIN doctors d ON p.doctor_id = d.doctor_id
-      JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN packages pkg ON p.package_id = pkg.package_id
       LEFT JOIN LATERAL (
         SELECT b_sub.bill_id, b_sub.status, b_sub.final_amount,
                COALESCE(SUM(py_sub.amount) FILTER (WHERE py_sub.status = 'success'), 0) as paid_amount
@@ -171,7 +179,7 @@ async function getPrescriptionQueue(req, res) {
         ORDER BY b_sub.bill_id DESC
         LIMIT 1
       ) b ON true
-      WHERE a.status = 'pro_completed' AND p.rn = 1
+      WHERE ( (a.status = 'pro_completed' AND p.rn = 1) OR (p.package_id IS NOT NULL AND (pkg.status IS NULL OR pkg.status != 'cancelled')) )
     `;
     const params = [];
 
@@ -194,9 +202,13 @@ async function getPrescriptionQueue(req, res) {
       query += ` AND (pt.full_name ILIKE $${params.length} OR pt.mobile_number ILIKE $${params.length} OR CAST(p.id AS TEXT) ILIKE $${params.length} OR u.full_name ILIKE $${params.length} OR CAST(a.appointment_id AS TEXT) ILIKE $${params.length})`;
     }
 
-    query += ` GROUP BY p.id, p.patient_id, p.doctor_id, p.created_at, p.pharmacy_status, pt.patient_id, pt.full_name, pt.mobile_number, u.full_name, a.appointment_id, b.bill_id, b.status, b.final_amount, b.paid_amount ORDER BY p.id DESC`;
+    query += ` GROUP BY p.id, p.patient_id, p.doctor_id, p.package_id, p.created_at, p.pharmacy_status, pt.patient_id, pt.full_name, pt.mobile_number, u.full_name, a.appointment_id, a.status, b.bill_id, b.status, b.final_amount, b.paid_amount, pkg.package_id, pkg.package_name, pkg.payment_status ORDER BY p.id DESC`;
     const result = await db.query(query, params);
-    return res.json(formatResponse(true, result.rows, 'Pharmacy prescription queue retrieved successfully'));
+    const formattedRows = result.rows.map(row => ({
+      ...row,
+      items_count: parseInt(row.items_count) || 0
+    }));
+    return res.json(formatResponse(true, formattedRows, 'Pharmacy prescription queue retrieved successfully'));
   } catch (err) {
     console.error('getPrescriptionQueue error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -208,18 +220,20 @@ async function processPrescription(req, res) {
     const rxId = parseInt(req.params.id);
 
     const rxRes = await db.query(`
-      SELECT p.id as prescription_id, p.patient_id, p.doctor_id, p.appointment_id, p.created_at,
+      SELECT p.id as prescription_id, p.patient_id, p.doctor_id, p.appointment_id, p.package_id, p.created_at,
              COALESCE(p.pharmacy_status, 'pending'::pharmacy_status_enum) as pharmacy_status,
              pt.full_name as patient_name, pt.mobile_number, pt.age, pt.gender,
-             u.full_name as doctor_name,
-             a.appointment_date, a.status as appointment_status,
-             b.status as bill_status, b.final_amount
+             COALESCE(u.full_name, 'PRO Desk') as doctor_name,
+             a.appointment_date, COALESCE(a.status, 'pro_completed') as appointment_status,
+             b.status as bill_status, b.final_amount,
+             pkg.package_name
       FROM prescriptions p
-      JOIN appointments a ON p.appointment_id = a.appointment_id
+      LEFT JOIN appointments a ON p.appointment_id = a.appointment_id
       JOIN patients pt ON p.patient_id = pt.patient_id
-      JOIN doctors d ON p.doctor_id = d.doctor_id
-      JOIN users u ON d.user_id = u.user_id
-      LEFT JOIN bills b ON p.patient_id = b.patient_id AND b.bill_type = 'treatment'
+      LEFT JOIN doctors d ON p.doctor_id = d.doctor_id
+      LEFT JOIN users u ON d.user_id = u.user_id
+      LEFT JOIN packages pkg ON p.package_id = pkg.package_id
+      LEFT JOIN bills b ON p.patient_id = b.patient_id AND (b.bill_type = 'treatment' OR b.package_id = p.package_id)
       WHERE p.id = $1
     `, [rxId]);
 
@@ -229,8 +243,8 @@ async function processPrescription(req, res) {
 
     const rx = rxRes.rows[0];
 
-    // Gating check: PRO completion required
-    if (rx.appointment_status !== 'pro_completed') {
+    // Gating check: PRO completion required for consultation prescriptions; package prescriptions are immediately eligible
+    if (rx.appointment_status !== 'pro_completed' && !rx.package_id) {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Prescription cannot be processed prior to PRO completed status'));
     }
 
@@ -346,6 +360,24 @@ async function getItemModifications(req, res) {
 // -------------------------------------------------------------
 // 4. Stock Check & FEFO Batch Selection
 // -------------------------------------------------------------
+function isBatchExpired(expiryDate) {
+  if (!expiryDate) return true;
+  const expObj = new Date(expiryDate);
+  if (isNaN(expObj.getTime())) return true;
+  const expYear = expObj.getFullYear();
+  const expMonth = String(expObj.getMonth() + 1).padStart(2, '0');
+  const expDay = String(expObj.getDate()).padStart(2, '0');
+  const expStr = `${expYear}-${expMonth}-${expDay}`;
+
+  const now = new Date();
+  const nowYear = now.getFullYear();
+  const nowMonth = String(now.getMonth() + 1).padStart(2, '0');
+  const nowDay = String(now.getDate()).padStart(2, '0');
+  const todayStr = `${nowYear}-${nowMonth}-${nowDay}`;
+
+  return expStr < todayStr;
+}
+
 async function checkPrescriptionStock(req, res) {
   try {
     const rxId = parseInt(req.params.id);
@@ -356,11 +388,12 @@ async function checkPrescriptionStock(req, res) {
       FROM prescription_items pi
       JOIN medicine_master mm ON pi.medicine_id = mm.id
       WHERE pi.prescription_id = $1
+      ORDER BY pi.id ASC
     `, [rxId]);
 
     const results = [];
     for (const item of itemsRes.rows) {
-      // Sum non-expired, positive stock quantity
+      // Sum non-expired, positive stock quantity in this branch
       const stockSumRes = await db.query(`
         SELECT COALESCE(SUM(quantity), 0) as avail_qty
         FROM medicine_stock
@@ -373,6 +406,26 @@ async function checkPrescriptionStock(req, res) {
       if (availQty === 0) status = 'out_of_stock';
       else if (availQty < reqQty) status = 'partially_available';
 
+      // Check selected batch if present
+      let selectedBatch = null;
+      if (item.selected_batch_id) {
+        const selRes = await db.query(`
+          SELECT id, batch_number, quantity, expiry_date
+          FROM medicine_stock
+          WHERE id = $1 AND branch_id = $2 AND medicine_id = $3
+        `, [item.selected_batch_id, branchId, item.medicine_id]);
+        if (selRes.rows.length > 0) {
+          const sb = selRes.rows[0];
+          selectedBatch = {
+            id: sb.id,
+            batch_number: sb.batch_number,
+            quantity: sb.quantity,
+            expiry_date: sb.expiry_date,
+            is_expired: isBatchExpired(sb.expiry_date)
+          };
+        }
+      }
+
       results.push({
         item_id: item.id,
         medicine_id: item.medicine_id,
@@ -380,7 +433,8 @@ async function checkPrescriptionStock(req, res) {
         potency: item.potency,
         required_quantity: reqQty,
         available_quantity: availQty,
-        status
+        status,
+        selected_batch: selectedBatch
       });
     }
 
@@ -415,6 +469,7 @@ async function getMedicineBatches(req, res) {
 async function selectBatch(req, res) {
   try {
     const itemId = parseInt(req.params.item_id);
+    const branchId = req.user.branch_id || 1;
     const stock_id = req.body.stock_id || req.body.selected_batch_id || req.body.batch_id;
     const dispensed_quantity = req.body.dispensed_quantity || req.body.dispense_quantity;
 
@@ -422,16 +477,31 @@ async function selectBatch(req, res) {
       return res.status(400).json(formatResponse(false, null, 'stock_id (or selected_batch_id) is required'));
     }
 
+    const itemRes = await db.query(`SELECT * FROM prescription_items WHERE id = $1`, [itemId]);
+    if (itemRes.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, 'Prescription item not found'));
+    }
+    const item = itemRes.rows[0];
+
     const stockRes = await db.query(`SELECT * FROM medicine_stock WHERE id = $1`, [stock_id]);
     if (stockRes.rows.length === 0) {
       return res.status(404).json(formatResponse(false, null, 'Stock batch not found'));
     }
 
     const stock = stockRes.rows[0];
-    const today = new Date().toISOString().split('T')[0];
+
+    // Branch isolation check
+    if (stock.branch_id !== branchId) {
+      return res.status(422).json(formatResponse(false, null, `Stock batch does not belong to branch ${branchId}`));
+    }
+
+    // Medicine match check
+    if (stock.medicine_id !== item.medicine_id) {
+      return res.status(422).json(formatResponse(false, null, 'Stock batch does not belong to the prescribed medicine'));
+    }
 
     // Reject expired or 0-qty batch
-    if (stock.quantity <= 0 || new Date(stock.expiry_date) < new Date(today)) {
+    if (stock.quantity <= 0 || isBatchExpired(stock.expiry_date)) {
       return res.status(422).json(formatResponse(false, null, 'Cannot select expired or zero-quantity stock batch for dispensing'));
     }
 
@@ -479,8 +549,8 @@ async function completeDispensing(req, res) {
   const client = await db.pool.connect();
   try {
     const rxId = parseInt(req.params.id);
-    const { items } = req.body; // array of { item_id, stock_id, dispense_quantity }
     const branchId = req.user.branch_id || 1;
+    const { items } = req.body; // optional array of { item_id, stock_id, dispense_quantity }
 
     await client.query('BEGIN');
 
@@ -496,7 +566,7 @@ async function completeDispensing(req, res) {
       return res.status(400).json(formatResponse(false, null, 'Prescription has already been dispensed'));
     }
 
-    const allRxItems = await client.query(`SELECT * FROM prescription_items WHERE prescription_id = $1`, [rxId]);
+    const allRxItems = await client.query(`SELECT * FROM prescription_items WHERE prescription_id = $1 ORDER BY id ASC`, [rxId]);
     if (allRxItems.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'No items found on prescription'));
@@ -505,45 +575,132 @@ async function completeDispensing(req, res) {
     const itemsToProcess = items || allRxItems.rows.map(i => ({ item_id: i.id, stock_id: i.selected_batch_id, dispense_quantity: i.quantity }));
 
     let dispensedCount = 0;
-    const today = new Date().toISOString().split('T')[0];
 
     for (const it of itemsToProcess) {
-      const itemRowRes = await client.query(`SELECT * FROM prescription_items WHERE id = $1`, [it.item_id]);
+      const itemRowRes = await client.query(`SELECT * FROM prescription_items WHERE id = $1 FOR UPDATE`, [it.item_id]);
       if (itemRowRes.rows.length === 0) continue;
       const itemRow = itemRowRes.rows[0];
+
+      // Skip already fully dispensed item
+      if (itemRow.dispense_status === 'dispensed') {
+        continue;
+      }
 
       const stockId = it.stock_id || itemRow.selected_batch_id;
       const dQty = parseInt(it.dispense_quantity || itemRow.quantity);
 
+      if (dQty <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json(formatResponse(false, null, `Dispense quantity must be greater than 0 for item ID ${itemRow.id}`));
+      }
+
       if (!stockId) {
-        // Auto-select FEFO batch if stock_id not explicitly set
-        const autoStock = await client.query(`
+        // Auto-select FEFO batch(es) if stock_id not explicitly set
+        // 1. Check if a single batch can fulfill dQty
+        const singleBatchRes = await client.query(`
           SELECT * FROM medicine_stock
           WHERE medicine_id = $1 AND branch_id = $2 AND expiry_date >= CURRENT_DATE AND quantity >= $3
           ORDER BY expiry_date ASC LIMIT 1 FOR UPDATE
         `, [itemRow.medicine_id, branchId, dQty]);
 
-        if (autoStock.rows.length === 0) {
+        if (singleBatchRes.rows.length > 0) {
+          const autoBatch = singleBatchRes.rows[0];
+          await client.query(`
+            UPDATE medicine_stock
+            SET quantity = quantity - $1, updated_at = now()
+            WHERE id = $2
+          `, [dQty, autoBatch.id]);
+
+          await client.query(`
+            INSERT INTO stock_transactions (
+              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+            ) VALUES ($1, 'out', $2, $3, $4, $5, $6)
+          `, [itemRow.medicine_id, -dQty, autoBatch.batch_number, `Rx #${rxId}`, req.user.user_id, branchId]);
+
+          const finalStatus = dQty >= itemRow.quantity ? 'dispensed' : 'partially_dispensed';
+          await client.query(`
+            UPDATE prescription_items
+            SET dispensed = true, dispensed_quantity = $1, dispense_status = $2, selected_batch_id = $3, dispensed_at = now(), dispensed_by = $4
+            WHERE id = $5
+          `, [dQty, finalStatus, autoBatch.id, req.user.user_id, itemRow.id]);
+
+          dispensedCount++;
+          continue;
+        }
+
+        // 2. Rule 8: Partial stock across multiple valid batches -> allocate in FEFO order
+        const multiBatchesRes = await client.query(`
+          SELECT * FROM medicine_stock
+          WHERE medicine_id = $1 AND branch_id = $2 AND expiry_date >= CURRENT_DATE AND quantity > 0
+          ORDER BY expiry_date ASC FOR UPDATE
+        `, [itemRow.medicine_id, branchId]);
+
+        const totalAvailable = multiBatchesRes.rows.reduce((sum, b) => sum + b.quantity, 0);
+        if (totalAvailable < dQty) {
           await client.query('ROLLBACK');
           return res.status(422).json(formatResponse(false, null, `Insufficient or expired stock for medicine ID ${itemRow.medicine_id}`));
         }
-        it.stock_id = autoStock.rows[0].id;
+
+        let remainingToDeduct = dQty;
+        const primaryBatchId = multiBatchesRes.rows[0].id;
+
+        for (const mBatch of multiBatchesRes.rows) {
+          if (remainingToDeduct <= 0) break;
+          const deductFromThis = Math.min(mBatch.quantity, remainingToDeduct);
+
+          await client.query(`
+            UPDATE medicine_stock
+            SET quantity = quantity - $1, updated_at = now()
+            WHERE id = $2
+          `, [deductFromThis, mBatch.id]);
+
+          await client.query(`
+            INSERT INTO stock_transactions (
+              medicine_id, transaction_type, quantity, batch_number, reference, performed_by, branch_id
+            ) VALUES ($1, 'out', $2, $3, $4, $5, $6)
+          `, [itemRow.medicine_id, -deductFromThis, mBatch.batch_number, `Rx #${rxId}`, req.user.user_id, branchId]);
+
+          remainingToDeduct -= deductFromThis;
+        }
+
+        const finalStatus = dQty >= itemRow.quantity ? 'dispensed' : 'partially_dispensed';
+        await client.query(`
+          UPDATE prescription_items
+          SET dispensed = true, dispensed_quantity = $1, dispense_status = $2, selected_batch_id = $3, dispensed_at = now(), dispensed_by = $4
+          WHERE id = $5
+        `, [dQty, finalStatus, primaryBatchId, req.user.user_id, itemRow.id]);
+
+        dispensedCount++;
+        continue;
       }
 
-      // Lock stock row FOR UPDATE
+      // Explicit stock_id provided
       const stockLockRes = await client.query(`
         SELECT * FROM medicine_stock WHERE id = $1 FOR UPDATE
-      `, [it.stock_id || stockId]);
+      `, [stockId]);
 
       if (stockLockRes.rows.length === 0) {
         await client.query('ROLLBACK');
-        return res.status(422).json(formatResponse(false, null, `Stock batch ID ${it.stock_id || stockId} not found`));
+        return res.status(422).json(formatResponse(false, null, `Stock batch ID ${stockId} not found`));
       }
 
       const stockRow = stockLockRes.rows[0];
 
-      // Validate quantity & expiry
-      if (stockRow.quantity < dQty || new Date(stockRow.expiry_date) < new Date(today)) {
+      // Branch isolation check (Case 5)
+      if (stockRow.branch_id !== branchId) {
+        await client.query('ROLLBACK');
+        return res.status(422).json(formatResponse(false, null, `Batch ${stockRow.batch_number} does not belong to branch ${branchId}`));
+      }
+
+      // Wrong medicine check (Case 6)
+      if (stockRow.medicine_id !== itemRow.medicine_id) {
+        await client.query('ROLLBACK');
+        return res.status(422).json(formatResponse(false, null, `Batch ${stockRow.batch_number} does not belong to prescribed medicine ID ${itemRow.medicine_id}`));
+      }
+
+      // Validate quantity & expiry (Cases 1, 2, 3, 4)
+      const expired = isBatchExpired(stockRow.expiry_date);
+      if (stockRow.quantity < dQty || expired) {
         await client.query('ROLLBACK');
         return res.status(422).json(formatResponse(false, null, `Insufficient or expired stock for batch ${stockRow.batch_number}`));
       }
@@ -566,9 +723,9 @@ async function completeDispensing(req, res) {
       const finalStatus = dQty >= itemRow.quantity ? 'dispensed' : 'partially_dispensed';
       await client.query(`
         UPDATE prescription_items
-        SET dispensed = true, dispensed_quantity = $1, dispense_status = $2, dispensed_at = now(), dispensed_by = $3
-        WHERE id = $4
-      `, [dQty, finalStatus, req.user.user_id, itemRow.id]);
+        SET dispensed = true, dispensed_quantity = $1, dispense_status = $2, selected_batch_id = $3, dispensed_at = now(), dispensed_by = $4
+        WHERE id = $5
+      `, [dQty, finalStatus, stockRow.id, req.user.user_id, itemRow.id]);
 
       dispensedCount++;
     }
