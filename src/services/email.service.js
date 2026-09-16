@@ -62,7 +62,7 @@ function createTransporter() {
 async function sendSuperAdminRecoveryEmail({ to, tempPassword, requestedAt = new Date(), expiryMinutes = 20, ip = '127.0.0.1' }) {
   const transporter = createTransporter();
   const fromAddress = process.env.SMTP_FROM || '"WeCare Homoeopathy Clinics" <wecarehomeopathyknr@gmail.com>';
-  const loginUrl = process.env.ERP_LOGIN_URL || process.env.FRONTEND_URL || 'https://wecare-wecare-frontend.n1ogh.easypanel.host/login';
+  const loginUrl = process.env.ERP_LOGIN_URL || process.env.FRONTEND_URL || 'https://wecare-wecare-frontend.n1logh.easypanel.host/login';
   const formattedTime = new Date(requestedAt).toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
     dateStyle: 'full',
