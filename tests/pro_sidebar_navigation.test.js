@@ -349,14 +349,14 @@ describe('PRO Sidebar Navigation - CRM / Calling Module Cleanup Suite', () => {
   });
 
   test('28. Sidebar does not contain chevron dropdown for CRM', () => {
-    const crmSection = sidebarContent.split('{/* CRM / Calling - Single Direct Module */}')[1]?.split('{/* My Tasks */}')[0];
+    const crmSection = sidebarContent.split('{/* CRM / Calling - Single Direct Module */}')[1]?.split('{/* My Profile */}')[0];
     assert.ok(crmSection, 'CRM section must exist');
     assert.doesNotMatch(crmSection, /ChevronDown/);
     assert.doesNotMatch(crmSection, /<button/);
   });
 
   test('29. Sidebar has NO child sub-items under CRM / Calling', () => {
-    const crmSection = sidebarContent.split('{/* CRM / Calling - Single Direct Module */}')[1]?.split('{/* My Tasks */}')[0];
+    const crmSection = sidebarContent.split('{/* CRM / Calling - Single Direct Module */}')[1]?.split('{/* My Profile */}')[0];
     assert.ok(crmSection, 'CRM section must exist');
     assert.doesNotMatch(crmSection, /Today's Calls<\/span>/);
     assert.doesNotMatch(crmSection, /Follow-ups<\/span>/);
