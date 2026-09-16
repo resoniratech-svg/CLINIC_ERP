@@ -471,11 +471,11 @@ async function forgotPassword(req, res) {
     }
 
     // SUPER ADMIN WORKFLOW: SELF-EMAIL RECOVERY
-    // 1. Rate Limiting & Cooldown Protection
+    // 1. Rate Limiting & Cooldown Protection (5s debounce, >=15 attempts per hour)
     const cooldownCheck = await db.query(`
       SELECT id, created_at FROM super_admin_password_recovery
       WHERE (user_id = $1 OR ip_address = $2)
-        AND created_at >= NOW() - INTERVAL '60 seconds'
+        AND created_at >= NOW() - INTERVAL '5 seconds'
       ORDER BY id DESC LIMIT 1
     `, [user.user_id, ip]);
 
@@ -485,7 +485,7 @@ async function forgotPassword(req, res) {
         role: user.role,
         action: 'SUPER_ADMIN_RECOVERY_RATE_LIMITED',
         recordId: user.user_id,
-        remarks: `Rate limit hit: cooldown 60s from IP ${ip}`,
+        remarks: `Rate limit hit: cooldown 5s from IP ${ip}`,
         ip, device, browser, branchId: user.branch_id
       });
       return res.status(429).json(formatResponse(
@@ -501,13 +501,13 @@ async function forgotPassword(req, res) {
         AND created_at >= NOW() - INTERVAL '1 hour'
     `, [user.user_id, ip]);
 
-    if (parseInt(hourlyCheck.rows[0].count, 10) >= 5) {
+    if (parseInt(hourlyCheck.rows[0].count, 10) >= 15) {
       await logAuditEvent({
         userId: user.user_id,
         role: user.role,
         action: 'SUPER_ADMIN_RECOVERY_RATE_LIMITED',
         recordId: user.user_id,
-        remarks: `Rate limit hit: >5 requests in 1 hour from IP ${ip}`,
+        remarks: `Rate limit hit: >15 requests in 1 hour from IP ${ip}`,
         ip, device, browser, branchId: user.branch_id
       });
       return res.status(429).json(formatResponse(
