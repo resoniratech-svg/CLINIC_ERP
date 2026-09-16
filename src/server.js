@@ -61,6 +61,18 @@ async function bootstrap() {
     await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS ip_address VARCHAR(100)");
     await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS user_agent TEXT");
     await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS failure_reason TEXT");
+    await db.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name = 'super_admin_password_recovery' AND column_name = 'expires_at'
+        ) THEN
+          ALTER TABLE super_admin_password_recovery ALTER COLUMN expires_at DROP NOT NULL;
+          ALTER TABLE super_admin_password_recovery ALTER COLUMN expires_at SET DEFAULT now() + INTERVAL '20 minutes';
+        END IF;
+      END $$;
+    `);
 
     // Auto-apply additive migration files safely
     const migDir = path.join(__dirname, '../migrations');

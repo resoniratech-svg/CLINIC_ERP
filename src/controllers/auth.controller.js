@@ -561,14 +561,31 @@ async function forgotPassword(req, res) {
       ? 'email'
       : 'username';
 
+    // Dynamic schema column detection for backwards/forward compatibility with live DB
+    const colCheck = await db.query(`
+      SELECT column_name FROM information_schema.columns 
+      WHERE table_name = 'super_admin_password_recovery' AND column_name IN ('expires_at', 'temporary_password_expires_at')
+    `);
+    const availableCols = colCheck.rows.map(r => r.column_name);
+
+    let insertCols = ['user_id', 'role', 'identifier_type', 'submitted_identifier', 'reason', 'recovery_status', 'email_destination', 'temporary_password_created_at', 'ip_address', 'user_agent'];
+    let insertVals = ['$1', "'super_admin'", '$2', '$3', '$4', "'pending'", '$5', 'now()', '$7', '$8'];
+    let params = [user.user_id, identifierType, rawIdentifier, reason, targetEmail, expiresAt, ip, ua];
+
+    if (availableCols.includes('temporary_password_expires_at')) {
+      insertCols.push('temporary_password_expires_at');
+      insertVals.push('$6');
+    }
+    if (availableCols.includes('expires_at')) {
+      insertCols.push('expires_at');
+      insertVals.push('$6');
+    }
+
     const recoveryRes = await db.query(`
-      INSERT INTO super_admin_password_recovery (
-        user_id, role, identifier_type, submitted_identifier, reason,
-        recovery_status, email_destination, temporary_password_created_at,
-        temporary_password_expires_at, ip_address, user_agent
-      ) VALUES ($1, 'super_admin', $2, $3, $4, 'pending', $5, now(), $6, $7, $8)
+      INSERT INTO super_admin_password_recovery (${insertCols.join(', ')})
+      VALUES (${insertVals.join(', ')})
       RETURNING id
-    `, [user.user_id, identifierType, rawIdentifier, reason, targetEmail, expiresAt, ip, ua]);
+    `, params);
 
     const recoveryId = recoveryRes.rows[0].id;
 
