@@ -16,7 +16,10 @@ import {
   TrendingUp,
   Wallet,
   CreditCard,
-  Ticket
+  Ticket,
+  Package,
+  Lock,
+  Info
 } from 'lucide-react';
 import { proApi, settingsApi, couponsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -101,7 +104,30 @@ const PROBillingPageContent = () => {
     ]
   });
 
-  const verifyPatient = useCallback(async (idToVerify, explicitDoctorId = null) => {
+  const applyPackage = useCallback((selectedPkg) => {
+    if (!selectedPkg) return;
+    const pkgAmount = parseFloat(selectedPkg.package_amount || selectedPkg.final_amount || 0);
+    const discAmount = parseFloat(selectedPkg.discount_amount || 0);
+    setForm(prev => ({
+      ...prev,
+      package_id: selectedPkg.package_id,
+      bill_type: 'package',
+      doctor_id: selectedPkg.doctor_id ? String(selectedPkg.doctor_id) : prev.doctor_id,
+      discount_amount: String(discAmount),
+      items: [
+        {
+          item_name: selectedPkg.package_name || 'Treatment Package',
+          charge_type: 'Package',
+          quantity: 1,
+          unit_price: pkgAmount
+        }
+      ]
+    }));
+    setSelectedPlanIds([]);
+    setSelectedCoupon(null);
+  }, []);
+
+  const verifyPatient = useCallback(async (idToVerify, explicitDoctorId = null, targetPackageId = null) => {
     if (!idToVerify || String(idToVerify).trim() === '') {
       setPatientLookup({ loading: false, patient: null, error: null });
       setAvailablePackages([]);
@@ -156,7 +182,14 @@ const PROBillingPageContent = () => {
         try {
           const pkgRes = await proApi.getPackages({ patient_id: pId });
           if (pkgRes?.success) {
-            setAvailablePackages(pkgRes.data || []);
+            const pkgs = pkgRes.data || [];
+            setAvailablePackages(pkgs);
+            if (targetPackageId) {
+              const matched = pkgs.find(p => String(p.package_id) === String(targetPackageId));
+              if (matched) {
+                applyPackage(matched);
+              }
+            }
           }
         } catch {
           setAvailablePackages([]);
@@ -208,13 +241,14 @@ const PROBillingPageContent = () => {
     } finally {
       setLoadingPackages(false);
     }
-  }, []);
+  }, [applyPackage]);
 
-  // Handle URL query parameters (e.g. from Patient Overview or Treatment Plans)
+  // Handle URL query parameters (e.g. from Patient Overview, Treatment Plans, or Packages)
   useEffect(() => {
     try {
       const qPatientId = searchParams.get('patient_id');
       const qDoctorId = searchParams.get('doctor_id');
+      const qPackageId = searchParams.get('package_id');
       let qTreatmentName = searchParams.get('treatment_name');
       let qTreatmentType = searchParams.get('treatment_type');
 
@@ -240,7 +274,8 @@ const PROBillingPageContent = () => {
           ...prev,
           patient_id: cleanPatientId,
           doctor_id: qDoctorId ? String(qDoctorId).trim() : prev.doctor_id,
-          bill_type: 'treatment',
+          bill_type: qPackageId ? 'package' : 'treatment',
+          package_id: qPackageId ? String(qPackageId).trim() : prev.package_id,
           items: qTreatmentName ? [
             {
               item_name: qTreatmentName,
@@ -250,12 +285,12 @@ const PROBillingPageContent = () => {
             }
           ] : prev.items
         }));
-        verifyPatient(cleanPatientId, qDoctorId ? String(qDoctorId).trim() : null);
+        verifyPatient(cleanPatientId, qDoctorId ? String(qDoctorId).trim() : null, qPackageId ? String(qPackageId).trim() : null);
       }
     } catch (err) {
       console.error('Error parsing billing query params:', err);
     }
-  }, [searchParams, verifyPatient]);
+  }, [searchParams, verifyPatient, applyPackage]);
 
   // Toggle treatment plan checkbox selection (APPEND/REMOVE - not replace!)
   const toggleTreatmentPlan = (tp) => {
@@ -323,24 +358,18 @@ const PROBillingPageContent = () => {
 
   const handlePackageSelect = (pkgId) => {
     if (!pkgId) {
-      setForm(prev => ({ ...prev, package_id: '' }));
+      setForm(prev => ({
+        ...prev,
+        package_id: '',
+        bill_type: 'treatment',
+        discount_amount: '0',
+        items: [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 2000 }]
+      }));
       return;
     }
     const selectedPkg = availablePackages.find(p => String(p.package_id) === String(pkgId));
     if (selectedPkg) {
-      setForm(prev => ({
-        ...prev,
-        package_id: selectedPkg.package_id,
-        bill_type: 'package',
-        items: [
-          {
-            item_name: selectedPkg.package_name || 'Treatment Package',
-            charge_type: 'Package',
-            quantity: 1,
-            unit_price: parseFloat(selectedPkg.final_amount || selectedPkg.package_amount || 0)
-          }
-        ]
-      }));
+      applyPackage(selectedPkg);
     } else {
       setForm(prev => ({ ...prev, package_id: pkgId }));
     }
@@ -417,6 +446,16 @@ const PROBillingPageContent = () => {
   const previewTotal = Math.max(0, Math.round((previewSubtotal - previewDiscount) * 100) / 100);
   const isDiscountOverSubtotal = previewDiscount > previewSubtotal && previewSubtotal > 0;
 
+  // Selected package metadata & duplicate billing protection
+  const selectedPackageObj = form.package_id
+    ? availablePackages.find(p => String(p.package_id) === String(form.package_id))
+    : null;
+  const isPackageAlreadyBilled = Boolean(
+    selectedPackageObj &&
+    selectedPackageObj.billing_status &&
+    selectedPackageObj.billing_status !== 'unbilled'
+  );
+
   // Recalculate discount whenever selected coupon or subtotal changes
   useEffect(() => {
     if (selectedCoupon) {
@@ -457,6 +496,13 @@ const PROBillingPageContent = () => {
 
     if (form.bill_type === 'consultation') {
       showToast('Forbidden: Consultation fee billing is handled by Receptionist only', 'error');
+      return;
+    }
+
+    if (form.package_id && isPackageAlreadyBilled && selectedPackageObj) {
+      const msg = `Package #${selectedPackageObj.package_id} already has Invoice #${selectedPackageObj.invoice_number || selectedPackageObj.invoice_id} (${selectedPackageObj.billing_status}). Duplicate billing is prohibited.`;
+      setServerError(msg);
+      showToast(msg, 'error');
       return;
     }
 
@@ -738,7 +784,7 @@ const PROBillingPageContent = () => {
                   <option value="">-- None (Standard Bill) --</option>
                   {availablePackages.map(pkg => (
                     <option key={pkg.package_id} value={pkg.package_id}>
-                      #{pkg.package_id}: {pkg.package_name} ({formatCurrency(pkg.final_amount)}) [{pkg.status}]
+                      #{pkg.package_id}: {pkg.package_name} ({formatCurrency(pkg.final_amount)}) [{(pkg.billing_status || pkg.status).toUpperCase()}]
                     </option>
                   ))}
                 </select>
@@ -746,20 +792,124 @@ const PROBillingPageContent = () => {
                 <input
                   type="number"
                   value={form.package_id}
-                  onChange={e => setForm({ ...form, package_id: e.target.value })}
+                  onChange={e => handlePackageSelect(e.target.value)}
                   placeholder="Linked Package ID..."
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-[#1565C0] focus:ring-2 focus:ring-[#1565C0]/20 outline-none font-mono"
                 />
               )}
               <p className="text-[10px] text-slate-400 mt-1">
                 {availablePackages.length > 0
-                  ? `${availablePackages.length} package(s) available for this patient`
+                  ? `${availablePackages.length} package(s) enrolled for this patient`
                   : patientLookup.patient
                   ? 'No packages enrolled for this patient'
                   : 'Enter patient ID to list their packages'}
               </p>
             </div>
           </div>
+
+          {/* Linked Package Authoritative Details Card */}
+          {selectedPackageObj && (
+            <div className="p-4 bg-gradient-to-r from-blue-50/90 to-indigo-50/90 border border-blue-200 rounded-2xl space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-[#1565C0] text-white flex items-center justify-center shadow-xs">
+                    <Package className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-black text-slate-900">{selectedPackageObj.package_name}</h4>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-blue-100 text-blue-800 border border-blue-200">
+                        {selectedPackageObj.package_type}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Package #{selectedPackageObj.package_id} • Validity: {selectedPackageObj.from_date} to {selectedPackageObj.to_date}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {selectedPackageObj.billing_status === 'unbilled' || !selectedPackageObj.billing_status ? (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      <CheckCircle className="w-3 h-3" />
+                      <span>Ready for Invoicing</span>
+                    </span>
+                  ) : (
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase border ${
+                      selectedPackageObj.billing_status === 'paid'
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : selectedPackageObj.billing_status === 'partially_paid'
+                        ? 'bg-amber-100 text-amber-800 border-amber-300'
+                        : 'bg-blue-100 text-blue-800 border-blue-300'
+                    }`}>
+                      <AlertCircle className="w-3 h-3" />
+                      <span>{selectedPackageObj.billing_status.replace('_', ' ')}</span>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => handlePackageSelect('')}
+                    className="text-xs font-bold text-red-600 hover:text-red-700 hover:underline px-2 py-1 cursor-pointer"
+                  >
+                    Deselect Package
+                  </button>
+                </div>
+              </div>
+
+              {/* Duplicate invoice warning banner */}
+              {isPackageAlreadyBilled && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl flex items-center justify-between flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-xs text-red-800 font-bold">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>
+                      DUPLICATE INVOICE PREVENTED: This package is already invoiced under Invoice #{selectedPackageObj.invoice_number || selectedPackageObj.invoice_id} (Status: {selectedPackageObj.billing_status}).
+                    </span>
+                  </div>
+                  {selectedPackageObj.invoice_id && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedInvoiceId(selectedPackageObj.invoice_id);
+                        setShowInvoiceModal(true);
+                      }}
+                      className="px-3 py-1.5 bg-[#1565C0] hover:bg-blue-800 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shadow-xs transition"
+                    >
+                      <Receipt className="w-3.5 h-3.5" />
+                      <span>View Invoice #{selectedPackageObj.invoice_number}</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Authoritative pricing breakdown cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-blue-200/60 text-xs">
+                <div className="p-2.5 bg-white/90 rounded-xl border border-blue-100">
+                  <span className="text-[10px] text-slate-500 block font-semibold uppercase">Package Price</span>
+                  <span className="font-bold text-slate-800 font-mono text-sm">{formatCurrency(selectedPackageObj.package_amount)}</span>
+                </div>
+                <div className="p-2.5 bg-white/90 rounded-xl border border-blue-100">
+                  <span className="text-[10px] text-slate-500 block font-semibold uppercase">Enrolled Discount</span>
+                  <span className="font-bold text-emerald-700 font-mono text-sm">-{formatCurrency(selectedPackageObj.discount_amount || 0)}</span>
+                </div>
+                <div className="p-2.5 bg-white/90 rounded-xl border border-blue-100">
+                  <span className="text-[10px] text-slate-500 block font-semibold uppercase">Net Invoiced Total</span>
+                  <span className="font-black text-[#D32F2F] font-mono text-sm">{formatCurrency(selectedPackageObj.final_amount)}</span>
+                </div>
+                <div className="p-2.5 bg-white/90 rounded-xl border border-blue-100">
+                  <span className="text-[10px] text-slate-500 block font-semibold uppercase">Prescription Meds</span>
+                  <span className="font-bold text-slate-700 text-xs flex items-center gap-1 mt-0.5">
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Covered in Package</span>
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-600 font-medium pt-1">
+                <Info className="w-3.5 h-3.5 text-[#1565C0] shrink-0" />
+                <span>Package billing charges a single package fee. Prescription medicines are clinical items covered by this package and are not billed separately.</span>
+              </div>
+            </div>
+          )}
 
           {/* Doctor Prescribed Treatments — Multi-Select Checkbox UI */}
           {prescribedTreatments.length > 0 && (
@@ -842,11 +992,18 @@ const PROBillingPageContent = () => {
               <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded-full bg-[#1565C0]"></span>
                 <span>Bill Items ({form.items.length})</span>
+                {selectedPackageObj && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 border border-blue-200 uppercase flex items-center gap-1">
+                    <Lock className="w-2.5 h-2.5" />
+                    <span>Package Locked</span>
+                  </span>
+                )}
               </h3>
               <button
                 type="button"
                 onClick={addItem}
-                className="flex items-center gap-1 text-xs text-[#1565C0] hover:text-[#0D47A1] font-bold hover:underline cursor-pointer"
+                disabled={!!selectedPackageObj}
+                className="flex items-center gap-1 text-xs text-[#1565C0] hover:text-[#0D47A1] font-bold hover:underline cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>+ Add Another Line Item</span>
@@ -855,23 +1012,31 @@ const PROBillingPageContent = () => {
 
             <div className="space-y-2">
               {form.items.map((it, idx) => (
-                <div key={idx} className="flex flex-col sm:flex-row items-center gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200/80">
+                <div key={idx} className={`flex flex-col sm:flex-row items-center gap-2 p-3 rounded-xl border ${
+                  selectedPackageObj ? 'bg-blue-50/40 border-blue-200' : 'bg-slate-50 border-slate-200/80'
+                }`}>
                   <div className="flex-1 w-full sm:w-auto">
                     <input
                       type="text"
                       required
                       placeholder="Item name / service description..."
                       value={it.item_name}
+                      readOnly={!!selectedPackageObj}
                       onChange={e => updateItem(idx, 'item_name', e.target.value)}
-                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white outline-none focus:border-[#1565C0]"
+                      className={`w-full px-3 py-1.5 text-xs rounded-lg border outline-none ${
+                        selectedPackageObj ? 'bg-slate-100 border-slate-200 text-slate-700 cursor-not-allowed font-medium' : 'border-slate-200 bg-white focus:border-[#1565C0]'
+                      }`}
                     />
                   </div>
 
                   <div className="w-full sm:w-40">
                     <select
                       value={it.charge_type}
+                      disabled={!!selectedPackageObj}
                       onChange={e => updateItem(idx, 'charge_type', e.target.value)}
-                      className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white outline-none focus:border-[#1565C0] font-medium"
+                      className={`w-full px-2 py-1.5 text-xs rounded-lg border outline-none font-medium ${
+                        selectedPackageObj ? 'bg-slate-100 border-slate-200 text-slate-700 cursor-not-allowed' : 'border-slate-200 bg-white focus:border-[#1565C0]'
+                      }`}
                     >
                       {chargeTypesList.length > 0 ? (
                         <>
@@ -904,8 +1069,11 @@ const PROBillingPageContent = () => {
                       min="1"
                       placeholder="Qty"
                       value={it.quantity}
+                      readOnly={!!selectedPackageObj}
                       onChange={e => updateItem(idx, 'quantity', e.target.value)}
-                      className="w-full px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white outline-none text-center font-mono focus:border-[#1565C0]"
+                      className={`w-full px-2 py-1.5 text-xs rounded-lg border text-center font-mono outline-none ${
+                        selectedPackageObj ? 'bg-slate-100 border-slate-200 text-slate-700 cursor-not-allowed' : 'border-slate-200 bg-white focus:border-[#1565C0]'
+                      }`}
                     />
                   </div>
 
@@ -917,8 +1085,11 @@ const PROBillingPageContent = () => {
                       step="0.01"
                       placeholder="Unit Price (₹)"
                       value={it.unit_price}
+                      readOnly={!!selectedPackageObj}
                       onChange={e => updateItem(idx, 'unit_price', e.target.value)}
-                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-200 bg-white outline-none text-right font-mono focus:border-[#1565C0]"
+                      className={`w-full px-3 py-1.5 text-xs rounded-lg border text-right font-mono outline-none ${
+                        selectedPackageObj ? 'bg-slate-100 border-slate-200 text-slate-700 cursor-not-allowed font-bold' : 'border-slate-200 bg-white focus:border-[#1565C0]'
+                      }`}
                     />
                   </div>
 
@@ -929,8 +1100,8 @@ const PROBillingPageContent = () => {
                   <button
                     type="button"
                     onClick={() => removeItem(idx)}
-                    disabled={form.items.length <= 1}
-                    className="p-1.5 text-slate-400 hover:text-red-600 disabled:opacity-30 cursor-pointer"
+                    disabled={form.items.length <= 1 || !!selectedPackageObj}
+                    className="p-1.5 text-slate-400 hover:text-red-600 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
                     title="Remove item"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -938,6 +1109,13 @@ const PROBillingPageContent = () => {
                 </div>
               ))}
             </div>
+
+            {selectedPackageObj && (
+              <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl flex items-center gap-2 text-xs text-blue-900 font-medium">
+                <Lock className="w-4 h-4 text-blue-600 shrink-0" />
+                <span>Authoritative Package Line Item: Package pricing and single line item are enforced by the enrolled package agreement. Clinical prescription medicines are covered and not billed separately.</span>
+              </div>
+            )}
           </div>
 
           {/* Dedicated Referral Reward Coupon Section */}
@@ -1079,7 +1257,22 @@ const PROBillingPageContent = () => {
               <span className="font-mono font-bold">{formatCurrency(previewSubtotal)}</span>
             </div>
 
-            {selectedCoupon ? (
+            {selectedPackageObj ? (
+              <div className="flex items-center justify-between text-slate-700 bg-blue-50/80 p-2.5 rounded-xl border border-blue-200">
+                <div>
+                  <span className="font-bold text-[#1565C0] flex items-center gap-1 text-xs">
+                    <Package className="w-3.5 h-3.5" />
+                    <span>Package Enrolled Discount:</span>
+                  </span>
+                  <span className="text-[10px] text-slate-500 block">
+                    Authoritative package agreement discount
+                  </span>
+                </div>
+                <span className="font-mono font-black text-emerald-700 text-sm">
+                  -{formatCurrency(selectedPackageObj.discount_amount || 0)}
+                </span>
+              </div>
+            ) : selectedCoupon ? (
               <div className="flex items-center justify-between text-slate-700 bg-emerald-50/80 p-2.5 rounded-xl border border-emerald-200">
                 <div>
                   <span className="font-bold text-emerald-800 flex items-center gap-1 text-xs">
@@ -1132,11 +1325,11 @@ const PROBillingPageContent = () => {
           <div className="flex justify-end pt-4 border-t border-slate-100">
             <button
               type="submit"
-              disabled={submitting || isDiscountOverSubtotal || patientLookup.loading || (patientLookup.error && !!form.patient_id)}
+              disabled={submitting || isDiscountOverSubtotal || patientLookup.loading || (patientLookup.error && !!form.patient_id) || isPackageAlreadyBilled}
               className="px-6 py-2.5 btn-brand-gradient font-bold text-xs rounded-xl shadow-md transition disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
             >
               <Receipt className="w-4 h-4" />
-              <span>{submitting ? 'Generating Invoice...' : 'Generate Bill Invoice'}</span>
+              <span>{submitting ? 'Generating Invoice...' : isPackageAlreadyBilled ? 'Cannot Invoice (Already Billed)' : 'Generate Bill Invoice'}</span>
             </button>
           </div>
         </form>
@@ -1189,10 +1382,18 @@ const PROBillingPageContent = () => {
                               {b.patient_name || `Patient #${b.patient_id}`}
                             </Link>
                           </td>
-                          <td className="py-3.5 px-4 capitalize">
-                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">
-                              {b.bill_type}
-                            </span>
+                          <td className="py-3.5 px-4">
+                            <div className="flex flex-col items-start gap-1">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 capitalize">
+                                {b.bill_type}
+                              </span>
+                              {b.package_name && (
+                                <span className="text-[10px] text-[#1565C0] font-bold flex items-center gap-1">
+                                  <Package className="w-3 h-3" />
+                                  <span>{b.package_name}</span>
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
                             {formatCurrency(totalAmt)}

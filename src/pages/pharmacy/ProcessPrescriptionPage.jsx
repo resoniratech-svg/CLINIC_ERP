@@ -112,13 +112,24 @@ export const ProcessPrescriptionPage = () => {
       try {
         const bRes = await pharmacyApi.getMedicineBatches(item.medicine_id);
         if (bRes.success) {
-          batchesMap[item.id] = bRes.data || [];
-          // If no batch currently selected and batches exist, auto-select first FEFO batch
-          if (!selectedBatches[item.id] && bRes.data && bRes.data.length > 0) {
+          const bList = bRes.data || [];
+          batchesMap[item.id] = bList;
+          // Smart FEFO auto-selection:
+          // 1. Prefer earliest expiring batch that has sufficient stock (>= item.quantity)
+          // 2. Otherwise pick earliest expiring batch with stock > 0
+          if (!selectedBatches[item.id] && bList.length > 0) {
+            const bestBatch = bList.find((b) => b.quantity >= item.quantity) || bList[0];
             setSelectedBatches((prev) => ({
               ...prev,
-              [item.id]: bRes.data[0].id,
+              [item.id]: bestBatch.id,
             }));
+            // If the selected batch has less than required quantity, adjust initial dispenseQty to batch's quantity
+            if (bestBatch.quantity < item.quantity) {
+              setDispenseQtys((prev) => ({
+                ...prev,
+                [item.id]: bestBatch.quantity,
+              }));
+            }
           }
         }
       } catch (err) {
@@ -211,15 +222,26 @@ export const ProcessPrescriptionPage = () => {
 
   // Handle Complete Dispensing
   const handleCompleteDispensing = async () => {
-    // Validate that batches are selected
+    // Validate that batches are selected and have sufficient stock for requested quantity
     for (const item of items) {
-      if (!selectedBatches[item.id]) {
+      const batchId = selectedBatches[item.id];
+      const availableBatches = batchesByItem[item.id] || [];
+      const batchObj = availableBatches.find((b) => b.id === parseInt(batchId));
+
+      if (!batchId || !batchObj) {
         showToast(`Please select a valid stock batch for "${item.medicine_name}"`, 'warning');
         return;
       }
       const qty = parseInt(dispenseQtys[item.id] || 0);
       if (qty <= 0) {
         showToast(`Dispense quantity for "${item.medicine_name}" must be greater than 0`, 'warning');
+        return;
+      }
+      if (qty > batchObj.quantity) {
+        showToast(
+          `Insufficient stock in batch "${batchObj.batch_number}" for "${item.medicine_name}". Available: ${batchObj.quantity}, requested: ${qty}. Please adjust quantity or select a different batch.`,
+          'error'
+        );
         return;
       }
     }
@@ -366,8 +388,29 @@ export const ProcessPrescriptionPage = () => {
           </button>
           <button
             onClick={handleCompleteDispensing}
-            disabled={submitting || prescriptionData.pharmacy_status === 'dispensed'}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition disabled:opacity-50"
+            disabled={
+              submitting ||
+              prescriptionData.pharmacy_status === 'dispensed' ||
+              items.some((item) => {
+                const batchId = selectedBatches[item.id];
+                const bList = batchesByItem[item.id] || [];
+                const bObj = bList.find((b) => b.id === parseInt(batchId));
+                const qty = parseInt(dispenseQtys[item.id] !== undefined ? dispenseQtys[item.id] : item.quantity);
+                return bObj && qty > bObj.quantity;
+              })
+            }
+            title={
+              items.some((item) => {
+                const batchId = selectedBatches[item.id];
+                const bList = batchesByItem[item.id] || [];
+                const bObj = bList.find((b) => b.id === parseInt(batchId));
+                const qty = parseInt(dispenseQtys[item.id] !== undefined ? dispenseQtys[item.id] : item.quantity);
+                return bObj && qty > bObj.quantity;
+              })
+                ? 'Please resolve insufficient batch stock quantities before dispensing'
+                : ''
+            }
+            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl shadow-xs transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <CheckCircle2 className="w-4 h-4" />
             <span>
@@ -489,6 +532,9 @@ export const ProcessPrescriptionPage = () => {
                 const availableBatches = batchesByItem[item.id] || [];
                 const currentBatchId = selectedBatches[item.id];
                 const selectedBatchObj = availableBatches.find((b) => b.id === parseInt(currentBatchId));
+                const reqQty = item.quantity;
+                const currentDispQty = parseInt(dispenseQtys[item.id] !== undefined ? dispenseQtys[item.id] : reqQty);
+                const isBatchInsufficient = selectedBatchObj ? currentDispQty > selectedBatchObj.quantity : false;
 
                 return (
                   <tr key={item.id} className="hover:bg-slate-50/70 transition">
@@ -534,22 +580,41 @@ export const ProcessPrescriptionPage = () => {
                     <td className="p-3.5">
                       {chk ? (
                         <div>
-                          <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-bold uppercase tracking-wider ${
-                              chk.status === 'available'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : chk.status === 'partially_available'
-                                ? 'bg-amber-100 text-amber-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}
-                          >
-                            {chk.status === 'available' && <CheckCircle2 className="w-3 h-3" />}
-                            {chk.status === 'partially_available' && <AlertTriangle className="w-3 h-3" />}
-                            {chk.status === 'out_of_stock' && <AlertTriangle className="w-3 h-3" />}
-                            {chk.status.replace('_', ' ')}
-                          </span>
-                          <p className="text-2xs text-slate-400 mt-0.5">
-                            Avail: {chk.available_quantity} / Req: {chk.required_quantity}
+                          {selectedBatchObj && isBatchInsufficient ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-bold uppercase tracking-wider bg-red-100 text-red-800">
+                              <AlertTriangle className="w-3 h-3" />
+                              Batch Stock Low
+                            </span>
+                          ) : (
+                            <span
+                              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-bold uppercase tracking-wider ${
+                                chk.status === 'available'
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : chk.status === 'partially_available'
+                                  ? 'bg-amber-100 text-amber-800'
+                                  : 'bg-red-100 text-red-800'
+                              }`}
+                            >
+                              {chk.status === 'available' && <CheckCircle2 className="w-3 h-3" />}
+                              {chk.status === 'partially_available' && <AlertTriangle className="w-3 h-3" />}
+                              {chk.status === 'out_of_stock' && <AlertTriangle className="w-3 h-3" />}
+                              {chk.status.replace('_', ' ')}
+                            </span>
+                          )}
+                          <p className="text-2xs text-slate-600 mt-0.5">
+                            {selectedBatchObj ? (
+                              <>
+                                <span className={isBatchInsufficient ? 'text-red-600 font-bold' : 'text-emerald-700 font-semibold'}>
+                                  Batch: {selectedBatchObj.quantity}
+                                </span>
+                                {' / '}Req: {reqQty}
+                              </>
+                            ) : (
+                              `Avail: ${chk.available_quantity} / Req: ${reqQty}`
+                            )}
+                          </p>
+                          <p className="text-2xs text-slate-400">
+                            Clinic Total: {chk.available_quantity}
                           </p>
                         </div>
                       ) : (
@@ -564,13 +629,23 @@ export const ProcessPrescriptionPage = () => {
                           <select
                             value={selectedBatches[item.id] || ''}
                             disabled={prescriptionData.pharmacy_status === 'dispensed'}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const newBatchId = e.target.value;
                               setSelectedBatches({
                                 ...selectedBatches,
-                                [item.id]: e.target.value,
-                              })
-                            }
-                            className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-lg p-1.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                                [item.id]: newBatchId,
+                              });
+                              const newBatchObj = availableBatches.find((b) => b.id === parseInt(newBatchId));
+                              if (newBatchObj && dispenseQtys[item.id] > newBatchObj.quantity) {
+                                setDispenseQtys({
+                                  ...dispenseQtys,
+                                  [item.id]: newBatchObj.quantity,
+                                });
+                              }
+                            }}
+                            className={`w-full bg-white border text-xs rounded-lg p-1.5 focus:ring-2 focus:outline-hidden font-medium disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed ${
+                              isBatchInsufficient ? 'border-red-400 text-red-800 focus:ring-red-500' : 'border-slate-200 text-slate-800 focus:ring-blue-500'
+                            }`}
                           >
                             {availableBatches.map((batch) => {
                               const expDate = batch.expiry_date
@@ -578,16 +653,24 @@ export const ProcessPrescriptionPage = () => {
                                 : 'No Exp';
                               return (
                                 <option key={batch.id} value={batch.id}>
-                                  {batch.batch_number} (Exp: {expDate} | Stk: {batch.quantity})
+                                  {batch.batch_number} (Exp: {expDate} | Stk: {batch.quantity}){batch.quantity < item.quantity ? ' - Low Stock' : ''}
                                 </option>
                               );
                             })}
                           </select>
                           {selectedBatchObj && (
-                            <p className="text-2xs text-slate-500 mt-0.5">
-                              MRP: ₹{selectedBatchObj.mrp || '0.00'} • Expiry:{' '}
-                              {new Date(selectedBatchObj.expiry_date).toLocaleDateString()}
-                            </p>
+                            <div className="text-2xs mt-0.5">
+                              <span className="text-slate-500">
+                                MRP: ₹{selectedBatchObj.mrp || '0.00'} • Expiry:{' '}
+                                {new Date(selectedBatchObj.expiry_date).toLocaleDateString()}
+                              </span>
+                              {isBatchInsufficient && (
+                                <p className="text-red-600 font-bold mt-0.5 flex items-center gap-1">
+                                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                                  <span>Batch has only {selectedBatchObj.quantity} units (need {currentDispQty})</span>
+                                </p>
+                              )}
+                            </div>
                           )}
                         </div>
                       ) : (
@@ -603,6 +686,7 @@ export const ProcessPrescriptionPage = () => {
                       <input
                         type="number"
                         min="1"
+                        max={selectedBatchObj ? selectedBatchObj.quantity : item.quantity}
                         disabled={prescriptionData.pharmacy_status === 'dispensed'}
                         value={dispenseQtys[item.id] !== undefined ? dispenseQtys[item.id] : item.quantity}
                         onChange={(e) =>
@@ -611,8 +695,17 @@ export const ProcessPrescriptionPage = () => {
                             [item.id]: e.target.value,
                           })
                         }
-                        className="w-16 text-center bg-white border border-slate-200 text-slate-800 text-xs rounded-lg p-1.5 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
+                        className={`w-16 text-center bg-white border text-xs rounded-lg p-1.5 font-bold focus:ring-2 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed ${
+                          isBatchInsufficient
+                            ? 'border-red-400 text-red-700 focus:ring-red-500'
+                            : 'border-slate-200 text-slate-800 focus:ring-blue-500'
+                        }`}
                       />
+                      {selectedBatchObj && (
+                        <p className={`text-2xs mt-0.5 ${isBatchInsufficient ? 'text-red-500 font-semibold' : 'text-slate-400'}`}>
+                          Max: {selectedBatchObj.quantity}
+                        </p>
+                      )}
                     </td>
 
                     {/* Actions */}
