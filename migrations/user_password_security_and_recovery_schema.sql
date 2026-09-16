@@ -19,8 +19,20 @@ CREATE TABLE IF NOT EXISTS super_admin_password_recovery (
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     used_at TIMESTAMP WITH TIME ZONE,
     completed_at TIMESTAMP WITH TIME ZONE,
+    ip_address VARCHAR(100),
+    user_agent TEXT,
+    failure_reason TEXT,
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
+
+-- Ensure columns exist if table was previously created with earlier schema
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS temporary_password_created_at TIMESTAMP WITH TIME ZONE DEFAULT now();
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS temporary_password_expires_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS temporary_password_used_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS ip_address VARCHAR(100);
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS user_agent TEXT;
+ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS failure_reason TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_super_admin_rec_user_status ON super_admin_password_recovery(user_id, recovery_status);

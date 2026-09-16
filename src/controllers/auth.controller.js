@@ -609,41 +609,47 @@ async function forgotPassword(req, res) {
       console.error('Super Admin recovery email sending failed:', mailErr);
 
       // Rollback temporary credentials immediately so no undisclosed credential remains usable
-      await db.query(`
-        UPDATE users
-        SET temporary_password_hash = NULL,
-            temporary_password_expires_at = NULL,
-            temporary_password_used_at = NULL,
-            password_reset_required = false,
-            must_change_password = false,
-            updated_at = now()
-        WHERE user_id = $1
-      `, [user.user_id]);
+      try {
+        await db.query(`
+          UPDATE users
+          SET temporary_password_hash = NULL,
+              temporary_password_expires_at = NULL,
+              temporary_password_used_at = NULL,
+              password_reset_required = false,
+              must_change_password = false,
+              updated_at = now()
+          WHERE user_id = $1
+        `, [user.user_id]);
 
-      await db.query(`
-        UPDATE super_admin_password_recovery
-        SET recovery_status = 'failed', failure_reason = $1, updated_at = now()
-        WHERE id = $2
-      `, [mailErr.message, recoveryId]);
+        if (recoveryId) {
+          await db.query(`
+            UPDATE super_admin_password_recovery
+            SET recovery_status = 'failed', failure_reason = $1, updated_at = now()
+            WHERE id = $2
+          `, [mailErr.message, recoveryId]);
+        }
 
-      await logAuditEvent({
-        userId: user.user_id,
-        role: user.role,
-        action: 'SUPER_ADMIN_RECOVERY_EMAIL_FAILED',
-        recordId: recoveryId,
-        remarks: `Failed to deliver recovery email: ${mailErr.message}`,
-        ip, device, browser, branchId: user.branch_id
-      });
+        await logAuditEvent({
+          userId: user.user_id,
+          role: user.role,
+          action: 'SUPER_ADMIN_RECOVERY_EMAIL_FAILED',
+          recordId: recoveryId,
+          remarks: `Failed to deliver recovery email: ${mailErr.message}`,
+          ip, device, browser, branchId: user.branch_id
+        });
+      } catch (cleanupErr) {
+        console.warn('Defensive rollback notice:', cleanupErr.message);
+      }
 
       return res.status(500).json(formatResponse(
         false,
         null,
-        'Unable to complete password recovery at this time. Please try again later.'
+        'Unable to complete password recovery at this time. Please check administrator SMTP email settings.'
       ));
     }
   } catch (err) {
-    console.error('Forgot password error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    console.error('Forgot password fatal error:', err);
+    return res.status(500).json(formatResponse(false, null, err.message || 'Internal server error'));
   }
 }
 

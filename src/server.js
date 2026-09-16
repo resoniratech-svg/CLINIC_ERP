@@ -19,6 +19,49 @@ async function bootstrap() {
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_expires_at TIMESTAMP WITH TIME ZONE");
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_used_at TIMESTAMP WITH TIME ZONE");
 
+    // Ensure password_reset_requests table exists for non-super-admin staff
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS password_reset_requests (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(user_id),
+        requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        status VARCHAR(50) NOT NULL DEFAULT 'pending',
+        approved_by INTEGER REFERENCES users(user_id),
+        temp_password_hash VARCHAR(255),
+        approved_at TIMESTAMPTZ
+      );
+    `);
+
+    // Ensure super_admin_password_recovery table and all audit columns exist
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS super_admin_password_recovery (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+        role VARCHAR(50) NOT NULL DEFAULT 'super_admin',
+        identifier_type VARCHAR(50),
+        submitted_identifier VARCHAR(150),
+        reason TEXT,
+        recovery_status VARCHAR(50) NOT NULL DEFAULT 'pending',
+        email_destination VARCHAR(255) NOT NULL,
+        temporary_password_created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+        temporary_password_expires_at TIMESTAMP WITH TIME ZONE,
+        temporary_password_used_at TIMESTAMP WITH TIME ZONE,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        ip_address VARCHAR(100),
+        user_agent TEXT,
+        failure_reason TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+      );
+    `);
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS temporary_password_created_at TIMESTAMP WITH TIME ZONE DEFAULT now()");
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS temporary_password_expires_at TIMESTAMP WITH TIME ZONE");
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS temporary_password_used_at TIMESTAMP WITH TIME ZONE");
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE");
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS ip_address VARCHAR(100)");
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS user_agent TEXT");
+    await db.query("ALTER TABLE super_admin_password_recovery ADD COLUMN IF NOT EXISTS failure_reason TEXT");
+
     // Auto-apply additive migration files safely
     const migDir = path.join(__dirname, '../migrations');
     if (fs.existsSync(migDir)) {
