@@ -4,14 +4,24 @@ import { authApi } from '../api';
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [token, setToken] = useState(() => localStorage.getItem('clinic_token') || null);
+  const [token, setToken] = useState(() => {
+    try {
+      return localStorage.getItem('clinic_token') || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('clinic_token') : null) || null;
+    } catch (e) {
+      return null;
+    }
+  });
   const [user, setUser] = useState(() => {
-    const savedUser = localStorage.getItem('clinic_user');
-    return savedUser ? JSON.parse(savedUser) : null;
+    try {
+      const savedUser = localStorage.getItem('clinic_user') || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('clinic_user') : null);
+      return savedUser ? JSON.parse(savedUser) : null;
+    } catch (e) {
+      return null;
+    }
   });
   const [loading, setLoading] = useState(false);
 
-  const login = async (username, password) => {
+  const login = async (username, password, rememberMe = false) => {
     setLoading(true);
     try {
       const response = await authApi.login({ username, password });
@@ -19,8 +29,25 @@ export const AuthProvider = ({ children }) => {
         const { token: jwtToken, user: userData } = response.data;
         setToken(jwtToken);
         setUser(userData);
-        localStorage.setItem('clinic_token', jwtToken);
-        localStorage.setItem('clinic_user', JSON.stringify(userData));
+        if (rememberMe) {
+          localStorage.setItem('clinic_token', jwtToken);
+          localStorage.setItem('clinic_user', JSON.stringify(userData));
+          try {
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.removeItem('clinic_token');
+              sessionStorage.removeItem('clinic_user');
+            }
+          } catch (e) {}
+        } else {
+          try {
+            if (typeof sessionStorage !== 'undefined') {
+              sessionStorage.setItem('clinic_token', jwtToken);
+              sessionStorage.setItem('clinic_user', JSON.stringify(userData));
+            }
+          } catch (e) {}
+          localStorage.removeItem('clinic_token');
+          localStorage.removeItem('clinic_user');
+        }
         return { success: true, user: userData };
       } else {
         throw new Error(response.message || 'Login failed');

@@ -15,7 +15,10 @@ const axiosClient = axios.create({
 // Request interceptor: inject JWT token
 axiosClient.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('clinic_token');
+    let token = null;
+    try {
+      token = localStorage.getItem('clinic_token') || (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('clinic_token') : null);
+    } catch (e) {}
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -47,6 +50,12 @@ axiosClient.interceptors.response.use(
     if (response && response.status === 401) {
       localStorage.removeItem('clinic_token');
       localStorage.removeItem('clinic_user');
+      try {
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.removeItem('clinic_token');
+          sessionStorage.removeItem('clinic_user');
+        }
+      } catch (e) {}
       if (window.location.pathname !== '/login') {
         window.location.href = '/login';
       }

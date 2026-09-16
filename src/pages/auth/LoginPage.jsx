@@ -77,8 +77,11 @@ export const LoginPage = () => {
 
     setLoading(true);
     try {
-      const res = await login(username, password);
+      const res = await login(username, password, rememberMe);
       if (res.success) {
+        setUsername('');
+        setPassword('');
+        setRememberMe(false);
         if (res.user?.must_change_password) {
           setPendingUser(res.user);
           setIsMustChangeOpen(true);
