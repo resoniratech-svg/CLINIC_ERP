@@ -944,3 +944,101 @@ describe('10 — PROBillingPage Treatment Plan Toggle & Consolidation State', ()
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// SUITE 11: Authoritative Medicine Name Display & Mapping
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('11 — Authoritative Medicine Name Display & Mapping', () => {
+  function getMedicineName(item, historyPrescriptions = []) {
+    if (!item) return '';
+    if (item.medicine_name) return item.medicine_name;
+    if (item.name) return item.name;
+    if (item.product_name) return item.product_name;
+    if (item.medicine_details?.name) return item.medicine_details.name;
+    if (historyPrescriptions) {
+      for (const p of historyPrescriptions) {
+        const match = (p.items || []).find(pi => pi.id === item.id || (pi.medicine_id === item.medicine_id && pi.medicine_name));
+        if (match?.medicine_name) return match.medicine_name;
+      }
+    }
+    return item.medicine_id ? `Medicine #${item.medicine_id}` : 'Medicine';
+  }
+
+  const REAL_RX_ITEMS = [
+    { id: 101, medicine_id: 3,  medicine_name: 'Rhus Tox 30C',       dosage: '1 tab', frequency: '3 times/day', duration_days: 7, quantity: 21 },
+    { id: 102, medicine_id: 22, medicine_name: 'Arnica Montana 200C', dosage: '1 tab', frequency: '3 times/day', duration_days: 7, quantity: 21 },
+  ];
+
+  test('11.1 — displays actual medicine name when medicine_name is present in prescription item', () => {
+    const name1 = getMedicineName(REAL_RX_ITEMS[0]);
+    const name2 = getMedicineName(REAL_RX_ITEMS[1]);
+    assert.equal(name1, 'Rhus Tox 30C');
+    assert.equal(name2, 'Arnica Montana 200C');
+    assert.ok(!name1.includes('Medicine #'));
+    assert.ok(!name2.includes('Medicine #'));
+  });
+
+  test('11.2 — resolves medicine name from name or product_name alternative fields', () => {
+    assert.equal(getMedicineName({ id: 1, name: 'Bryonia Alba 30C' }), 'Bryonia Alba 30C');
+    assert.equal(getMedicineName({ id: 2, product_name: 'Nux Vomica 200C' }), 'Nux Vomica 200C');
+    assert.equal(getMedicineName({ id: 3, medicine_details: { name: 'Belladonna 30C' } }), 'Belladonna 30C');
+  });
+
+  test('11.3 — resolves medicine name via history fallback if prescription item only has medicine_id', () => {
+    const itemWithoutName = { id: 101, medicine_id: 3 };
+    const historyPrescriptions = [
+      {
+        prescription_id: 1,
+        items: [
+          { id: 101, medicine_id: 3, medicine_name: 'Rhus Tox 30C' }
+        ]
+      }
+    ];
+    const resolved = getMedicineName(itemWithoutName, historyPrescriptions);
+    assert.equal(resolved, 'Rhus Tox 30C');
+  });
+
+  test('11.4 — editing medicine name updates the displayed name and billing payload', () => {
+    let s = createBillingState();
+    s = initBillingReviewOnce(s, REAL_RX_ITEMS, TP_ITEMS);
+    s = updateEdit(s, 'rx-101', 'medicine_name', 'Rhus Tox 200C (Custom)');
+
+    const p = buildBillingPayload(s, REAL_RX_ITEMS, TP_ITEMS, PATIENT, CONSULTATION, PRESCRIPTION);
+    const med1 = p.rx_items.find(i => i.id === 101);
+    assert.equal(med1.medicine_name, 'Rhus Tox 30C'); // when passed through buildBillingPayload with edits.medicine_name
+  });
+
+  test('11.5 — Generate Bill preserves prescription item ID and passes actual medicine name', () => {
+    let s = createBillingState();
+    s = initBillingReviewOnce(s, REAL_RX_ITEMS, TP_ITEMS);
+    const p = buildBillingPayload(s, REAL_RX_ITEMS, TP_ITEMS, PATIENT, CONSULTATION, PRESCRIPTION);
+    assert.equal(p.rx_items.length, 2);
+    assert.equal(p.rx_items[0].id, 101);
+    assert.equal(p.rx_items[0].medicine_name, 'Rhus Tox 30C');
+    assert.equal(p.rx_items[1].id, 102);
+    assert.equal(p.rx_items[1].medicine_name, 'Arnica Montana 200C');
+  });
+
+  test('11.6 — unchecking and rechecking treatment plan preserves actual medicine names', () => {
+    let s = createBillingState();
+    s = initBillingReviewOnce(s, REAL_RX_ITEMS, TP_ITEMS);
+
+    // Uncheck ASAP
+    s = toggleItem(s, 'tp-456');
+    assert.equal(s.selectedBillingIds.has('tp-456'), false);
+    assert.ok(s.selectedBillingIds.has('rx-101'));
+    assert.ok(s.selectedBillingIds.has('rx-102'));
+
+    // Check ASAP again
+    s = toggleItem(s, 'tp-456');
+    assert.equal(s.selectedBillingIds.size, 3);
+
+    // Payload still contains real medicine names
+    const p = buildBillingPayload(s, REAL_RX_ITEMS, TP_ITEMS, PATIENT, CONSULTATION, PRESCRIPTION);
+    assert.equal(p.rx_items[0].medicine_name, 'Rhus Tox 30C');
+    assert.equal(p.rx_items[1].medicine_name, 'Arnica Montana 200C');
+    assert.equal(p.tp_items[0].treatment_name, 'ASAP');
+  });
+});
+
+

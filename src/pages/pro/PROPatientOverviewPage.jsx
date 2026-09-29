@@ -231,6 +231,23 @@ export const PROPatientOverviewPage = () => {
   const isDoctorDone = consultStatus === 'completed' || ['doctor_completed', 'pro_pending', 'pro_completed', 'completed'].includes(apptStatus) || !!checklist?.doctor_consultation_completed;
   const isProDone = apptStatus === 'pro_completed' || apptStatus === 'completed';
 
+  // Helper to reliably extract the authoritative medicine name from prescription item
+  const getMedicineName = (item) => {
+    if (!item) return '';
+    if (item.medicine_name) return item.medicine_name;
+    if (item.name) return item.name;
+    if (item.product_name) return item.product_name;
+    if (item.medicine_details?.name) return item.medicine_details.name;
+    // Fallback: look up in historical prescriptions where medicine_master was joined
+    if (overview?.history?.prescriptions) {
+      for (const p of overview.history.prescriptions) {
+        const match = (p.items || []).find(pi => pi.id === item.id || (pi.medicine_id === item.medicine_id && pi.medicine_name));
+        if (match?.medicine_name) return match.medicine_name;
+      }
+    }
+    return item.medicine_id ? `Medicine #${item.medicine_id}` : 'Medicine';
+  };
+
   // One-time initialize billing state when opening the tab for the first time for this patient
   // Does NOT re-run on subsequent tab clicks — preserves user's checkbox selections
   const initBillingReviewOnce = () => {
@@ -243,6 +260,7 @@ export const PROPatientOverviewPage = () => {
       const key = `rx-${item.id}`;
       initialSelected.add(key);
       initialEdits[key] = {
+        medicine_name: getMedicineName(item),
         dosage: item.dosage || '',
         quantity: item.quantity || 1,
         frequency: item.frequency || '',
@@ -533,7 +551,7 @@ export const PROPatientOverviewPage = () => {
               {prescription.items.map(item => (
                 <div key={item.id} className="p-3 flex items-center justify-between flex-wrap gap-2 text-xs">
                   <div>
-                    <div className="font-bold text-slate-900">{item.medicine_name || `Medicine #${item.medicine_id}`}</div>
+                    <div className="font-bold text-slate-900">{getMedicineName(item)}</div>
                     <div className="text-[11px] text-slate-500">
                       Dosage: {item.dosage || '1 tab'} • Frequency: {item.frequency || '1/day'} • Route: {item.route || 'oral'}
                     </div>
@@ -561,15 +579,20 @@ export const PROPatientOverviewPage = () => {
 
         // Unified items collection — normalizes prescriptions and treatment plans into one list
         const unifiedItems = [
-          ...rxItems.map(item => ({
-            id: `rx-${item.id}`,
-            sourceType: 'prescription',
-            sourceId: item.id,
-            name: item.medicine_name || `Medicine #${item.medicine_id}`,
-            badgeLabel: 'Prescription',
-            badgeClass: 'bg-blue-50 text-[#1565C0] border-blue-100',
-            data: item,
-          })),
+          ...rxItems.map(item => {
+            const key = `rx-${item.id}`;
+            const edits = billingItemEdits[key] || {};
+            const displayName = edits.medicine_name || getMedicineName(item);
+            return {
+              id: key,
+              sourceType: 'prescription',
+              sourceId: item.id,
+              name: displayName,
+              badgeLabel: 'Prescription',
+              badgeClass: 'bg-blue-50 text-[#1565C0] border-blue-100',
+              data: item,
+            };
+          }),
           ...tpItems.map(tp => ({
             id: `tp-${tp.treatment_id}`,
             sourceType: 'treatment_plan',
@@ -621,9 +644,10 @@ export const PROPatientOverviewPage = () => {
           if (selectedRx.length > 0) {
             params.set('rx_items', JSON.stringify(selectedRx.map(item => {
               const edits = billingItemEdits[`rx-${item.id}`] || {};
+              const resolvedName = edits.medicine_name || getMedicineName(item);
               return {
                 id: item.id,
-                medicine_name: item.medicine_name || `Medicine #${item.medicine_id}`,
+                medicine_name: resolvedName,
                 quantity: edits.quantity ?? item.quantity ?? 1,
                 dosage: edits.dosage ?? item.dosage ?? '',
                 frequency: edits.frequency ?? item.frequency ?? '',
@@ -768,7 +792,17 @@ export const PROPatientOverviewPage = () => {
                           <div className="text-[10px] font-black text-[#1565C0] uppercase tracking-wide mb-3">
                             Edit Prescription Details
                           </div>
-                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-[11px]">
+                            <div className="col-span-2 md:col-span-2">
+                              <label className="block text-slate-500 font-medium mb-1">Medicine Name</label>
+                              <input
+                                type="text"
+                                value={edits.medicine_name ?? getMedicineName(rxData)}
+                                onChange={e => updateEdit(key, 'medicine_name', e.target.value)}
+                                placeholder="Medicine name"
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
                             <div>
                               <label className="block text-slate-500 font-medium mb-1">Dosage</label>
                               <input
@@ -798,7 +832,7 @@ export const PROPatientOverviewPage = () => {
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
                               />
                             </div>
-                            <div>
+                            <div className="col-span-2 md:col-span-1">
                               <label className="block text-slate-500 font-medium mb-1">Quantity</label>
                               <input
                                 type="number" min="1"
@@ -1360,7 +1394,7 @@ export const PROPatientOverviewPage = () => {
                         {rx.items.map(it => (
                           <div key={it.id} className="flex items-center justify-between text-[11px] text-slate-700">
                             <span>
-                              <strong>{it.medicine_name || `Medicine #${it.medicine_id}`}</strong> — {it.dosage || '1 tab'}, {it.frequency || '1/day'}, {it.duration_days || 5} days
+                              <strong>{getMedicineName(it)}</strong> — {it.dosage || '1 tab'}, {it.frequency || '1/day'}, {it.duration_days || 5} days
                             </span>
                             <span className="font-mono text-slate-500">
                               Qty: {it.quantity || 1} {it.dispense_status ? `(${it.dispense_status})` : ''}
