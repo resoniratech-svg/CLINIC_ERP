@@ -536,35 +536,29 @@ export const PROPatientOverviewPage = () => {
       {activeTab === 'billing_review' && (() => {
         const rxItems = prescription?.items || [];
         const tpItems = treatment_plans || [];
+        const totalItems = rxItems.length + tpItems.length;
         const anyChecked = Object.values(billingCheckedRx).some(Boolean) || Object.values(billingCheckedTp).some(Boolean);
+        const totalChecked = Object.values(billingCheckedRx).filter(Boolean).length + Object.values(billingCheckedTp).filter(Boolean).length;
 
-        // Build URL query params for the billing page
         const handleGenerateBill = () => {
           const selectedRx = rxItems.filter(item => billingCheckedRx[item.id]);
           const selectedTp = tpItems.filter(tp => billingCheckedTp[tp.treatment_id]);
-
           const params = new URLSearchParams();
           params.set('patient_id', patient.patient_id);
           if (consultation?.doctor_id) params.set('doctor_id', consultation.doctor_id);
-          params.set('bill_type', selectedTp.length > 0 ? 'treatment' : 'treatment');
-
+          params.set('bill_type', 'treatment');
           if (prescription?.prescription_id && selectedRx.length > 0) {
             params.set('prescription_id', prescription.prescription_id);
           }
-
-          // Encode selected prescription items
           if (selectedRx.length > 0) {
-            const rxData = selectedRx.map(item => ({
+            params.set('rx_items', JSON.stringify(selectedRx.map(item => ({
               id: item.id,
               medicine_name: item.medicine_name || `Medicine #${item.medicine_id}`,
               quantity: billingRxEdits[item.id]?.quantity ?? item.quantity ?? 1,
               dosage: billingRxEdits[item.id]?.dosage ?? item.dosage ?? '',
               duration_days: item.duration_days,
-            }));
-            params.set('rx_items', JSON.stringify(rxData));
+            }))));
           }
-
-          // Encode selected treatment plans
           if (selectedTp.length > 0) {
             const tpData = selectedTp.map(tp => ({
               treatment_id: tp.treatment_id,
@@ -574,29 +568,165 @@ export const PROPatientOverviewPage = () => {
               amount: billingTpEdits[tp.treatment_id]?.amount || '',
             }));
             params.set('tp_items', JSON.stringify(tpData));
-            // Also keep legacy treatment_name/type for billing page fallback
             if (selectedTp.length === 1) {
               params.set('treatment_name', selectedTp[0].treatment_name);
               params.set('treatment_type', selectedTp[0].treatment_type || 'Treatment');
             }
           }
-
           navigate(`/pro/billing/new?${params.toString()}`);
         };
 
+        const selectAll = () => {
+          const allRx = {}; rxItems.forEach(i => { allRx[i.id] = true; });
+          const allTp = {}; tpItems.forEach(t => { allTp[t.treatment_id] = true; });
+          setBillingCheckedRx(allRx); setBillingCheckedTp(allTp);
+        };
+        const selectNone = () => {
+          const noneRx = {}; rxItems.forEach(i => { noneRx[i.id] = false; });
+          const noneTp = {}; tpItems.forEach(t => { noneTp[t.treatment_id] = false; });
+          setBillingCheckedRx(noneRx); setBillingCheckedTp(noneTp);
+        };
+
         return (
-          <div className="space-y-5">
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-                <div>
-                  <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                    <Edit3 className="w-4 h-4 text-[#D32F2F]" />
-                    <span>PRO Billing Review</span>
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Select prescription medicines and treatment plans to include in the bill. Edit quantities or amounts as needed. Click "Generate Bill" to proceed to the billing center.
-                  </p>
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-slate-100">
+              <div>
+                <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                  <Edit3 className="w-4 h-4 text-[#D32F2F]" />
+                  <span>PRO Billing Review</span>
+                  <span className="text-[11px] font-semibold text-slate-400 ml-1">
+                    {totalChecked} of {totalItems} selected
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Check items to include in the bill, edit details as needed, then click Generate Bill.
+                </p>
+              </div>
+              <button
+                onClick={handleGenerateBill}
+                disabled={!anyChecked}
+                className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer shrink-0 ${
+                  anyChecked ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                <Receipt className="w-3.5 h-3.5" />
+                <span>Generate Bill →</span>
+              </button>
+            </div>
+
+            {/* Select All / None toolbar */}
+            {totalItems > 0 && (
+              <div className="flex items-center justify-between px-5 py-2 bg-slate-50/60 border-b border-slate-100 text-[11px] font-bold">
+                <span className="text-slate-500">{totalItems} billing item{totalItems !== 1 ? 's' : ''}</span>
+                <div className="flex gap-3">
+                  <button onClick={selectAll} className="text-[#1565C0] hover:underline cursor-pointer">Select All</button>
+                  <span className="text-slate-300">|</span>
+                  <button onClick={selectNone} className="text-slate-500 hover:underline cursor-pointer">None</button>
                 </div>
+              </div>
+            )}
+
+            {/* Unified flat item list */}
+            {totalItems === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-400">
+                No prescription medicines or treatment plans found for this patient.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {/* Prescription medicine rows */}
+                {rxItems.map(item => {
+                  const checked = !!billingCheckedRx[item.id];
+                  const edits = billingRxEdits[item.id] || {};
+                  return (
+                    <div
+                      key={`rx-${item.id}`}
+                      className={`px-5 py-3.5 flex items-center gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/40 opacity-60'}`}
+                    >
+                      <button
+                        onClick={() => setBillingCheckedRx(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+                        className="shrink-0 cursor-pointer text-[#1565C0]"
+                      >
+                        {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-300" />}
+                      </button>
+                      <Pill className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-slate-900 text-xs">{item.medicine_name || `Medicine #${item.medicine_id}`}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          {item.route || 'oral'} · {item.duration_days || '—'} days · Freq: {item.frequency || '1/day'}
+                        </div>
+                      </div>
+                      {checked && (
+                        <div className="flex items-center gap-3 shrink-0 text-[11px]">
+                          <div className="flex items-center gap-1">
+                            <label className="text-slate-400 whitespace-nowrap">Dosage:</label>
+                            <input
+                              type="text"
+                              value={edits.dosage ?? item.dosage ?? ''}
+                              onChange={e => setBillingRxEdits(prev => ({ ...prev, [item.id]: { ...prev[item.id], dosage: e.target.value } }))}
+                              placeholder="1 tab"
+                              className="w-18 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
+                            />
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <label className="text-slate-400 whitespace-nowrap">Qty:</label>
+                            <input
+                              type="number" min="1"
+                              value={edits.quantity ?? item.quantity ?? 1}
+                              onChange={e => setBillingRxEdits(prev => ({ ...prev, [item.id]: { ...prev[item.id], quantity: parseInt(e.target.value) || 1 } }))}
+                              className="w-14 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {/* Treatment plan rows */}
+                {tpItems.map(tp => {
+                  const checked = !!billingCheckedTp[tp.treatment_id];
+                  const edits = billingTpEdits[tp.treatment_id] || {};
+                  return (
+                    <div
+                      key={`tp-${tp.treatment_id}`}
+                      className={`px-5 py-3.5 flex items-center gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/40 opacity-60'}`}
+                    >
+                      <button
+                        onClick={() => setBillingCheckedTp(prev => ({ ...prev, [tp.treatment_id]: !prev[tp.treatment_id] }))}
+                        className="shrink-0 cursor-pointer text-[#1565C0]"
+                      >
+                        {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-300" />}
+                      </button>
+                      <Stethoscope className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-slate-900 text-xs">{tp.treatment_name}</div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
+                          {tp.treatment_type || 'Treatment'} · {tp.duration || 'N/A'} {tp.duration_unit || 'days'}
+                        </div>
+                      </div>
+                      {checked && (
+                        <div className="flex items-center gap-1 shrink-0 text-[11px]">
+                          <label className="text-slate-400 whitespace-nowrap">Amount (₹):</label>
+                          <input
+                            type="number" min="0" step="1"
+                            value={edits.amount ?? ''}
+                            onChange={e => setBillingTpEdits(prev => ({ ...prev, [tp.treatment_id]: { ...prev[tp.treatment_id], amount: e.target.value } }))}
+                            placeholder="0"
+                            className="w-24 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Footer */}
+            {totalItems > 0 && (
+              <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/40">
+                <span className="text-[11px] text-slate-400">{totalChecked} item{totalChecked !== 1 ? 's' : ''} selected</span>
                 <button
                   onClick={handleGenerateBill}
                   disabled={!anyChecked}
@@ -605,212 +735,10 @@ export const PROPatientOverviewPage = () => {
                   }`}
                 >
                   <Receipt className="w-3.5 h-3.5" />
-                  <span>Generate Bill →</span>
+                  <span>Generate Bill in Billing Center →</span>
                 </button>
               </div>
-
-              {/* SECTION A: Prescription Medicines */}
-              <div className="mb-5">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold text-[#1565C0] uppercase tracking-wider flex items-center gap-1.5">
-                    <Pill className="w-3.5 h-3.5" />
-                    Prescription Medicines ({rxItems.length})
-                  </h3>
-                  {rxItems.length > 0 && (
-                    <div className="flex gap-2 text-[11px] font-bold">
-                      <button
-                        onClick={() => {
-                          const all = {};
-                          rxItems.forEach(item => { all[item.id] = true; });
-                          setBillingCheckedRx(all);
-                        }}
-                        className="text-[#1565C0] hover:underline cursor-pointer"
-                      >Select All</button>
-                      <span className="text-slate-300">|</span>
-                      <button
-                        onClick={() => {
-                          const none = {};
-                          rxItems.forEach(item => { none[item.id] = false; });
-                          setBillingCheckedRx(none);
-                        }}
-                        className="text-slate-500 hover:underline cursor-pointer"
-                      >None</button>
-                    </div>
-                  )}
-                </div>
-
-                {rxItems.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-3 text-center bg-slate-50 rounded-xl border border-slate-100">
-                    No prescription medicines recorded for this patient.
-                  </p>
-                ) : (
-                  <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
-                    {rxItems.map(item => {
-                      const checked = !!billingCheckedRx[item.id];
-                      const edits = billingRxEdits[item.id] || {};
-                      return (
-                        <div
-                          key={item.id}
-                          className={`p-3 flex items-start gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/60 opacity-60'}`}
-                        >
-                          <button
-                            onClick={() => setBillingCheckedRx(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
-                            className="mt-0.5 shrink-0 cursor-pointer text-[#1565C0]"
-                          >
-                            {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-400" />}
-                          </button>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-3 flex-wrap">
-                              <div>
-                                <div className="font-bold text-slate-900 text-xs">{item.medicine_name || `Medicine #${item.medicine_id}`}</div>
-                                <div className="text-[11px] text-slate-500 mt-0.5">
-                                  Route: {item.route || 'oral'} • Duration: {item.duration_days || '—'} days
-                                </div>
-                              </div>
-                              {checked && (
-                                <div className="flex items-center gap-3 flex-wrap">
-                                  <div className="flex items-center gap-1.5 text-[11px]">
-                                    <label className="text-slate-500 font-medium whitespace-nowrap">Dosage:</label>
-                                    <input
-                                      type="text"
-                                      value={edits.dosage ?? item.dosage ?? ''}
-                                      onChange={e => setBillingRxEdits(prev => ({
-                                        ...prev,
-                                        [item.id]: { ...prev[item.id], dosage: e.target.value }
-                                      }))}
-                                      placeholder="e.g. 1 tab"
-                                      className="w-20 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
-                                    />
-                                  </div>
-                                  <div className="flex items-center gap-1.5 text-[11px]">
-                                    <label className="text-slate-500 font-medium whitespace-nowrap">Qty:</label>
-                                    <input
-                                      type="number"
-                                      min="1"
-                                      value={edits.quantity ?? item.quantity ?? 1}
-                                      onChange={e => setBillingRxEdits(prev => ({
-                                        ...prev,
-                                        [item.id]: { ...prev[item.id], quantity: parseInt(e.target.value) || 1 }
-                                      }))}
-                                      className="w-16 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* SECTION B: Treatment Plans */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-xs font-bold text-[#1565C0] uppercase tracking-wider flex items-center gap-1.5">
-                    <Stethoscope className="w-3.5 h-3.5" />
-                    Treatment Plans ({tpItems.length})
-                  </h3>
-                  {tpItems.length > 0 && (
-                    <div className="flex gap-2 text-[11px] font-bold">
-                      <button
-                        onClick={() => {
-                          const all = {};
-                          tpItems.forEach(tp => { all[tp.treatment_id] = true; });
-                          setBillingCheckedTp(all);
-                        }}
-                        className="text-[#1565C0] hover:underline cursor-pointer"
-                      >Select All</button>
-                      <span className="text-slate-300">|</span>
-                      <button
-                        onClick={() => {
-                          const none = {};
-                          tpItems.forEach(tp => { none[tp.treatment_id] = false; });
-                          setBillingCheckedTp(none);
-                        }}
-                        className="text-slate-500 hover:underline cursor-pointer"
-                      >None</button>
-                    </div>
-                  )}
-                </div>
-
-                {tpItems.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-3 text-center bg-slate-50 rounded-xl border border-slate-100">
-                    No treatment plans prescribed for this patient.
-                  </p>
-                ) : (
-                  <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
-                    {tpItems.map(tp => {
-                      const checked = !!billingCheckedTp[tp.treatment_id];
-                      const edits = billingTpEdits[tp.treatment_id] || {};
-                      return (
-                        <div
-                          key={tp.treatment_id}
-                          className={`p-3 flex items-start gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/60 opacity-60'}`}
-                        >
-                          <button
-                            onClick={() => setBillingCheckedTp(prev => ({ ...prev, [tp.treatment_id]: !prev[tp.treatment_id] }))}
-                            className="mt-0.5 shrink-0 cursor-pointer text-[#1565C0]"
-                          >
-                            {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-400" />}
-                          </button>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-3 flex-wrap">
-                              <div>
-                                <div className="font-bold text-slate-900 text-xs">{tp.treatment_name}</div>
-                                <div className="text-[11px] text-slate-500 mt-0.5">
-                                  <span className="capitalize">{tp.treatment_type || 'Treatment'}</span>
-                                  {' · '}Duration: {tp.duration || 'N/A'} {tp.duration_unit || 'days'}
-                                </div>
-                              </div>
-                              {checked && (
-                                <div className="flex items-center gap-1.5 text-[11px]">
-                                  <label className="text-slate-500 font-medium whitespace-nowrap">Amount (₹):</label>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    step="1"
-                                    value={edits.amount ?? ''}
-                                    onChange={e => setBillingTpEdits(prev => ({
-                                      ...prev,
-                                      [tp.treatment_id]: { ...prev[tp.treatment_id], amount: e.target.value }
-                                    }))}
-                                    placeholder="Enter amount"
-                                    className="w-28 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Footer Generate Bill CTA */}
-              {(rxItems.length > 0 || tpItems.length > 0) && (
-                <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
-                  <div className="text-[11px] text-slate-500">
-                    {Object.values(billingCheckedRx).filter(Boolean).length} prescription item(s) +{' '}
-                    {Object.values(billingCheckedTp).filter(Boolean).length} treatment plan(s) selected
-                  </div>
-                  <button
-                    onClick={handleGenerateBill}
-                    disabled={!anyChecked}
-                    className={`flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer ${
-                      anyChecked ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                    }`}
-                  >
-                    <Receipt className="w-3.5 h-3.5" />
-                    <span>Generate Bill in Billing Center →</span>
-                  </button>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         );
       })()}
