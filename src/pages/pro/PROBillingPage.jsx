@@ -350,30 +350,36 @@ const PROBillingPageContent = () => {
     }
   }, [searchParams, verifyPatient, applyPackage]);
 
-  // Toggle treatment plan checkbox selection (APPEND/REMOVE - not replace!)
+  // Toggle treatment plan checkbox selection (APPEND/REMOVE - preserves prescriptions & other items!)
   const toggleTreatmentPlan = (tp) => {
     if (!tp) return;
     const planId = tp.treatment_id;
     const isSelected = selectedPlanIds.includes(planId);
 
     if (isSelected) {
-      // Deselect: remove this plan's item
+      // Deselect: remove this plan's item, preserving all prescriptions and other items!
       setSelectedPlanIds(prev => prev.filter(id => id !== planId));
-      setForm(prev => ({
-        ...prev,
-        items: prev.items.filter(it => it.treatment_plan_id !== planId)
-      }));
+      setForm(prev => {
+        const remaining = prev.items.filter(it => it.treatment_plan_id !== planId);
+        return {
+          ...prev,
+          items: remaining.length > 0
+            ? remaining
+            : [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 0 }]
+        };
+      });
     } else {
-      // Select: append plan
+      // Select: append plan, preserving all prescription items and user-added items!
       setSelectedPlanIds(prev => [...prev, planId]);
       setForm(prev => {
-        // If this is the FIRST plan being selected, clear all unlinked items
-        // (they are either the default "Treatment Session" or URL-prepopulated items).
-        // If plans are already selected, keep existing items so manual rows are preserved.
-        const hasExistingPlanItems = prev.items.some(it => it.treatment_plan_id);
-        const baseItems = hasExistingPlanItems
-          ? prev.items                                     // already has plans — keep everything
-          : prev.items.filter(it => it.treatment_plan_id); // first plan — discard non-plan rows
+        // Discard ONLY the unedited generic default placeholder row ("Treatment Session" without rx_item_id or treatment_plan_id)
+        const isDefaultPlaceholder = (it) =>
+          it.item_name === 'Treatment Session' &&
+          !it.treatment_plan_id &&
+          !it.rx_item_id &&
+          (it.unit_price === 2000 || it.unit_price === 0);
+
+        const baseItems = prev.items.filter(it => !isDefaultPlaceholder(it));
 
         return {
           ...prev,
@@ -386,7 +392,7 @@ const PROBillingPageContent = () => {
               description: tp.treatment_name || 'Prescribed Treatment',
               charge_type: tp.treatment_type || 'homeopathy',
               quantity: 1,
-              unit_price: 0,
+              unit_price: tp.amount ? parseFloat(tp.amount) : 0,
               treatment_plan_id: planId
             }
           ]
@@ -396,22 +402,46 @@ const PROBillingPageContent = () => {
     }
   };
 
-
   const selectAllPlans = () => {
     const billable = (prescribedTreatments || []).filter(tp => tp.billing_status !== 'billed');
-    billable.forEach(tp => {
-      if (!selectedPlanIds.includes(tp.treatment_id)) {
-        toggleTreatmentPlan(tp);
-      }
+    const plansToAdd = billable.filter(tp => !selectedPlanIds.includes(tp.treatment_id));
+    if (plansToAdd.length === 0) return;
+
+    setSelectedPlanIds(prev => [...prev, ...plansToAdd.map(tp => tp.treatment_id)]);
+    setForm(prev => {
+      const isDefaultPlaceholder = (it) =>
+        it.item_name === 'Treatment Session' &&
+        !it.treatment_plan_id &&
+        !it.rx_item_id &&
+        (it.unit_price === 2000 || it.unit_price === 0);
+      const baseItems = prev.items.filter(it => !isDefaultPlaceholder(it));
+      const newItems = plansToAdd.map(tp => ({
+        item_name: tp.treatment_name || 'Prescribed Treatment',
+        description: tp.treatment_name || 'Prescribed Treatment',
+        charge_type: tp.treatment_type || 'homeopathy',
+        quantity: 1,
+        unit_price: tp.amount ? parseFloat(tp.amount) : 0,
+        treatment_plan_id: tp.treatment_id
+      }));
+      return {
+        ...prev,
+        bill_type: 'treatment',
+        items: [...baseItems, ...newItems]
+      };
     });
   };
 
   const clearPlanSelections = () => {
     setSelectedPlanIds([]);
-    setForm(prev => ({
-      ...prev,
-      items: [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 0 }]
-    }));
+    setForm(prev => {
+      const nonPlanItems = prev.items.filter(it => !it.treatment_plan_id);
+      return {
+        ...prev,
+        items: nonPlanItems.length > 0
+          ? nonPlanItems
+          : [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 0 }]
+      };
+    });
   };
 
   const handlePackageSelect = (pkgId) => {
@@ -481,6 +511,10 @@ const PROBillingPageContent = () => {
 
   const removeItem = (idx) => {
     if (form.items.length <= 1) return;
+    const itemToRemove = form.items[idx];
+    if (itemToRemove?.treatment_plan_id) {
+      setSelectedPlanIds(prev => prev.filter(id => id !== itemToRemove.treatment_plan_id));
+    }
     setForm(prev => ({
       ...prev,
       items: prev.items.filter((_, i) => i !== idx)

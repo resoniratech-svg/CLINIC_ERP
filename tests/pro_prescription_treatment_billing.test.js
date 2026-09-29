@@ -763,3 +763,184 @@ describe('8 — Full Workflow Simulations', () => {
     assert.equal(s.selectedBillingIds.size, 0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUITE 9: Single Button Verification in Patient 360 Source
+// ─────────────────────────────────────────────────────────────────────────────
+
+import fs from 'node:fs';
+import path from 'node:path';
+
+describe('9 — Single Generate Bill Button on Patient 360', () => {
+  const overviewFilePath = path.resolve('src/pages/pro/PROPatientOverviewPage.jsx');
+  const fileContent = fs.readFileSync(overviewFilePath, 'utf8');
+
+  test('9.1 — exactly ONE "Generate Bill →" button in Patient 360 overview', () => {
+    const matches = fileContent.match(/<span>Generate Bill →<\/span>/g) || [];
+    assert.equal(matches.length, 1, `Expected exactly 1 "Generate Bill →" button, found ${matches.length}`);
+  });
+
+  test('9.2 — the button is in the section header, not in the footer', () => {
+    const footerMatch = fileContent.match(/Footer[\s\S]*?<span>Generate Bill →<\/span>/);
+    assert.equal(footerMatch, null, 'Footer must NOT contain a Generate Bill button');
+  });
+
+  test('9.3 — section heading is "Prescription & Treatment Plan"', () => {
+    assert.ok(fileContent.includes('<span>Prescription &amp; Treatment Plan</span>'));
+    assert.ok(!fileContent.includes('<span>PRO Billing Review</span>'));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUITE 10: PROBillingPage Treatment Plan Toggle & Consolidation Fix
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('10 — PROBillingPage Treatment Plan Toggle & Consolidation State', () => {
+  // Pure implementation of the fixed toggleTreatmentPlan logic from PROBillingPage.jsx
+  function simulateTogglePlan(currentForm, currentSelectedPlanIds, tp) {
+    const planId = tp.treatment_id;
+    const isSelected = currentSelectedPlanIds.includes(planId);
+
+    if (isSelected) {
+      const nextPlanIds = currentSelectedPlanIds.filter(id => id !== planId);
+      const remaining = currentForm.items.filter(it => it.treatment_plan_id !== planId);
+      return {
+        selectedPlanIds: nextPlanIds,
+        form: {
+          ...currentForm,
+          items: remaining.length > 0
+            ? remaining
+            : [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 0 }]
+        }
+      };
+    } else {
+      const nextPlanIds = [...currentSelectedPlanIds, planId];
+      const isDefaultPlaceholder = (it) =>
+        it.item_name === 'Treatment Session' &&
+        !it.treatment_plan_id &&
+        !it.rx_item_id &&
+        (it.unit_price === 2000 || it.unit_price === 0);
+
+      const baseItems = currentForm.items.filter(it => !isDefaultPlaceholder(it));
+      return {
+        selectedPlanIds: nextPlanIds,
+        form: {
+          ...currentForm,
+          bill_type: 'treatment',
+          doctor_id: tp.doctor_id ? String(tp.doctor_id) : currentForm.doctor_id,
+          items: [
+            ...baseItems,
+            {
+              item_name: tp.treatment_name || 'Prescribed Treatment',
+              description: tp.treatment_name || 'Prescribed Treatment',
+              charge_type: tp.treatment_type || 'homeopathy',
+              quantity: 1,
+              unit_price: tp.amount ? parseFloat(tp.amount) : 0,
+              treatment_plan_id: planId
+            }
+          ]
+        }
+      };
+    }
+  }
+
+  function simulateClearPlans(currentForm) {
+    const nonPlanItems = currentForm.items.filter(it => !it.treatment_plan_id);
+    return {
+      selectedPlanIds: [],
+      form: {
+        ...currentForm,
+        items: nonPlanItems.length > 0
+          ? nonPlanItems
+          : [{ item_name: 'Treatment Session', charge_type: 'Treatment', quantity: 1, unit_price: 0 }]
+      }
+    };
+  }
+
+  const INITIAL_BILL_ITEMS = [
+    { item_name: 'Medicine #3', charge_type: 'medicine', quantity: 21, unit_price: 0, rx_item_id: 101 },
+    { item_name: 'Medicine #22', charge_type: 'medicine', quantity: 21, unit_price: 0, rx_item_id: 102 },
+    { item_name: 'ASAP', charge_type: 'homeopathy', quantity: 1, unit_price: 0, treatment_plan_id: 456 },
+  ];
+
+  const ASAP_TP = { treatment_id: 456, treatment_name: 'ASAP', treatment_type: 'homeopathy', doctor_id: 11 };
+
+  test('10.1 — Initial state: 3 items (Medicine #3, Medicine #22, ASAP)', () => {
+    const form = { items: [...INITIAL_BILL_ITEMS] };
+    const planIds = [456];
+    assert.equal(form.items.length, 3);
+    assert.equal(form.items[0].item_name, 'Medicine #3');
+    assert.equal(form.items[1].item_name, 'Medicine #22');
+    assert.equal(form.items[2].item_name, 'ASAP');
+    assert.deepEqual(planIds, [456]);
+  });
+
+  test('10.2 — User unchecks ASAP: ASAP removed from items, Medicine #3 and Medicine #22 remain', () => {
+    const form = { items: [...INITIAL_BILL_ITEMS] };
+    const planIds = [456];
+
+    const result = simulateTogglePlan(form, planIds, ASAP_TP);
+
+    assert.equal(result.form.items.length, 2);
+    assert.equal(result.form.items[0].item_name, 'Medicine #3');
+    assert.equal(result.form.items[1].item_name, 'Medicine #22');
+    assert.deepEqual(result.selectedPlanIds, []);
+  });
+
+  test('10.3 — CRITICAL: User checks ASAP again: ASAP added back, Medicine #3 and Medicine #22 are NOT lost', () => {
+    // Start from the state after unchecking ASAP
+    const formAfterUncheck = {
+      items: [
+        { item_name: 'Medicine #3', charge_type: 'medicine', quantity: 21, unit_price: 0, rx_item_id: 101 },
+        { item_name: 'Medicine #22', charge_type: 'medicine', quantity: 21, unit_price: 0, rx_item_id: 102 },
+      ]
+    };
+    const planIdsAfterUncheck = [];
+
+    // Check ASAP again
+    const result = simulateTogglePlan(formAfterUncheck, planIdsAfterUncheck, ASAP_TP);
+
+    assert.equal(result.form.items.length, 3, 'CRITICAL: Must have 3 items after rechecking ASAP');
+    assert.equal(result.form.items[0].item_name, 'Medicine #3', 'Medicine #3 must be preserved');
+    assert.equal(result.form.items[1].item_name, 'Medicine #22', 'Medicine #22 must be preserved');
+    assert.equal(result.form.items[2].item_name, 'ASAP', 'ASAP must be appended');
+    assert.deepEqual(result.selectedPlanIds, [456]);
+  });
+
+  test('10.4 — clearPlans removes ONLY treatment plans, keeping all prescription items', () => {
+    const form = { items: [...INITIAL_BILL_ITEMS] };
+    const result = simulateClearPlans(form);
+
+    assert.equal(result.form.items.length, 2);
+    assert.equal(result.form.items[0].item_name, 'Medicine #3');
+    assert.equal(result.form.items[1].item_name, 'Medicine #22');
+    assert.deepEqual(result.selectedPlanIds, []);
+  });
+
+  test('10.5 — toggle multiple times does not duplicate or lose items', () => {
+    let state = {
+      form: { items: [...INITIAL_BILL_ITEMS] },
+      selectedPlanIds: [456]
+    };
+
+    // Uncheck ASAP
+    state = simulateTogglePlan(state.form, state.selectedPlanIds, ASAP_TP);
+    assert.equal(state.form.items.length, 2);
+
+    // Check ASAP
+    state = simulateTogglePlan(state.form, state.selectedPlanIds, ASAP_TP);
+    assert.equal(state.form.items.length, 3);
+
+    // Uncheck ASAP again
+    state = simulateTogglePlan(state.form, state.selectedPlanIds, ASAP_TP);
+    assert.equal(state.form.items.length, 2);
+
+    // Check ASAP again
+    state = simulateTogglePlan(state.form, state.selectedPlanIds, ASAP_TP);
+    assert.equal(state.form.items.length, 3);
+    assert.equal(state.form.items[0].item_name, 'Medicine #3');
+    assert.equal(state.form.items[1].item_name, 'Medicine #22');
+    assert.equal(state.form.items[2].item_name, 'ASAP');
+  });
+});
+

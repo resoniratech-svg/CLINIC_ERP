@@ -559,6 +559,28 @@ export const PROPatientOverviewPage = () => {
         const totalSelected = selectedBillingIds.size;
         const anySelected = totalSelected > 0;
 
+        // Unified items collection — normalizes prescriptions and treatment plans into one list
+        const unifiedItems = [
+          ...rxItems.map(item => ({
+            id: `rx-${item.id}`,
+            sourceType: 'prescription',
+            sourceId: item.id,
+            name: item.medicine_name || `Medicine #${item.medicine_id}`,
+            badgeLabel: 'Prescription',
+            badgeClass: 'bg-blue-50 text-[#1565C0] border-blue-100',
+            data: item,
+          })),
+          ...tpItems.map(tp => ({
+            id: `tp-${tp.treatment_id}`,
+            sourceType: 'treatment_plan',
+            sourceId: tp.treatment_id,
+            name: tp.treatment_name,
+            badgeLabel: 'Treatment Plan',
+            badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+            data: tp,
+          }))
+        ];
+
         // Toggle a single item's selection — NEVER mutates source arrays
         const toggleItem = (key) => {
           setSelectedBillingIds(prev => {
@@ -569,10 +591,7 @@ export const PROPatientOverviewPage = () => {
         };
 
         const selectAll = () => {
-          const all = new Set();
-          rxItems.forEach(i => all.add(`rx-${i.id}`));
-          tpItems.forEach(t => all.add(`tp-${t.treatment_id}`));
-          setSelectedBillingIds(all);
+          setSelectedBillingIds(new Set(unifiedItems.map(it => it.id)));
         };
 
         const selectNone = () => setSelectedBillingIds(new Set());
@@ -636,7 +655,7 @@ export const PROPatientOverviewPage = () => {
 
         return (
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
-            {/* Header */}
+            {/* Header: Exactly ONE Generate Bill button */}
             <div className="flex items-center justify-between p-5 border-b border-slate-100">
               <div>
                 <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
@@ -659,7 +678,7 @@ export const PROPatientOverviewPage = () => {
               </button>
             </div>
 
-            {/* Toolbar: count + Select All / None */}
+            {/* Toolbar: count + Select All / Clear */}
             {totalItems > 0 && (
               <div className="flex items-center justify-between px-5 py-2.5 bg-slate-50/60 border-b border-slate-100 text-[11px] font-bold">
                 <span className="text-slate-600">
@@ -682,13 +701,14 @@ export const PROPatientOverviewPage = () => {
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-
-                {/* ── Prescription medicine rows ── */}
-                {rxItems.map(item => {
-                  const key = `rx-${item.id}`;
+                {unifiedItems.map(item => {
+                  const key = item.id;
                   const isSelected = selectedBillingIds.has(key);
                   const isEditing = editingItemKey === key;
                   const edits = billingItemEdits[key] || {};
+                  const isRx = item.sourceType === 'prescription';
+                  const rxData = isRx ? item.data : null;
+                  const tpData = !isRx ? item.data : null;
 
                   return (
                     <div key={key}>
@@ -707,18 +727,25 @@ export const PROPatientOverviewPage = () => {
                         </button>
 
                         {/* Type badge */}
-                        <span className="shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-blue-50 text-[#1565C0] border border-blue-100">
-                          Prescription
+                        <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide border ${item.badgeClass}`}>
+                          {item.badgeLabel}
                         </span>
 
                         {/* Item details */}
                         <div className="flex-1 min-w-0">
                           <div className="font-bold text-slate-900 text-xs">
-                            {item.medicine_name || `Medicine #${item.medicine_id}`}
+                            {item.name}
                           </div>
-                          <div className="text-[11px] text-slate-400 mt-0.5">
-                            {edits.dosage || item.dosage || '—'} &nbsp;•&nbsp; {edits.frequency || item.frequency || '—'} &nbsp;•&nbsp; {edits.duration_days || item.duration_days || '—'} days &nbsp;•&nbsp; Qty: {edits.quantity || item.quantity || 1}
-                          </div>
+                          {isRx ? (
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {edits.dosage || rxData.dosage || '—'} &nbsp;•&nbsp; {edits.frequency || rxData.frequency || '—'} &nbsp;•&nbsp; {edits.duration_days || rxData.duration_days || '—'} days &nbsp;•&nbsp; Qty: {edits.quantity || rxData.quantity || 1}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
+                              {tpData.treatment_type || 'Treatment'} &nbsp;•&nbsp; {edits.duration || tpData.duration || 'N/A'} {edits.duration_unit || tpData.duration_unit || 'days'}
+                              {edits.amount ? ` • ₹${edits.amount}` : ''}
+                            </div>
+                          )}
                         </div>
 
                         {/* Edit button — always visible, not conditional on checkbox */}
@@ -736,7 +763,7 @@ export const PROPatientOverviewPage = () => {
                       </div>
 
                       {/* Inline Edit panel — expands below row, does NOT affect checkbox */}
-                      {isEditing && (
+                      {isEditing && isRx && (
                         <div className="mx-5 mb-3 p-4 bg-blue-50/60 border border-blue-100 rounded-xl">
                           <div className="text-[10px] font-black text-[#1565C0] uppercase tracking-wide mb-3">
                             Edit Prescription Details
@@ -746,7 +773,7 @@ export const PROPatientOverviewPage = () => {
                               <label className="block text-slate-500 font-medium mb-1">Dosage</label>
                               <input
                                 type="text"
-                                value={edits.dosage ?? item.dosage ?? ''}
+                                value={edits.dosage ?? rxData.dosage ?? ''}
                                 onChange={e => updateEdit(key, 'dosage', e.target.value)}
                                 placeholder="e.g. 1 tab"
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
@@ -756,7 +783,7 @@ export const PROPatientOverviewPage = () => {
                               <label className="block text-slate-500 font-medium mb-1">Frequency</label>
                               <input
                                 type="text"
-                                value={edits.frequency ?? item.frequency ?? ''}
+                                value={edits.frequency ?? rxData.frequency ?? ''}
                                 onChange={e => updateEdit(key, 'frequency', e.target.value)}
                                 placeholder="e.g. 3 times/day"
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
@@ -766,7 +793,7 @@ export const PROPatientOverviewPage = () => {
                               <label className="block text-slate-500 font-medium mb-1">Duration (days)</label>
                               <input
                                 type="number" min="1"
-                                value={edits.duration_days ?? item.duration_days ?? ''}
+                                value={edits.duration_days ?? rxData.duration_days ?? ''}
                                 onChange={e => updateEdit(key, 'duration_days', e.target.value)}
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
                               />
@@ -775,7 +802,7 @@ export const PROPatientOverviewPage = () => {
                               <label className="block text-slate-500 font-medium mb-1">Quantity</label>
                               <input
                                 type="number" min="1"
-                                value={edits.quantity ?? item.quantity ?? 1}
+                                value={edits.quantity ?? rxData.quantity ?? 1}
                                 onChange={e => updateEdit(key, 'quantity', parseInt(e.target.value) || 1)}
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
                               />
@@ -786,63 +813,9 @@ export const PROPatientOverviewPage = () => {
                           </div>
                         </div>
                       )}
-                    </div>
-                  );
-                })}
 
-                {/* ── Treatment plan rows ── */}
-                {tpItems.map(tp => {
-                  const key = `tp-${tp.treatment_id}`;
-                  const isSelected = selectedBillingIds.has(key);
-                  const isEditing = editingItemKey === key;
-                  const edits = billingItemEdits[key] || {};
-
-                  return (
-                    <div key={key}>
-                      {/* Main row */}
-                      <div className="px-5 py-3.5 flex items-center gap-3">
-                        {/* Checkbox */}
-                        <button
-                          onClick={() => toggleItem(key)}
-                          className="shrink-0 cursor-pointer"
-                          title={isSelected ? 'Uncheck to exclude from bill' : 'Check to include in bill'}
-                        >
-                          {isSelected
-                            ? <CheckSquare className="w-4 h-4 text-[#1565C0]" />
-                            : <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
-                          }
-                        </button>
-
-                        {/* Type badge */}
-                        <span className="shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-emerald-50 text-emerald-700 border border-emerald-100">
-                          Treatment Plan
-                        </span>
-
-                        {/* Item details */}
-                        <div className="flex-1 min-w-0">
-                          <div className="font-bold text-slate-900 text-xs">{tp.treatment_name}</div>
-                          <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
-                            {tp.treatment_type || 'Treatment'} &nbsp;•&nbsp; {edits.duration || tp.duration || 'N/A'} {edits.duration_unit || tp.duration_unit || 'days'}
-                            {edits.amount ? ` • ₹${edits.amount}` : ''}
-                          </div>
-                        </div>
-
-                        {/* Edit button */}
-                        <button
-                          onClick={() => toggleEditPanel(key)}
-                          className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
-                            isEditing
-                              ? 'bg-slate-200 border-slate-300 text-slate-700'
-                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                          }`}
-                        >
-                          <Edit3 className="w-3 h-3" />
-                          {isEditing ? 'Close' : 'Edit'}
-                        </button>
-                      </div>
-
-                      {/* Inline Edit panel */}
-                      {isEditing && (
+                      {/* Inline Edit panel for Treatment Plan */}
+                      {isEditing && !isRx && (
                         <div className="mx-5 mb-3 p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl">
                           <div className="text-[10px] font-black text-emerald-700 uppercase tracking-wide mb-3">
                             Edit Treatment Plan Details
@@ -852,7 +825,7 @@ export const PROPatientOverviewPage = () => {
                               <label className="block text-slate-500 font-medium mb-1">Duration</label>
                               <input
                                 type="number" min="1"
-                                value={edits.duration ?? tp.duration ?? ''}
+                                value={edits.duration ?? tpData.duration ?? ''}
                                 onChange={e => updateEdit(key, 'duration', e.target.value)}
                                 placeholder="e.g. 7"
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
@@ -861,7 +834,7 @@ export const PROPatientOverviewPage = () => {
                             <div>
                               <label className="block text-slate-500 font-medium mb-1">Unit</label>
                               <select
-                                value={edits.duration_unit ?? tp.duration_unit ?? 'days'}
+                                value={edits.duration_unit ?? tpData.duration_unit ?? 'days'}
                                 onChange={e => updateEdit(key, 'duration_unit', e.target.value)}
                                 className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
                               >
@@ -892,22 +865,12 @@ export const PROPatientOverviewPage = () => {
               </div>
             )}
 
-            {/* Footer */}
+            {/* Footer — status count only, no duplicate button */}
             {totalItems > 0 && (
-              <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/40">
+              <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/40">
                 <span className="text-[11px] text-slate-400">
                   {totalSelected} of {totalItems} item{totalItems !== 1 ? 's' : ''} selected for billing
                 </span>
-                <button
-                  onClick={handleGenerateBill}
-                  disabled={!anySelected}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer ${
-                    anySelected ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  }`}
-                >
-                  <Receipt className="w-3.5 h-3.5" />
-                  <span>Generate Bill →</span>
-                </button>
               </div>
             )}
           </div>
