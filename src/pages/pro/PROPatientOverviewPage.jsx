@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   User,
@@ -213,8 +213,8 @@ export const PROPatientOverviewPage = () => {
   const { patient, consultation, prescription, financials, crm, treatment_plans, appointment } = overview;
   const isReadyForHandoff = checklist?.ready_for_pro_completion;
 
-  // proBills at component scope — fixes white screen crash in Completion Checklist tab
-  const proBills = useMemo(() => (financials?.bills || []).filter(b => b.bill_type !== 'consultation'), [financials]);
+  // proBills — plain computed value (not a hook — hooks cannot appear after conditional early returns)
+  const proBills = (financials?.bills || []).filter(b => b.bill_type !== 'consultation');
 
   // Compute operational stage
   const apptStatus = appointment?.appointment_status || appointment?.status || 'booked';
@@ -222,8 +222,8 @@ export const PROPatientOverviewPage = () => {
   const isDoctorDone = consultStatus === 'completed' || ['doctor_completed', 'pro_pending', 'pro_completed', 'completed'].includes(apptStatus) || !!checklist?.doctor_consultation_completed;
   const isProDone = apptStatus === 'pro_completed' || apptStatus === 'completed';
 
-  // Initialize billing review checkboxes when tab is opened
-  const initBillingReview = useCallback(() => {
+  // Initialize billing review checkboxes when tab is opened — plain function (not useCallback)
+  const initBillingReview = () => {
     const rxItems = prescription?.items || [];
     const tpItems = treatment_plans || [];
     const initRx = {};
@@ -242,7 +242,7 @@ export const PROPatientOverviewPage = () => {
     setBillingRxEdits(initRxEdits);
     setBillingCheckedTp(initTp);
     setBillingTpEdits(initTpEdits);
-  }, [prescription, treatment_plans]);
+  };
 
   return (
     <div className="space-y-6">
