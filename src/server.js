@@ -19,6 +19,20 @@ async function bootstrap() {
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_expires_at TIMESTAMP WITH TIME ZONE");
     await db.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS temporary_password_used_at TIMESTAMP WITH TIME ZONE");
 
+    // treatment_plans billing columns — required by PRO billing integration and patient overview queries
+    await db.query("ALTER TABLE treatment_plans ADD COLUMN IF NOT EXISTS billing_status VARCHAR(30) NOT NULL DEFAULT 'awaiting_billing'");
+    await db.query("ALTER TABLE treatment_plans ADD COLUMN IF NOT EXISTS billed_in_bill_id INTEGER REFERENCES bills(bill_id) ON DELETE SET NULL");
+    // Ensure bills.appointment_id column exists (also in patient_appointment_reassignment_schema migration)
+    await db.query("ALTER TABLE bills ADD COLUMN IF NOT EXISTS appointment_id INTEGER REFERENCES appointments(appointment_id) ON DELETE SET NULL");
+    // Ensure bills.package_id column exists (also in pro_schema migration)
+    await db.query("ALTER TABLE bills ADD COLUMN IF NOT EXISTS package_id INTEGER REFERENCES packages(package_id)");
+    // Ensure prescriptions.package_id, created_by, branch_id exist (also in package_prescription_integration migration)
+    await db.query("ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS package_id INTEGER REFERENCES packages(package_id)");
+    await db.query("ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(user_id)");
+    await db.query("ALTER TABLE prescriptions ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES branches(branch_id) DEFAULT 1");
+    // Ensure packages.prescription_id exists (also in package_prescription_integration migration)
+    await db.query("ALTER TABLE packages ADD COLUMN IF NOT EXISTS prescription_id INTEGER REFERENCES prescriptions(id) ON DELETE SET NULL");
+
     // Ensure password_reset_requests table exists for non-super-admin staff
     await db.query(`
       CREATE TABLE IF NOT EXISTS password_reset_requests (
