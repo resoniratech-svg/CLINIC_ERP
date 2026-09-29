@@ -229,9 +229,34 @@ async function getPatientOverview(req, res) {
     // Latest or Linked Prescription
     const prescRes = await db.query(`
       SELECT p.id as prescription_id, p.created_at, p.pharmacy_status, p.appointment_id, p.consultation_id,
-             json_agg(pi.*) as items
+             COALESCE(
+               json_agg(
+                 json_build_object(
+                   'id', pi.id,
+                   'prescription_id', pi.prescription_id,
+                   'medicine_id', pi.medicine_id,
+                   'medicine_name', mm.medicine_name,
+                   'generic_name', mm.generic_name,
+                   'dosage', pi.dosage,
+                   'frequency', pi.frequency,
+                   'route', pi.route,
+                   'duration_days', pi.duration_days,
+                   'quantity', pi.quantity,
+                   'timing', pi.timing,
+                   'food_instruction', pi.food_instruction,
+                   'special_instructions', pi.special_instructions,
+                   'dispensed', pi.dispensed,
+                   'dispensed_at', pi.dispensed_at,
+                   'dispensed_by', pi.dispensed_by,
+                   'dispense_status', pi.dispense_status,
+                   'dispensed_quantity', pi.dispensed_quantity,
+                   'hold_reason', pi.hold_reason
+                 )
+               ) FILTER (WHERE pi.id IS NOT NULL), '[]'::json
+             ) as items
       FROM prescriptions p
       LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+      LEFT JOIN medicine_master mm ON pi.medicine_id = mm.id
       WHERE p.patient_id = $1
       GROUP BY p.id
       ORDER BY 
