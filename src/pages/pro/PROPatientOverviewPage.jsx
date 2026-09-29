@@ -60,11 +60,15 @@ export const PROPatientOverviewPage = () => {
   const [searching, setSearching] = useState(false);
   const [queuePatients, setQueuePatients] = useState([]);
 
-  // PRO Billing Review tab state — checkboxes + editable fields
-  const [billingCheckedRx, setBillingCheckedRx] = useState({}); // {item.id: true/false}
-  const [billingCheckedTp, setBillingCheckedTp] = useState({}); // {tp.treatment_id: true/false}
-  const [billingRxEdits, setBillingRxEdits] = useState({}); // {item.id: {quantity, dosage}}
-  const [billingTpEdits, setBillingTpEdits] = useState({}); // {tp.treatment_id: {amount}}
+  // Prescription & Treatment Plan billing selection state
+  // selectedBillingIds: Set of "rx-{id}" | "tp-{treatment_id}" — ONLY selection, NEVER source data
+  const [selectedBillingIds, setSelectedBillingIds] = useState(new Set());
+  // billingItemEdits: { "rx-{id}": {dosage, quantity, frequency, duration_days}, "tp-{id}": {duration, amount} }
+  const [billingItemEdits, setBillingItemEdits] = useState({});
+  // Which item's Edit panel is expanded (key = "rx-{id}" | "tp-{id}", null = none)
+  const [editingItemKey, setEditingItemKey] = useState(null);
+  // Whether billing state has been initialized for the current overview
+  const [billingInitialized, setBillingInitialized] = useState(false);
 
 
   useEffect(() => {
@@ -81,6 +85,11 @@ export const PROPatientOverviewPage = () => {
   const loadOverview = useCallback(async (pid) => {
     if (!pid) return;
     setLoading(true);
+    // Reset billing state for new patient
+    setSelectedBillingIds(new Set());
+    setBillingItemEdits({});
+    setEditingItemKey(null);
+    setBillingInitialized(false);
     try {
       const [ovRes, chRes] = await Promise.allSettled([
         proApi.getPatientOverview(pid),
@@ -222,26 +231,36 @@ export const PROPatientOverviewPage = () => {
   const isDoctorDone = consultStatus === 'completed' || ['doctor_completed', 'pro_pending', 'pro_completed', 'completed'].includes(apptStatus) || !!checklist?.doctor_consultation_completed;
   const isProDone = apptStatus === 'pro_completed' || apptStatus === 'completed';
 
-  // Initialize billing review checkboxes when tab is opened — plain function (not useCallback)
-  const initBillingReview = () => {
+  // One-time initialize billing state when opening the tab for the first time for this patient
+  // Does NOT re-run on subsequent tab clicks — preserves user's checkbox selections
+  const initBillingReviewOnce = () => {
+    if (billingInitialized) return; // already initialized — don't reset user's selections
     const rxItems = prescription?.items || [];
     const tpItems = treatment_plans || [];
-    const initRx = {};
-    const initRxEdits = {};
+    const initialSelected = new Set();
+    const initialEdits = {};
     rxItems.forEach(item => {
-      initRx[item.id] = true;
-      initRxEdits[item.id] = { quantity: item.quantity || 1, dosage: item.dosage || '' };
+      const key = `rx-${item.id}`;
+      initialSelected.add(key);
+      initialEdits[key] = {
+        dosage: item.dosage || '',
+        quantity: item.quantity || 1,
+        frequency: item.frequency || '',
+        duration_days: item.duration_days || '',
+      };
     });
-    const initTp = {};
-    const initTpEdits = {};
     tpItems.forEach(tp => {
-      initTp[tp.treatment_id] = true;
-      initTpEdits[tp.treatment_id] = { amount: '' };
+      const key = `tp-${tp.treatment_id}`;
+      initialSelected.add(key);
+      initialEdits[key] = {
+        duration: tp.duration || '',
+        duration_unit: tp.duration_unit || 'days',
+        amount: '',
+      };
     });
-    setBillingCheckedRx(initRx);
-    setBillingRxEdits(initRxEdits);
-    setBillingCheckedTp(initTp);
-    setBillingTpEdits(initTpEdits);
+    setSelectedBillingIds(initialSelected);
+    setBillingItemEdits(initialEdits);
+    setBillingInitialized(true);
   };
 
   return (
@@ -392,7 +411,7 @@ export const PROPatientOverviewPage = () => {
         {[
           { id: 'clinical', label: 'Doctor Clinical Info', icon: Stethoscope },
           { id: 'prescription', label: `Prescription (${prescription?.items?.length || 0})`, icon: Pill },
-          { id: 'billing_review', label: 'PRO Billing Review', icon: Edit3 },
+          { id: 'billing_review', label: 'Prescription & Treatment Plan', icon: Edit3 },
           { id: 'packages', label: `Treatment Plans & Packages (${(treatment_plans?.length || 0) + (crm?.packages?.length || 0)})`, icon: Package },
           { id: 'financials', label: `Billing & Dues (${financials?.bills?.length || 0})`, icon: Receipt },
           { id: 'history', label: 'Patient Journey & History', icon: History },
@@ -403,7 +422,7 @@ export const PROPatientOverviewPage = () => {
           return (
             <button
               key={tab.id}
-              onClick={() => { setActiveTab(tab.id); if (tab.id === 'billing_review') initBillingReview(); }}
+              onClick={() => { setActiveTab(tab.id); if (tab.id === 'billing_review') initBillingReviewOnce(); }}
               className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl transition cursor-pointer whitespace-nowrap ${
                 activeTab === tab.id
                   ? 'bg-[#D32F2F] text-white shadow-xs shadow-red-500/20'
@@ -532,17 +551,47 @@ export const PROPatientOverviewPage = () => {
         </div>
       )}
 
-      {/* TAB CONTENT 2b: PRO Billing Review — Prescription + Treatment Plans (Unified) */}
+      {/* TAB CONTENT 2b: Prescription & Treatment Plan (Unified Billing Review) */}
       {activeTab === 'billing_review' && (() => {
         const rxItems = prescription?.items || [];
         const tpItems = treatment_plans || [];
         const totalItems = rxItems.length + tpItems.length;
-        const anyChecked = Object.values(billingCheckedRx).some(Boolean) || Object.values(billingCheckedTp).some(Boolean);
-        const totalChecked = Object.values(billingCheckedRx).filter(Boolean).length + Object.values(billingCheckedTp).filter(Boolean).length;
+        const totalSelected = selectedBillingIds.size;
+        const anySelected = totalSelected > 0;
+
+        // Toggle a single item's selection — NEVER mutates source arrays
+        const toggleItem = (key) => {
+          setSelectedBillingIds(prev => {
+            const next = new Set(prev);
+            if (next.has(key)) { next.delete(key); } else { next.add(key); }
+            return next;
+          });
+        };
+
+        const selectAll = () => {
+          const all = new Set();
+          rxItems.forEach(i => all.add(`rx-${i.id}`));
+          tpItems.forEach(t => all.add(`tp-${t.treatment_id}`));
+          setSelectedBillingIds(all);
+        };
+
+        const selectNone = () => setSelectedBillingIds(new Set());
+
+        // Update edit fields for an item — preserves selection state
+        const updateEdit = (key, field, value) => {
+          setBillingItemEdits(prev => ({
+            ...prev,
+            [key]: { ...(prev[key] || {}), [field]: value }
+          }));
+        };
+
+        const toggleEditPanel = (key) => {
+          setEditingItemKey(prev => prev === key ? null : key);
+        };
 
         const handleGenerateBill = () => {
-          const selectedRx = rxItems.filter(item => billingCheckedRx[item.id]);
-          const selectedTp = tpItems.filter(tp => billingCheckedTp[tp.treatment_id]);
+          const selectedRx = rxItems.filter(item => selectedBillingIds.has(`rx-${item.id}`));
+          const selectedTp = tpItems.filter(tp => selectedBillingIds.has(`tp-${tp.treatment_id}`));
           const params = new URLSearchParams();
           params.set('patient_id', patient.patient_id);
           if (consultation?.doctor_id) params.set('doctor_id', consultation.doctor_id);
@@ -551,22 +600,31 @@ export const PROPatientOverviewPage = () => {
             params.set('prescription_id', prescription.prescription_id);
           }
           if (selectedRx.length > 0) {
-            params.set('rx_items', JSON.stringify(selectedRx.map(item => ({
-              id: item.id,
-              medicine_name: item.medicine_name || `Medicine #${item.medicine_id}`,
-              quantity: billingRxEdits[item.id]?.quantity ?? item.quantity ?? 1,
-              dosage: billingRxEdits[item.id]?.dosage ?? item.dosage ?? '',
-              duration_days: item.duration_days,
-            }))));
+            params.set('rx_items', JSON.stringify(selectedRx.map(item => {
+              const edits = billingItemEdits[`rx-${item.id}`] || {};
+              return {
+                id: item.id,
+                medicine_name: item.medicine_name || `Medicine #${item.medicine_id}`,
+                quantity: edits.quantity ?? item.quantity ?? 1,
+                dosage: edits.dosage ?? item.dosage ?? '',
+                frequency: edits.frequency ?? item.frequency ?? '',
+                duration_days: edits.duration_days ?? item.duration_days ?? '',
+              };
+            })));
           }
           if (selectedTp.length > 0) {
-            const tpData = selectedTp.map(tp => ({
-              treatment_id: tp.treatment_id,
-              treatment_name: tp.treatment_name,
-              treatment_type: tp.treatment_type || 'Treatment',
-              doctor_id: tp.doctor_id || consultation?.doctor_id || '',
-              amount: billingTpEdits[tp.treatment_id]?.amount || '',
-            }));
+            const tpData = selectedTp.map(tp => {
+              const edits = billingItemEdits[`tp-${tp.treatment_id}`] || {};
+              return {
+                treatment_id: tp.treatment_id,
+                treatment_name: tp.treatment_name,
+                treatment_type: tp.treatment_type || 'Treatment',
+                doctor_id: tp.doctor_id || consultation?.doctor_id || '',
+                duration: edits.duration ?? tp.duration ?? '',
+                duration_unit: edits.duration_unit ?? tp.duration_unit ?? 'days',
+                amount: edits.amount || '',
+              };
+            });
             params.set('tp_items', JSON.stringify(tpData));
             if (selectedTp.length === 1) {
               params.set('treatment_name', selectedTp[0].treatment_name);
@@ -576,17 +634,6 @@ export const PROPatientOverviewPage = () => {
           navigate(`/pro/billing/new?${params.toString()}`);
         };
 
-        const selectAll = () => {
-          const allRx = {}; rxItems.forEach(i => { allRx[i.id] = true; });
-          const allTp = {}; tpItems.forEach(t => { allTp[t.treatment_id] = true; });
-          setBillingCheckedRx(allRx); setBillingCheckedTp(allTp);
-        };
-        const selectNone = () => {
-          const noneRx = {}; rxItems.forEach(i => { noneRx[i.id] = false; });
-          const noneTp = {}; tpItems.forEach(t => { noneTp[t.treatment_id] = false; });
-          setBillingCheckedRx(noneRx); setBillingCheckedTp(noneTp);
-        };
-
         return (
           <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
             {/* Header */}
@@ -594,20 +641,17 @@ export const PROPatientOverviewPage = () => {
               <div>
                 <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
                   <Edit3 className="w-4 h-4 text-[#D32F2F]" />
-                  <span>PRO Billing Review</span>
-                  <span className="text-[11px] font-semibold text-slate-400 ml-1">
-                    {totalChecked} of {totalItems} selected
-                  </span>
+                  <span>Prescription &amp; Treatment Plan</span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Check items to include in the bill, edit details as needed, then click Generate Bill.
+                  Select the items to include in billing. Edit details before generating the bill.
                 </p>
               </div>
               <button
                 onClick={handleGenerateBill}
-                disabled={!anyChecked}
+                disabled={!anySelected}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer shrink-0 ${
-                  anyChecked ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  anySelected ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                 }`}
               >
                 <Receipt className="w-3.5 h-3.5" />
@@ -615,67 +659,130 @@ export const PROPatientOverviewPage = () => {
               </button>
             </div>
 
-            {/* Select All / None toolbar */}
+            {/* Toolbar: count + Select All / None */}
             {totalItems > 0 && (
-              <div className="flex items-center justify-between px-5 py-2 bg-slate-50/60 border-b border-slate-100 text-[11px] font-bold">
-                <span className="text-slate-500">{totalItems} billing item{totalItems !== 1 ? 's' : ''}</span>
+              <div className="flex items-center justify-between px-5 py-2.5 bg-slate-50/60 border-b border-slate-100 text-[11px] font-bold">
+                <span className="text-slate-600">
+                  <span className="text-[#1565C0]">{totalSelected}</span>
+                  <span className="text-slate-400"> of {totalItems} selected</span>
+                </span>
                 <div className="flex gap-3">
                   <button onClick={selectAll} className="text-[#1565C0] hover:underline cursor-pointer">Select All</button>
                   <span className="text-slate-300">|</span>
-                  <button onClick={selectNone} className="text-slate-500 hover:underline cursor-pointer">None</button>
+                  <button onClick={selectNone} className="text-slate-400 hover:text-slate-700 hover:underline cursor-pointer">Clear</button>
                 </div>
               </div>
             )}
 
-            {/* Unified flat item list */}
+            {/* Unified flat item list — ALL items always visible, selection state controls check only */}
             {totalItems === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-400">
-                No prescription medicines or treatment plans found for this patient.
+              <div className="p-10 text-center">
+                <Pill className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+                <p className="text-xs text-slate-400 font-medium">No prescription medicines or treatment plans recorded for this patient.</p>
               </div>
             ) : (
               <div className="divide-y divide-slate-100">
-                {/* Prescription medicine rows */}
+
+                {/* ── Prescription medicine rows ── */}
                 {rxItems.map(item => {
-                  const checked = !!billingCheckedRx[item.id];
-                  const edits = billingRxEdits[item.id] || {};
+                  const key = `rx-${item.id}`;
+                  const isSelected = selectedBillingIds.has(key);
+                  const isEditing = editingItemKey === key;
+                  const edits = billingItemEdits[key] || {};
+
                   return (
-                    <div
-                      key={`rx-${item.id}`}
-                      className={`px-5 py-3.5 flex items-center gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/40 opacity-60'}`}
-                    >
-                      <button
-                        onClick={() => setBillingCheckedRx(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
-                        className="shrink-0 cursor-pointer text-[#1565C0]"
-                      >
-                        {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-300" />}
-                      </button>
-                      <Pill className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-slate-900 text-xs">{item.medicine_name || `Medicine #${item.medicine_id}`}</div>
-                        <div className="text-[11px] text-slate-400 mt-0.5">
-                          {item.route || 'oral'} · {item.duration_days || '—'} days · Freq: {item.frequency || '1/day'}
-                        </div>
-                      </div>
-                      {checked && (
-                        <div className="flex items-center gap-3 shrink-0 text-[11px]">
-                          <div className="flex items-center gap-1">
-                            <label className="text-slate-400 whitespace-nowrap">Dosage:</label>
-                            <input
-                              type="text"
-                              value={edits.dosage ?? item.dosage ?? ''}
-                              onChange={e => setBillingRxEdits(prev => ({ ...prev, [item.id]: { ...prev[item.id], dosage: e.target.value } }))}
-                              placeholder="1 tab"
-                              className="w-18 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
-                            />
+                    <div key={key}>
+                      {/* Main row */}
+                      <div className="px-5 py-3.5 flex items-center gap-3">
+                        {/* Checkbox */}
+                        <button
+                          onClick={() => toggleItem(key)}
+                          className="shrink-0 cursor-pointer"
+                          title={isSelected ? 'Uncheck to exclude from bill' : 'Check to include in bill'}
+                        >
+                          {isSelected
+                            ? <CheckSquare className="w-4 h-4 text-[#1565C0]" />
+                            : <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                          }
+                        </button>
+
+                        {/* Type badge */}
+                        <span className="shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-blue-50 text-[#1565C0] border border-blue-100">
+                          Prescription
+                        </span>
+
+                        {/* Item details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-slate-900 text-xs">
+                            {item.medicine_name || `Medicine #${item.medicine_id}`}
                           </div>
-                          <div className="flex items-center gap-1">
-                            <label className="text-slate-400 whitespace-nowrap">Qty:</label>
-                            <input
-                              type="number" min="1"
-                              value={edits.quantity ?? item.quantity ?? 1}
-                              onChange={e => setBillingRxEdits(prev => ({ ...prev, [item.id]: { ...prev[item.id], quantity: parseInt(e.target.value) || 1 } }))}
-                              className="w-14 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
-                            />
+                          <div className="text-[11px] text-slate-400 mt-0.5">
+                            {edits.dosage || item.dosage || '—'} &nbsp;•&nbsp; {edits.frequency || item.frequency || '—'} &nbsp;•&nbsp; {edits.duration_days || item.duration_days || '—'} days &nbsp;•&nbsp; Qty: {edits.quantity || item.quantity || 1}
+                          </div>
+                        </div>
+
+                        {/* Edit button — always visible, not conditional on checkbox */}
+                        <button
+                          onClick={() => toggleEditPanel(key)}
+                          className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
+                            isEditing
+                              ? 'bg-slate-200 border-slate-300 text-slate-700'
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                          }`}
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          {isEditing ? 'Close' : 'Edit'}
+                        </button>
+                      </div>
+
+                      {/* Inline Edit panel — expands below row, does NOT affect checkbox */}
+                      {isEditing && (
+                        <div className="mx-5 mb-3 p-4 bg-blue-50/60 border border-blue-100 rounded-xl">
+                          <div className="text-[10px] font-black text-[#1565C0] uppercase tracking-wide mb-3">
+                            Edit Prescription Details
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[11px]">
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Dosage</label>
+                              <input
+                                type="text"
+                                value={edits.dosage ?? item.dosage ?? ''}
+                                onChange={e => updateEdit(key, 'dosage', e.target.value)}
+                                placeholder="e.g. 1 tab"
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Frequency</label>
+                              <input
+                                type="text"
+                                value={edits.frequency ?? item.frequency ?? ''}
+                                onChange={e => updateEdit(key, 'frequency', e.target.value)}
+                                placeholder="e.g. 3 times/day"
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Duration (days)</label>
+                              <input
+                                type="number" min="1"
+                                value={edits.duration_days ?? item.duration_days ?? ''}
+                                onChange={e => updateEdit(key, 'duration_days', e.target.value)}
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Quantity</label>
+                              <input
+                                type="number" min="1"
+                                value={edits.quantity ?? item.quantity ?? 1}
+                                onChange={e => updateEdit(key, 'quantity', parseInt(e.target.value) || 1)}
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-2 text-[10px] text-blue-400">
+                            ✓ Changes are saved automatically. Selection state is not affected by editing.
                           </div>
                         </div>
                       )}
@@ -683,38 +790,100 @@ export const PROPatientOverviewPage = () => {
                   );
                 })}
 
-                {/* Treatment plan rows */}
+                {/* ── Treatment plan rows ── */}
                 {tpItems.map(tp => {
-                  const checked = !!billingCheckedTp[tp.treatment_id];
-                  const edits = billingTpEdits[tp.treatment_id] || {};
+                  const key = `tp-${tp.treatment_id}`;
+                  const isSelected = selectedBillingIds.has(key);
+                  const isEditing = editingItemKey === key;
+                  const edits = billingItemEdits[key] || {};
+
                   return (
-                    <div
-                      key={`tp-${tp.treatment_id}`}
-                      className={`px-5 py-3.5 flex items-center gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/40 opacity-60'}`}
-                    >
-                      <button
-                        onClick={() => setBillingCheckedTp(prev => ({ ...prev, [tp.treatment_id]: !prev[tp.treatment_id] }))}
-                        className="shrink-0 cursor-pointer text-[#1565C0]"
-                      >
-                        {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-300" />}
-                      </button>
-                      <Stethoscope className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-slate-900 text-xs">{tp.treatment_name}</div>
-                        <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
-                          {tp.treatment_type || 'Treatment'} · {tp.duration || 'N/A'} {tp.duration_unit || 'days'}
+                    <div key={key}>
+                      {/* Main row */}
+                      <div className="px-5 py-3.5 flex items-center gap-3">
+                        {/* Checkbox */}
+                        <button
+                          onClick={() => toggleItem(key)}
+                          className="shrink-0 cursor-pointer"
+                          title={isSelected ? 'Uncheck to exclude from bill' : 'Check to include in bill'}
+                        >
+                          {isSelected
+                            ? <CheckSquare className="w-4 h-4 text-[#1565C0]" />
+                            : <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                          }
+                        </button>
+
+                        {/* Type badge */}
+                        <span className="shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide bg-emerald-50 text-emerald-700 border border-emerald-100">
+                          Treatment Plan
+                        </span>
+
+                        {/* Item details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-slate-900 text-xs">{tp.treatment_name}</div>
+                          <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
+                            {tp.treatment_type || 'Treatment'} &nbsp;•&nbsp; {edits.duration || tp.duration || 'N/A'} {edits.duration_unit || tp.duration_unit || 'days'}
+                            {edits.amount ? ` • ₹${edits.amount}` : ''}
+                          </div>
                         </div>
+
+                        {/* Edit button */}
+                        <button
+                          onClick={() => toggleEditPanel(key)}
+                          className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
+                            isEditing
+                              ? 'bg-slate-200 border-slate-300 text-slate-700'
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                          }`}
+                        >
+                          <Edit3 className="w-3 h-3" />
+                          {isEditing ? 'Close' : 'Edit'}
+                        </button>
                       </div>
-                      {checked && (
-                        <div className="flex items-center gap-1 shrink-0 text-[11px]">
-                          <label className="text-slate-400 whitespace-nowrap">Amount (₹):</label>
-                          <input
-                            type="number" min="0" step="1"
-                            value={edits.amount ?? ''}
-                            onChange={e => setBillingTpEdits(prev => ({ ...prev, [tp.treatment_id]: { ...prev[tp.treatment_id], amount: e.target.value } }))}
-                            placeholder="0"
-                            className="w-24 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
-                          />
+
+                      {/* Inline Edit panel */}
+                      {isEditing && (
+                        <div className="mx-5 mb-3 p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl">
+                          <div className="text-[10px] font-black text-emerald-700 uppercase tracking-wide mb-3">
+                            Edit Treatment Plan Details
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-[11px]">
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Duration</label>
+                              <input
+                                type="number" min="1"
+                                value={edits.duration ?? tp.duration ?? ''}
+                                onChange={e => updateEdit(key, 'duration', e.target.value)}
+                                placeholder="e.g. 7"
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Unit</label>
+                              <select
+                                value={edits.duration_unit ?? tp.duration_unit ?? 'days'}
+                                onChange={e => updateEdit(key, 'duration_unit', e.target.value)}
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
+                              >
+                                <option value="days">Days</option>
+                                <option value="weeks">Weeks</option>
+                                <option value="months">Months</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-slate-500 font-medium mb-1">Billing Amount (₹)</label>
+                              <input
+                                type="number" min="0" step="1"
+                                value={edits.amount ?? ''}
+                                onChange={e => updateEdit(key, 'amount', e.target.value)}
+                                placeholder="0"
+                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
+                              />
+                            </div>
+                          </div>
+                          <div className="mt-2 text-[10px] text-emerald-500">
+                            ✓ Changes are saved automatically. Selection state is not affected by editing.
+                          </div>
                         </div>
                       )}
                     </div>
@@ -726,16 +895,18 @@ export const PROPatientOverviewPage = () => {
             {/* Footer */}
             {totalItems > 0 && (
               <div className="flex items-center justify-between px-5 py-3 border-t border-slate-100 bg-slate-50/40">
-                <span className="text-[11px] text-slate-400">{totalChecked} item{totalChecked !== 1 ? 's' : ''} selected</span>
+                <span className="text-[11px] text-slate-400">
+                  {totalSelected} of {totalItems} item{totalItems !== 1 ? 's' : ''} selected for billing
+                </span>
                 <button
                   onClick={handleGenerateBill}
-                  disabled={!anyChecked}
+                  disabled={!anySelected}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer ${
-                    anyChecked ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    anySelected ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                   }`}
                 >
                   <Receipt className="w-3.5 h-3.5" />
-                  <span>Generate Bill in Billing Center →</span>
+                  <span>Generate Bill →</span>
                 </button>
               </div>
             )}
