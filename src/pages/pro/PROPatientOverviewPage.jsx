@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   User,
@@ -23,7 +23,10 @@ import {
   Plus,
   History,
   Printer,
-  Eye
+  Eye,
+  CheckSquare,
+  Square,
+  Edit3
 } from 'lucide-react';
 import { proApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -56,6 +59,12 @@ export const PROPatientOverviewPage = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [queuePatients, setQueuePatients] = useState([]);
+
+  // PRO Billing Review tab state — checkboxes + editable fields
+  const [billingCheckedRx, setBillingCheckedRx] = useState({}); // {item.id: true/false}
+  const [billingCheckedTp, setBillingCheckedTp] = useState({}); // {tp.treatment_id: true/false}
+  const [billingRxEdits, setBillingRxEdits] = useState({}); // {item.id: {quantity, dosage}}
+  const [billingTpEdits, setBillingTpEdits] = useState({}); // {tp.treatment_id: {amount}}
 
 
   useEffect(() => {
@@ -204,11 +213,36 @@ export const PROPatientOverviewPage = () => {
   const { patient, consultation, prescription, financials, crm, treatment_plans, appointment } = overview;
   const isReadyForHandoff = checklist?.ready_for_pro_completion;
 
+  // proBills at component scope — fixes white screen crash in Completion Checklist tab
+  const proBills = useMemo(() => (financials?.bills || []).filter(b => b.bill_type !== 'consultation'), [financials]);
+
   // Compute operational stage
   const apptStatus = appointment?.appointment_status || appointment?.status || 'booked';
   const consultStatus = consultation?.consultation_status || 'pending';
   const isDoctorDone = consultStatus === 'completed' || ['doctor_completed', 'pro_pending', 'pro_completed', 'completed'].includes(apptStatus) || !!checklist?.doctor_consultation_completed;
   const isProDone = apptStatus === 'pro_completed' || apptStatus === 'completed';
+
+  // Initialize billing review checkboxes when tab is opened
+  const initBillingReview = useCallback(() => {
+    const rxItems = prescription?.items || [];
+    const tpItems = treatment_plans || [];
+    const initRx = {};
+    const initRxEdits = {};
+    rxItems.forEach(item => {
+      initRx[item.id] = true;
+      initRxEdits[item.id] = { quantity: item.quantity || 1, dosage: item.dosage || '' };
+    });
+    const initTp = {};
+    const initTpEdits = {};
+    tpItems.forEach(tp => {
+      initTp[tp.treatment_id] = true;
+      initTpEdits[tp.treatment_id] = { amount: '' };
+    });
+    setBillingCheckedRx(initRx);
+    setBillingRxEdits(initRxEdits);
+    setBillingCheckedTp(initTp);
+    setBillingTpEdits(initTpEdits);
+  }, [prescription, treatment_plans]);
 
   return (
     <div className="space-y-6">
@@ -358,6 +392,7 @@ export const PROPatientOverviewPage = () => {
         {[
           { id: 'clinical', label: 'Doctor Clinical Info', icon: Stethoscope },
           { id: 'prescription', label: `Prescription (${prescription?.items?.length || 0})`, icon: Pill },
+          { id: 'billing_review', label: 'PRO Billing Review', icon: Edit3 },
           { id: 'packages', label: `Treatment Plans & Packages (${(treatment_plans?.length || 0) + (crm?.packages?.length || 0)})`, icon: Package },
           { id: 'financials', label: `Billing & Dues (${financials?.bills?.length || 0})`, icon: Receipt },
           { id: 'history', label: 'Patient Journey & History', icon: History },
@@ -368,7 +403,7 @@ export const PROPatientOverviewPage = () => {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => { setActiveTab(tab.id); if (tab.id === 'billing_review') initBillingReview(); }}
               className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl transition cursor-pointer whitespace-nowrap ${
                 activeTab === tab.id
                   ? 'bg-[#D32F2F] text-white shadow-xs shadow-red-500/20'
@@ -496,6 +531,289 @@ export const PROPatientOverviewPage = () => {
           )}
         </div>
       )}
+
+      {/* TAB CONTENT 2b: PRO Billing Review — Prescription + Treatment Plans (Unified) */}
+      {activeTab === 'billing_review' && (() => {
+        const rxItems = prescription?.items || [];
+        const tpItems = treatment_plans || [];
+        const anyChecked = Object.values(billingCheckedRx).some(Boolean) || Object.values(billingCheckedTp).some(Boolean);
+
+        // Build URL query params for the billing page
+        const handleGenerateBill = () => {
+          const selectedRx = rxItems.filter(item => billingCheckedRx[item.id]);
+          const selectedTp = tpItems.filter(tp => billingCheckedTp[tp.treatment_id]);
+
+          const params = new URLSearchParams();
+          params.set('patient_id', patient.patient_id);
+          if (consultation?.doctor_id) params.set('doctor_id', consultation.doctor_id);
+          params.set('bill_type', selectedTp.length > 0 ? 'treatment' : 'treatment');
+
+          if (prescription?.prescription_id && selectedRx.length > 0) {
+            params.set('prescription_id', prescription.prescription_id);
+          }
+
+          // Encode selected prescription items
+          if (selectedRx.length > 0) {
+            const rxData = selectedRx.map(item => ({
+              id: item.id,
+              medicine_name: item.medicine_name || `Medicine #${item.medicine_id}`,
+              quantity: billingRxEdits[item.id]?.quantity ?? item.quantity ?? 1,
+              dosage: billingRxEdits[item.id]?.dosage ?? item.dosage ?? '',
+              duration_days: item.duration_days,
+            }));
+            params.set('rx_items', JSON.stringify(rxData));
+          }
+
+          // Encode selected treatment plans
+          if (selectedTp.length > 0) {
+            const tpData = selectedTp.map(tp => ({
+              treatment_id: tp.treatment_id,
+              treatment_name: tp.treatment_name,
+              treatment_type: tp.treatment_type || 'Treatment',
+              doctor_id: tp.doctor_id || consultation?.doctor_id || '',
+              amount: billingTpEdits[tp.treatment_id]?.amount || '',
+            }));
+            params.set('tp_items', JSON.stringify(tpData));
+            // Also keep legacy treatment_name/type for billing page fallback
+            if (selectedTp.length === 1) {
+              params.set('treatment_name', selectedTp[0].treatment_name);
+              params.set('treatment_type', selectedTp[0].treatment_type || 'Treatment');
+            }
+          }
+
+          navigate(`/pro/billing/new?${params.toString()}`);
+        };
+
+        return (
+          <div className="space-y-5">
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                <div>
+                  <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Edit3 className="w-4 h-4 text-[#D32F2F]" />
+                    <span>PRO Billing Review</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Select prescription medicines and treatment plans to include in the bill. Edit quantities or amounts as needed. Click "Generate Bill" to proceed to the billing center.
+                  </p>
+                </div>
+                <button
+                  onClick={handleGenerateBill}
+                  disabled={!anyChecked}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer ${
+                    anyChecked ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>Generate Bill →</span>
+                </button>
+              </div>
+
+              {/* SECTION A: Prescription Medicines */}
+              <div className="mb-5">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-bold text-[#1565C0] uppercase tracking-wider flex items-center gap-1.5">
+                    <Pill className="w-3.5 h-3.5" />
+                    Prescription Medicines ({rxItems.length})
+                  </h3>
+                  {rxItems.length > 0 && (
+                    <div className="flex gap-2 text-[11px] font-bold">
+                      <button
+                        onClick={() => {
+                          const all = {};
+                          rxItems.forEach(item => { all[item.id] = true; });
+                          setBillingCheckedRx(all);
+                        }}
+                        className="text-[#1565C0] hover:underline cursor-pointer"
+                      >Select All</button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        onClick={() => {
+                          const none = {};
+                          rxItems.forEach(item => { none[item.id] = false; });
+                          setBillingCheckedRx(none);
+                        }}
+                        className="text-slate-500 hover:underline cursor-pointer"
+                      >None</button>
+                    </div>
+                  )}
+                </div>
+
+                {rxItems.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-3 text-center bg-slate-50 rounded-xl border border-slate-100">
+                    No prescription medicines recorded for this patient.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                    {rxItems.map(item => {
+                      const checked = !!billingCheckedRx[item.id];
+                      const edits = billingRxEdits[item.id] || {};
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-3 flex items-start gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/60 opacity-60'}`}
+                        >
+                          <button
+                            onClick={() => setBillingCheckedRx(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+                            className="mt-0.5 shrink-0 cursor-pointer text-[#1565C0]"
+                          >
+                            {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-400" />}
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                              <div>
+                                <div className="font-bold text-slate-900 text-xs">{item.medicine_name || `Medicine #${item.medicine_id}`}</div>
+                                <div className="text-[11px] text-slate-500 mt-0.5">
+                                  Route: {item.route || 'oral'} • Duration: {item.duration_days || '—'} days
+                                </div>
+                              </div>
+                              {checked && (
+                                <div className="flex items-center gap-3 flex-wrap">
+                                  <div className="flex items-center gap-1.5 text-[11px]">
+                                    <label className="text-slate-500 font-medium whitespace-nowrap">Dosage:</label>
+                                    <input
+                                      type="text"
+                                      value={edits.dosage ?? item.dosage ?? ''}
+                                      onChange={e => setBillingRxEdits(prev => ({
+                                        ...prev,
+                                        [item.id]: { ...prev[item.id], dosage: e.target.value }
+                                      }))}
+                                      placeholder="e.g. 1 tab"
+                                      className="w-20 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
+                                    />
+                                  </div>
+                                  <div className="flex items-center gap-1.5 text-[11px]">
+                                    <label className="text-slate-500 font-medium whitespace-nowrap">Qty:</label>
+                                    <input
+                                      type="number"
+                                      min="1"
+                                      value={edits.quantity ?? item.quantity ?? 1}
+                                      onChange={e => setBillingRxEdits(prev => ({
+                                        ...prev,
+                                        [item.id]: { ...prev[item.id], quantity: parseInt(e.target.value) || 1 }
+                                      }))}
+                                      className="w-16 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
+                                    />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION B: Treatment Plans */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-xs font-bold text-[#1565C0] uppercase tracking-wider flex items-center gap-1.5">
+                    <Stethoscope className="w-3.5 h-3.5" />
+                    Treatment Plans ({tpItems.length})
+                  </h3>
+                  {tpItems.length > 0 && (
+                    <div className="flex gap-2 text-[11px] font-bold">
+                      <button
+                        onClick={() => {
+                          const all = {};
+                          tpItems.forEach(tp => { all[tp.treatment_id] = true; });
+                          setBillingCheckedTp(all);
+                        }}
+                        className="text-[#1565C0] hover:underline cursor-pointer"
+                      >Select All</button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        onClick={() => {
+                          const none = {};
+                          tpItems.forEach(tp => { none[tp.treatment_id] = false; });
+                          setBillingCheckedTp(none);
+                        }}
+                        className="text-slate-500 hover:underline cursor-pointer"
+                      >None</button>
+                    </div>
+                  )}
+                </div>
+
+                {tpItems.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-3 text-center bg-slate-50 rounded-xl border border-slate-100">
+                    No treatment plans prescribed for this patient.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
+                    {tpItems.map(tp => {
+                      const checked = !!billingCheckedTp[tp.treatment_id];
+                      const edits = billingTpEdits[tp.treatment_id] || {};
+                      return (
+                        <div
+                          key={tp.treatment_id}
+                          className={`p-3 flex items-start gap-3 transition ${checked ? 'bg-white' : 'bg-slate-50/60 opacity-60'}`}
+                        >
+                          <button
+                            onClick={() => setBillingCheckedTp(prev => ({ ...prev, [tp.treatment_id]: !prev[tp.treatment_id] }))}
+                            className="mt-0.5 shrink-0 cursor-pointer text-[#1565C0]"
+                          >
+                            {checked ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4 text-slate-400" />}
+                          </button>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                              <div>
+                                <div className="font-bold text-slate-900 text-xs">{tp.treatment_name}</div>
+                                <div className="text-[11px] text-slate-500 mt-0.5">
+                                  <span className="capitalize">{tp.treatment_type || 'Treatment'}</span>
+                                  {' · '}Duration: {tp.duration || 'N/A'} {tp.duration_unit || 'days'}
+                                </div>
+                              </div>
+                              {checked && (
+                                <div className="flex items-center gap-1.5 text-[11px]">
+                                  <label className="text-slate-500 font-medium whitespace-nowrap">Amount (₹):</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={edits.amount ?? ''}
+                                    onChange={e => setBillingTpEdits(prev => ({
+                                      ...prev,
+                                      [tp.treatment_id]: { ...prev[tp.treatment_id], amount: e.target.value }
+                                    }))}
+                                    placeholder="Enter amount"
+                                    className="w-28 px-2 py-0.5 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 text-[11px]"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Generate Bill CTA */}
+              {(rxItems.length > 0 || tpItems.length > 0) && (
+                <div className="mt-4 pt-4 border-t border-slate-100 flex items-center justify-between">
+                  <div className="text-[11px] text-slate-500">
+                    {Object.values(billingCheckedRx).filter(Boolean).length} prescription item(s) +{' '}
+                    {Object.values(billingCheckedTp).filter(Boolean).length} treatment plan(s) selected
+                  </div>
+                  <button
+                    onClick={handleGenerateBill}
+                    disabled={!anyChecked}
+                    className={`flex items-center gap-2 px-5 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer ${
+                      anyChecked ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <Receipt className="w-3.5 h-3.5" />
+                    <span>Generate Bill in Billing Center →</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* TAB CONTENT 3: Treatment Plans & Packages */}
       {activeTab === 'packages' && (
@@ -644,7 +962,6 @@ export const PROPatientOverviewPage = () => {
 
             {/* Active PRO Treatment & Package Bills */}
             {(() => {
-              const proBills = (financials?.bills || []).filter(b => b.bill_type !== 'consultation');
               if (proBills.length === 0) {
                 return (
                   <div className="p-6 text-center bg-slate-50/60 rounded-xl border border-dashed border-slate-200 space-y-1">

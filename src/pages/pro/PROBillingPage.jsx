@@ -251,6 +251,8 @@ const PROBillingPageContent = () => {
       const qPackageId = searchParams.get('package_id');
       let qTreatmentName = searchParams.get('treatment_name');
       let qTreatmentType = searchParams.get('treatment_type');
+      const qRxItemsRaw = searchParams.get('rx_items');    // JSON from PRO Billing Review
+      const qTpItemsRaw = searchParams.get('tp_items');    // JSON from PRO Billing Review
 
       if (qTreatmentName && typeof qTreatmentName === 'string') {
         try {
@@ -268,24 +270,80 @@ const PROBillingPageContent = () => {
         } catch {}
       }
 
+      // Parse rx_items from PRO Billing Review tab
+      let parsedRxItems = [];
+      if (qRxItemsRaw) {
+        try {
+          parsedRxItems = JSON.parse(decodeURIComponent(qRxItemsRaw));
+        } catch { try { parsedRxItems = JSON.parse(qRxItemsRaw); } catch {} }
+      }
+
+      // Parse tp_items from PRO Billing Review tab
+      let parsedTpItems = [];
+      if (qTpItemsRaw) {
+        try {
+          parsedTpItems = JSON.parse(decodeURIComponent(qTpItemsRaw));
+        } catch { try { parsedTpItems = JSON.parse(qTpItemsRaw); } catch {} }
+      }
+
       if (qPatientId) {
         const cleanPatientId = String(qPatientId).trim();
+
+        // Build bill items from PRO Billing Review selection
+        let billingItems = [];
+
+        // Add prescription medicines as line items
+        if (parsedRxItems.length > 0) {
+          parsedRxItems.forEach(rxItem => {
+            billingItems.push({
+              item_name: rxItem.medicine_name || 'Prescription Medicine',
+              description: rxItem.dosage ? `${rxItem.medicine_name} — ${rxItem.dosage}` : rxItem.medicine_name,
+              charge_type: 'medicine',
+              quantity: rxItem.quantity || 1,
+              unit_price: 0,
+              rx_item_id: rxItem.id,
+            });
+          });
+        }
+
+        // Add treatment plan line items
+        if (parsedTpItems.length > 0) {
+          parsedTpItems.forEach(tpItem => {
+            billingItems.push({
+              item_name: tpItem.treatment_name || 'Prescribed Treatment',
+              description: tpItem.treatment_name || 'Prescribed Treatment',
+              charge_type: tpItem.treatment_type || 'Treatment',
+              quantity: 1,
+              unit_price: tpItem.amount ? parseFloat(tpItem.amount) : 0,
+              treatment_plan_id: tpItem.treatment_id,
+            });
+          });
+        }
+
+        // Fallback to legacy single treatment_name param
+        if (billingItems.length === 0 && qTreatmentName) {
+          billingItems = [{
+            item_name: qTreatmentName,
+            charge_type: qTreatmentType || 'Treatment',
+            quantity: 1,
+            unit_price: 2000
+          }];
+        }
+
         setForm(prev => ({
           ...prev,
           patient_id: cleanPatientId,
           doctor_id: qDoctorId ? String(qDoctorId).trim() : prev.doctor_id,
           bill_type: qPackageId ? 'package' : 'treatment',
           package_id: qPackageId ? String(qPackageId).trim() : prev.package_id,
-          items: qTreatmentName ? [
-            {
-              item_name: qTreatmentName,
-              charge_type: qTreatmentType || 'Treatment',
-              quantity: 1,
-              unit_price: 2000
-            }
-          ] : prev.items
+          items: billingItems.length > 0 ? billingItems : prev.items
         }));
         verifyPatient(cleanPatientId, qDoctorId ? String(qDoctorId).trim() : null, qPackageId ? String(qPackageId).trim() : null);
+
+        // Pre-select treatment plan IDs so the sidebar shows them checked
+        if (parsedTpItems.length > 0) {
+          setSelectedPlanIds(parsedTpItems.map(tp => tp.treatment_id));
+        }
       }
     } catch (err) {
       console.error('Error parsing billing query params:', err);
