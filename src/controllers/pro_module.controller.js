@@ -1,5 +1,6 @@
 const db = require('../db');
 const { formatResponse } = require('../utils/helpers');
+const { toPaise, fromPaise, roundMoney, safeAdd, safeSubtract, safeMultiply, formatCurrency } = require('../utils/moneyUtils');
 
 // Helper: Format Date cleanly to YYYY-MM-DD without UTC timezone shift
 function formatDateString(d) {
@@ -1143,13 +1144,13 @@ async function createBill(req, res) {
 
     // ── BUILD ITEMS LIST & SUBTOTAL ───────────────────────────────────────
     let subtotal = 0;
-    let discAmt = packageRow ? parseFloat(packageRow.discount_amount || 0) : parseFloat(discount_amount || 0);
+    let discAmt = packageRow ? roundMoney(packageRow.discount_amount || 0) : roundMoney(discount_amount || 0);
     const allItems = [];
 
     if (packageRow) {
       // Authoritative pricing from packages table
-      subtotal = parseFloat(packageRow.package_amount);
-      discAmt = parseFloat(packageRow.discount_amount || 0);
+      subtotal = roundMoney(packageRow.package_amount);
+      discAmt = roundMoney(packageRow.discount_amount || 0);
 
       // Package line item only (prescriptions medicines are included in the package and NOT billed separately)
       allItems.push({
@@ -1163,8 +1164,8 @@ async function createBill(req, res) {
         const itemForPlan = manualItems.find(it => parseInt(it.treatment_plan_id, 10) === plan.treatment_id)
           || manualItems[idx]
           || {};
-        const price = Math.max(0, parseFloat(itemForPlan.unit_price || itemForPlan.amount || 0));
-        subtotal += price;
+        const price = roundMoney(Math.max(0, parseFloat(itemForPlan.unit_price || itemForPlan.amount || 0)));
+        subtotal = safeAdd(subtotal, price);
         allItems.push({
           charge_type: plan.treatment_type || itemForPlan.charge_type || 'homeopathy',
           description: plan.treatment_name,
@@ -1175,8 +1176,8 @@ async function createBill(req, res) {
       manualItems
         .filter(it => !it.treatment_plan_id || !planRows.find(p => p.treatment_id === parseInt(it.treatment_plan_id, 10)))
         .forEach(it => {
-          const price = Math.max(0, parseFloat(it.unit_price || it.amount || 0) * parseInt(it.quantity || 1));
-          subtotal += price;
+          const price = safeMultiply(it.unit_price || it.amount || 0, it.quantity || 1);
+          subtotal = safeAdd(subtotal, price);
           allItems.push({ charge_type: it.charge_type || 'Service', description: it.description || it.item_name || 'Service', amount: price, treatment_plan_id: null });
         });
     } else if (planRows.length > 0) {
@@ -1185,11 +1186,13 @@ async function createBill(req, res) {
       });
     } else {
       for (const it of manualItems) {
-        const price = Math.max(0, parseFloat(it.unit_price || it.amount || 0) * parseInt(it.quantity || 1));
-        subtotal += price;
+        const price = safeMultiply(it.unit_price || it.amount || 0, it.quantity || 1);
+        subtotal = safeAdd(subtotal, price);
         allItems.push({ charge_type: it.charge_type || it.item_name || 'Service', description: it.description || it.item_name || 'Service Item', amount: price, treatment_plan_id: null });
       }
     }
+
+    subtotal = roundMoney(subtotal);
 
     // ── COUPON VALIDATION ─────────────────────────────────────────────────
     let resolvedCoupon = null;
@@ -1226,10 +1229,11 @@ async function createBill(req, res) {
       if (resolvedCoupon.max_discount_limit && parseFloat(resolvedCoupon.max_discount_limit) > 0) {
         calc = Math.min(calc, parseFloat(resolvedCoupon.max_discount_limit));
       }
-      discAmt = Math.round(Math.min(calc, subtotal) * 100) / 100;
+      discAmt = roundMoney(Math.min(calc, subtotal));
     }
 
-    const totalAmount = Math.max(0, Math.round((subtotal - discAmt) * 100) / 100);
+    discAmt = roundMoney(Math.min(discAmt, subtotal));
+    const totalAmount = Math.max(0, safeSubtract(subtotal, discAmt));
     const billNo = 'BILL-PRO-' + Date.now();
     const createdBy = req.user.user_id;
     const docIdToUse = doctor_id ? parseInt(doctor_id) : (packageRow && packageRow.doctor_id ? packageRow.doctor_id : null);
@@ -1491,13 +1495,14 @@ async function recordPayment(req, res) {
 
     // ── OVERPAYMENT PROTECTION ────────────────────────────────────────────
     const prevPayCheck = await client.query(`SELECT COALESCE(SUM(amount), 0) as prev_paid FROM payments WHERE bill_id = $1`, [bill_id]);
-    const prevPaidTotal = parseFloat(prevPayCheck.rows[0].prev_paid);
-    const newPaymentTotal = payList.reduce((s, p) => s + parseFloat(p.amount || 0), 0);
-    if (prevPaidTotal + newPaymentTotal > parseFloat(bill.final_amount) + 0.01) {
+    const prevPaidPaise = toPaise(prevPayCheck.rows[0].prev_paid);
+    const newPaymentPaise = payList.reduce((s, p) => s + toPaise(p.amount || 0), 0);
+    const billFinalPaise = toPaise(bill.final_amount);
+    if (prevPaidPaise + newPaymentPaise > billFinalPaise) {
       await client.query('ROLLBACK');
-      return res.status(400).json(formatResponse(false, null, `Payment of ₹${newPaymentTotal} would exceed the remaining due of ₹${(parseFloat(bill.final_amount) - prevPaidTotal).toFixed(2)}`));
+      const remDue = fromPaise(Math.max(0, billFinalPaise - prevPaidPaise));
+      return res.status(400).json(formatResponse(false, null, `Payment of ₹${fromPaise(newPaymentPaise).toFixed(2)} would exceed the remaining due of ₹${remDue.toFixed(2)}`));
     }
-
 
     // Business Rule: PRO must never collect or record consultation payments (Receptionist responsibility)
     if (bill.bill_type === 'consultation') {
@@ -1505,22 +1510,15 @@ async function recordPayment(req, res) {
       return res.status(403).json(formatResponse(false, null, 'Forbidden: Consultation fee payment is handled by Receptionist only'));
     }
 
-    // Compute existing paid amount
-    const prevPayRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as prev_paid FROM payments WHERE bill_id = $1`, [bill_id]);
-    const prevPaid = parseFloat(prevPayRes.rows[0].prev_paid);
-
-    let totalNewPayment = 0;
     const recordedPayments = [];
     const receivedBy = req.user.user_id;
-
     const branchId = req.user.branch_id || bill.branch_id || 1;
-    let totalCashPayment = 0;
+    let totalCashPaymentPaise = 0;
 
     for (const p of payList) {
-      const pAmt = parseFloat(p.amount);
+      const pAmt = roundMoney(p.amount);
       const pMethod = p.payment_method || p.payment_mode || 'cash';
-      totalNewPayment += pAmt;
-      if (pMethod === 'cash') totalCashPayment += pAmt;
+      if (pMethod === 'cash') totalCashPaymentPaise += toPaise(pAmt);
 
       const pRes = await client.query(`
         INSERT INTO payments (
@@ -1532,7 +1530,8 @@ async function recordPayment(req, res) {
       recordedPayments.push(pRes.rows[0]);
     }
 
-    if (totalCashPayment > 0) {
+    if (totalCashPaymentPaise > 0) {
+      const totalCashPayment = fromPaise(totalCashPaymentPaise);
       await client.query(`
         INSERT INTO cash_ledger (branch_id, ledger_date, opening_balance, cash_revenue, cash_expenditure, deposited_amount, closing_balance)
         VALUES ($1, CURRENT_DATE, 0, $2, 0, 0, $2)
@@ -1543,18 +1542,20 @@ async function recordPayment(req, res) {
       `, [branchId, totalCashPayment]);
     }
 
-    const newPaidTotal = prevPaid + totalNewPayment;
-    const billTotal = parseFloat(bill.final_amount);
+    const newPaidPaise = prevPaidPaise + newPaymentPaise;
+    const newPaidTotal = fromPaise(newPaidPaise);
+    const billTotal = fromPaise(billFinalPaise);
     let newStatus = 'pending';
-    if (newPaidTotal >= billTotal) {
+    if (newPaidPaise >= billFinalPaise) {
       newStatus = 'paid';
-    } else if (newPaidTotal > 0) {
+    } else if (newPaidPaise > 0) {
       newStatus = 'partial';
     }
 
     // Manage Due Patients row
-    const shortfall = billTotal - newPaidTotal;
-    if (shortfall > 0) {
+    const shortfallPaise = Math.max(0, billFinalPaise - newPaidPaise);
+    const shortfall = fromPaise(shortfallPaise);
+    if (shortfallPaise > 0) {
       const dueCheck = await client.query(`SELECT * FROM due_patients WHERE bill_id = $1`, [bill_id]);
       if (dueCheck.rows.length > 0) {
         await client.query(`
@@ -1575,7 +1576,7 @@ async function recordPayment(req, res) {
 
     // If bill is linked to a package, update package payment_status
     if (bill.package_id) {
-      const pkgPaymentStatus = newPaidTotal >= billTotal ? 'paid' : (newPaidTotal > 0 ? 'partially_paid' : 'invoiced');
+      const pkgPaymentStatus = newPaidPaise >= billFinalPaise ? 'paid' : (newPaidPaise > 0 ? 'partially_paid' : 'invoiced');
       await client.query(`
         UPDATE packages 
         SET payment_status = $1, updated_at = now() 
@@ -1585,18 +1586,20 @@ async function recordPayment(req, res) {
 
     await client.query('COMMIT');
     res.locals.auditEntry = { module: 'PRO Payment', action: 'Record Payment', recordId: recordedPayments[0].payment_id, newValue: recordedPayments };
+    const firstPayment = recordedPayments[0] || {};
     return res.status(201).json(formatResponse(true, {
+      ...firstPayment,
       payments: recordedPayments,
       updated_bill_status: newStatus,
       paid_total: newPaidTotal,
-      remaining_due: shortfall > 0 ? shortfall : 0,
+      remaining_due: shortfall,
       bill: {
         bill_id: bill.bill_id,
         bill_number: bill.bill_number,
-        final_amount: parseFloat(bill.final_amount),
+        final_amount: billTotal,
         paid_amount: newPaidTotal,
-        balance_due: shortfall > 0 ? shortfall : 0,
-        due_amount: shortfall > 0 ? shortfall : 0,
+        balance_due: shortfall,
+        due_amount: shortfall,
         payment_status: newStatus,
         status: newStatus
       }
