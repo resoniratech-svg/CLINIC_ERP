@@ -11,7 +11,6 @@ import {
   AlertTriangle,
   ArrowLeft,
   Save,
-  HelpCircle,
   FileEdit,
   History,
   Info,
@@ -43,16 +42,6 @@ export const ProcessPrescriptionPage = () => {
   const [modifyReason, setModifyReason] = useState('');
   const [modificationsHistory, setModificationsHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-
-  // Raise Clarification Modal state
-  const [clarificationModalOpen, setClarificationModalOpen] = useState(false);
-  const [clarificationForm, setClarificationForm] = useState({
-    issue_type: 'dosage_clarification',
-    description: '',
-    priority: 'normal',
-    remarks: '',
-    prescription_item_id: null,
-  });
 
   // Success print modal state
   const [dispenseSuccess, setDispenseSuccess] = useState(null);
@@ -268,49 +257,6 @@ export const ProcessPrescriptionPage = () => {
     }
   };
 
-  // Handle Raise Clarification
-  const handleOpenClarificationModal = (item = null) => {
-    setClarificationForm({
-      issue_type: 'dosage_clarification',
-      description: '',
-      priority: 'normal',
-      remarks: '',
-      prescription_item_id: item ? item.id : null,
-    });
-    setClarificationModalOpen(true);
-  };
-
-  const handleSaveClarification = async (e) => {
-    e.preventDefault();
-    if (!clarificationForm.description.trim()) {
-      showToast('Please enter clinical clarification details for the doctor', 'warning');
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const res = await pharmacyApi.createClarification({
-        prescription_id: parseInt(id),
-        prescription_item_id: clarificationForm.prescription_item_id,
-        issue_type: clarificationForm.issue_type,
-        description: clarificationForm.description.trim(),
-        priority: clarificationForm.priority,
-        remarks: clarificationForm.remarks.trim(),
-      });
-
-      if (res.success) {
-        showToast('Clarification sent to doctor successfully', 'success');
-        setClarificationModalOpen(false);
-      } else {
-        showToast(res.message || 'Failed to raise clarification', 'error');
-      }
-    } catch (err) {
-      showToast(err.message || 'Error submitting clarification', 'error');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-[60vh]">
@@ -370,14 +316,6 @@ export const ProcessPrescriptionPage = () => {
 
         {/* Quick Actions */}
         <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => handleOpenClarificationModal(null)}
-            disabled={prescriptionData.pharmacy_status === 'dispensed'}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition disabled:opacity-50"
-          >
-            <HelpCircle className="w-4 h-4 text-amber-600" />
-            <span>Raise Clarification</span>
-          </button>
           <button
             onClick={handleSaveDraft}
             disabled={submitting || prescriptionData.pharmacy_status === 'dispensed'}
@@ -710,14 +648,7 @@ export const ProcessPrescriptionPage = () => {
 
                     {/* Actions */}
                     <td className="p-3.5 text-right whitespace-nowrap">
-                      <button
-                        onClick={() => handleOpenClarificationModal(item)}
-                        disabled={prescriptionData.pharmacy_status === 'dispensed'}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-2xs font-semibold text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg transition disabled:opacity-50"
-                      >
-                        <HelpCircle className="w-3 h-3 text-amber-600" />
-                        <span>Clarify</span>
-                      </button>
+                      <span className="text-slate-400 text-xs">—</span>
                     </td>
                   </tr>
                 );
@@ -807,99 +738,6 @@ export const ProcessPrescriptionPage = () => {
               className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl transition disabled:opacity-50"
             >
               {submitting ? 'Recalculating...' : 'Apply & Recalculate'}
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Raise Clarification Modal */}
-      <Modal
-        isOpen={clarificationModalOpen}
-        onClose={() => setClarificationModalOpen(false)}
-        title="Raise Clarification to Doctor"
-      >
-        <form onSubmit={handleSaveClarification} className="space-y-4">
-          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed">
-            Submit a question directly to the prescribing doctor (Dr. {prescriptionData.doctor_name}). Clinical edits
-            (changing medicine or potency) must be approved by the doctor.
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                Issue Category *
-              </label>
-              <select
-                value={clarificationForm.issue_type}
-                onChange={(e) => setClarificationForm({ ...clarificationForm, issue_type: e.target.value })}
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
-              >
-                <option value="dosage_clarification">Dosage Clarification</option>
-                <option value="substitution_request">Medicine Substitution Request</option>
-                <option value="medicine_unavailable">Medicine Unavailable / Stock</option>
-                <option value="quantity_clarification">Quantity Discrepancy</option>
-                <option value="duration_clarification">Course Duration Clarification</option>
-                <option value="prescription_error">Prescription Error / Ambiguity</option>
-                <option value="other">Other Clinical Inquiry</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Priority</label>
-              <select
-                value={clarificationForm.priority}
-                onChange={(e) => setClarificationForm({ ...clarificationForm, priority: e.target.value })}
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden font-medium"
-              >
-                <option value="normal">Normal Priority</option>
-                <option value="high">High Priority</option>
-                <option value="urgent">Urgent (Immediate Patient Waiting)</option>
-                <option value="low">Low Priority</option>
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Clinical Question / Details *
-            </label>
-            <textarea
-              rows="3"
-              value={clarificationForm.description}
-              onChange={(e) => setClarificationForm({ ...clarificationForm, description: e.target.value })}
-              placeholder="e.g. Prescribed Thuja 200CH is out of stock; requesting approval to dispense Thuja 1M or Thuja 30C..."
-              className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Internal Remarks (Optional)
-            </label>
-            <input
-              type="text"
-              value={clarificationForm.remarks}
-              onChange={(e) => setClarificationForm({ ...clarificationForm, remarks: e.target.value })}
-              placeholder="Pharmacist internal reference..."
-              className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setClarificationModalOpen(false)}
-              className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-xl transition disabled:opacity-50"
-            >
-              {submitting ? 'Submitting...' : 'Send Clarification'}
             </button>
           </div>
         </form>

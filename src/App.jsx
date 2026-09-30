@@ -84,7 +84,6 @@ import { PharmacyInventoryHubPage } from './pages/pharmacy/PharmacyInventoryHubP
 import { StockTransactionsPage } from './pages/pharmacy/StockTransactionsPage';
 import { MedicineReturnsPage } from './pages/pharmacy/MedicineReturnsPage';
 import { StockAdjustmentsPage } from './pages/pharmacy/StockAdjustmentsPage';
-import { PrescriptionClarificationsPage } from './pages/pharmacy/PrescriptionClarificationsPage';
 import { PharmacyPatientsPage } from './pages/pharmacy/PharmacyPatientsPage';
 import { PharmacyProfilePage } from './pages/pharmacy/PharmacyProfilePage';
 import { ReportsPage } from './pages/reports/ReportsPage';
@@ -413,7 +412,10 @@ export default function App() {
             <Route path="transactions" element={<StockTransactionsPage />} />
             <Route path="returns" element={<MedicineReturnsPage />} />
             <Route path="adjustments" element={<StockAdjustmentsPage />} />
-            <Route path="clarifications" element={<PrescriptionClarificationsPage />} />
+            {/* Clarification permanently removed from Pharmacy Portal — redirect to dispensing */}
+            <Route path="clarifications" element={<Navigate to="/pharmacy/dispensing" replace />} />
+            <Route path="clarification" element={<Navigate to="/pharmacy/dispensing" replace />} />
+            <Route path="prescription-clarification" element={<Navigate to="/pharmacy/dispensing" replace />} />
             <Route path="patients" element={<PharmacyPatientsPage />} />
             <Route path="profile" element={<PharmacyProfilePage />} />
           </Route>

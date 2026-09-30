@@ -31,12 +31,13 @@ describe('Pharmacy Portal Frontend Flow & Business Rules Verification', () => {
         receptionist: ['registration', 'checkin', 'consultation_billing'],
         doctor: ['consultation', 'prescription', 'treatment_plan'],
         pro_manager: ['counselling', 'package_billing', 'payments', 'accountant'],
-        pharmacy: ['dispensing', 'inventory', 'stock_adjustments', 'returns', 'clarifications'],
+        pharmacy: ['dispensing', 'inventory', 'stock_adjustments', 'returns'],
       };
 
       assert.strictEqual(rolePermissions.pharmacy.includes('package_billing'), false);
       assert.strictEqual(rolePermissions.pharmacy.includes('payments'), false);
       assert.strictEqual(rolePermissions.pharmacy.includes('consultation'), false);
+      assert.strictEqual(rolePermissions.pharmacy.includes('clarifications'), false);
       assert.strictEqual(rolePermissions.pharmacy.includes('dispensing'), true);
       assert.strictEqual(rolePermissions.pharmacy.includes('inventory'), true);
     });

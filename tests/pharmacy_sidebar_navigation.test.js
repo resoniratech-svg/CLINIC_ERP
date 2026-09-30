@@ -82,7 +82,6 @@ describe('Pharmacy Sidebar Navigation — Dispensing Cleanup Suite', () => {
       '/pharmacy/transactions',
       '/pharmacy/returns',
       '/pharmacy/adjustments',
-      '/pharmacy/clarifications',
       '/pharmacy/profile'
     ];
 
@@ -224,7 +223,8 @@ describe('Pharmacy Sidebar Navigation — Inventory Cleanup Suite', () => {
     assert.match(sidebarContent, /to="\/pharmacy\/transactions"/);
     assert.match(sidebarContent, /to="\/pharmacy\/returns"/);
     assert.match(sidebarContent, /to="\/pharmacy\/adjustments"/);
-    assert.match(sidebarContent, /to="\/pharmacy\/clarifications"/);
+    assert.strictEqual(sidebarContent.includes('to="/pharmacy/clarifications"'), false, 'Sidebar must not contain clarifications');
+    assert.strictEqual(sidebarContent.includes('Prescription Clarification'), false, 'Sidebar must not contain Prescription Clarification label');
     assert.match(sidebarContent, /to="\/pharmacy\/profile"/);
   });
 });

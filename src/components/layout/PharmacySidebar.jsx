@@ -9,7 +9,6 @@ import {
   ArrowLeftRight,
   RotateCcw,
   Sliders,
-  HelpCircle,
   User,
   LogOut,
   Building
@@ -163,12 +162,6 @@ export const PharmacySidebar = ({ isMobileOpen, onCloseMobile }) => {
           <NavLink to="/pharmacy/adjustments" className={navLinkClasses} onClick={onCloseMobile}>
             <Sliders className="w-4 h-4 text-[#1565C0]" />
             <span>Stock Adjustments</span>
-          </NavLink>
-
-          {/* Prescription Clarification */}
-          <NavLink to="/pharmacy/clarifications" className={navLinkClasses} onClick={onCloseMobile}>
-            <HelpCircle className="w-4 h-4 text-[#1565C0]" />
-            <span>Prescription Clarification</span>
           </NavLink>
 
           {/* My Profile */}

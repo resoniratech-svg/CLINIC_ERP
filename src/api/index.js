@@ -108,11 +108,6 @@ export const pharmacyApi = {
   saveDispenseDraft: (id, data) => axiosClient.post(`/pharmacy/prescriptions/${id}/dispense/draft`, data),
   completeDispensing: (id, data) => axiosClient.post(`/pharmacy/prescriptions/${id}/dispense/complete`, data),
 
-  // 3. Clarification Workflow
-  createClarification: (data) => axiosClient.post('/pharmacy/clarifications', data),
-  getClarifications: (params) => axiosClient.get('/pharmacy/clarifications', { params }),
-  closeClarification: (id, data) => axiosClient.put(`/pharmacy/clarifications/${id}/close`, data),
-
   // 4. Inventory & Medicine Master
   getMedicines: (params) => axiosClient.get('/pharmacy/medicines', { params }),
   getNextMedicineSerial: () => axiosClient.get('/pharmacy/medicines/next-serial'),
