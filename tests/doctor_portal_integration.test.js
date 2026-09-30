@@ -39,7 +39,7 @@ describe('Doctor Portal — Complete Frontend & Backend Integration Suite', () =
       assert.strictEqual(sidebarContent.includes('subNavLinkClasses'), false, 'Sub-navigation indentation should not exist');
     });
 
-    test('1.2 Doctor sidebar contains the exact 10 top-level navigation routes in order', () => {
+    test('1.2 Doctor sidebar contains the exact 9 top-level navigation routes in order', () => {
       const expectedRoutes = [
         { route: '/doctor/dashboard', label: 'Doctor Dashboard' },
         { route: '/doctor/appointments', label: "Today's Appointments" },
@@ -49,7 +49,6 @@ describe('Doctor Portal — Complete Frontend & Backend Integration Suite', () =
         { route: '/doctor/prescriptions', label: 'Prescriptions' },
         { route: '/doctor/treatment-plans', label: 'Treatments' },
         { route: '/doctor/targets', label: 'My Targets' },
-        { route: '/doctor/leaves', label: 'Leave Requests' },
         { route: '/doctor/profile', label: 'My Profile' },
       ];
 
@@ -61,6 +60,8 @@ describe('Doctor Portal — Complete Frontend & Backend Integration Suite', () =
 
     test('1.3 Prohibited modules are completely absent from Doctor sidebar', () => {
       const prohibitedKeywords = [
+        '/doctor/leaves',
+        'Leave Requests',
         '/doctor/billing',
         '/doctor/payments',
         '/doctor/inventory',

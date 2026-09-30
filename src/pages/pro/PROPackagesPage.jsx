@@ -25,9 +25,7 @@ import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { MedicineSelector } from '../../components/doctor/MedicineSelector';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
-
-const formatCurrency = (val) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
+import { formatCurrency, roundMoney, safeSubtract } from '../../utils/moneyUtils';
 
 const PACKAGE_TYPES = [
   { value: 'monthly', label: 'Monthly (30 Days)' },

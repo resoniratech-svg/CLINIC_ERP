@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X, CreditCard, CheckCircle, AlertCircle } from 'lucide-react';
 import { proApi } from '../../api';
 import { LoadingSpinner } from './LoadingSpinner';
+import { formatCurrency, toPaise, fromPaise, roundMoney, safeSubtract } from '../../utils/moneyUtils';
 
 const PAYMENT_METHODS = [
   { value: 'cash',      label: 'Cash' },
@@ -11,9 +12,6 @@ const PAYMENT_METHODS = [
   { value: 'bajaj_pay', label: 'Bajaj Pay' },
   { value: 'card',      label: 'Debit / Credit Card' },
 ];
-
-const formatCurrency = (val) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
 
 /**
  * PROPaymentModal — Inline payment modal (NO page navigation).
@@ -41,10 +39,10 @@ export const PROPaymentModal = ({ isOpen, billId, bill: propBill, onPaymentRecor
     setSubmitting(false);
 
     if (propBill) {
-      const finalAmt  = parseFloat(propBill.final_amount || propBill.total_amount || 0);
-      const paidAmt   = parseFloat(propBill.paid_amount || 0);
-      const remaining = Math.max(0, finalAmt - paidAmt);
-      setForm({ amount: remaining > 0 ? String(remaining) : '', payment_method: '', remarks: '' });
+      const finalAmt  = roundMoney(propBill.final_amount || propBill.total_amount || 0);
+      const paidAmt   = roundMoney(propBill.paid_amount || 0);
+      const remaining = safeSubtract(finalAmt, paidAmt);
+      setForm({ amount: remaining > 0 ? remaining.toFixed(2) : '', payment_method: '', remarks: '' });
     } else {
       setForm({ amount: '', payment_method: '', remarks: '' });
     }
@@ -53,15 +51,15 @@ export const PROPaymentModal = ({ isOpen, billId, bill: propBill, onPaymentRecor
   if (!isOpen) return null;
 
   const bill         = propBill;
-  const finalAmount  = parseFloat(bill?.final_amount || bill?.total_amount || 0);
-  const paidAmount   = parseFloat(bill?.paid_amount || 0);
-  const remainingDue = Math.max(0, finalAmount - paidAmount);
+  const finalAmount  = roundMoney(bill?.final_amount || bill?.total_amount || 0);
+  const paidAmount   = roundMoney(bill?.paid_amount || 0);
+  const remainingDue = safeSubtract(finalAmount, paidAmount);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError(null);
 
-    const amount = parseFloat(form.amount);
+    const amount = roundMoney(form.amount);
     if (!form.payment_method) {
       setError('Please select a payment method');
       return;
@@ -70,8 +68,8 @@ export const PROPaymentModal = ({ isOpen, billId, bill: propBill, onPaymentRecor
       setError('Payment amount must be a positive number');
       return;
     }
-    if (amount > remainingDue + 0.01) {
-      setError(`Payment amount ₹${amount} exceeds remaining due ₹${remainingDue.toFixed(2)}`);
+    if (toPaise(amount) > toPaise(remainingDue)) {
+      setError(`Payment amount ₹${amount.toFixed(2)} exceeds remaining due ₹${remainingDue.toFixed(2)}`);
       return;
     }
 
@@ -164,10 +162,10 @@ export const PROPaymentModal = ({ isOpen, billId, bill: propBill, onPaymentRecor
               type="number"
               min="0.01"
               step="0.01"
-              max={remainingDue}
+              max={remainingDue.toFixed(2)}
               value={form.amount}
               onChange={e => setForm(prev => ({ ...prev, amount: e.target.value }))}
-              placeholder={`Max: ₹${remainingDue.toFixed(0)}`}
+              placeholder={`Max: ₹${remainingDue.toFixed(2)}`}
               required
               autoFocus
               className="w-full px-3 py-2.5 text-sm font-mono font-bold border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-400 transition"

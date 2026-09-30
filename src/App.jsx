@@ -37,7 +37,6 @@ import { ConsultationHistoryPage } from './pages/doctor/ConsultationHistoryPage'
 import { DoctorPrescriptionsPage } from './pages/doctor/DoctorPrescriptionsPage';
 import { TreatmentPlansPage } from './pages/doctor/TreatmentPlansPage';
 import { DoctorTargetsPage } from './pages/doctor/DoctorTargetsPage';
-import { DoctorLeavesPage } from './pages/doctor/DoctorLeavesPage';
 import { DoctorProfilePage } from './pages/doctor/DoctorProfilePage';
 
 // Auth Pages
@@ -330,8 +329,8 @@ export default function App() {
             {/* Targets (view-only) */}
             <Route path="targets" element={<DoctorTargetsPage />} />
 
-            {/* Leaves */}
-            <Route path="leaves" element={<DoctorLeavesPage />} />
+            {/* Leaves — permanently removed from Doctor Portal; redirect to dashboard */}
+            <Route path="leaves" element={<Navigate to="/doctor/dashboard" replace />} />
 
             {/* Coupon Management — permission: coupon_management */}
             <Route path="coupons" element={

@@ -33,9 +33,7 @@ import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
 import { PROPaymentModal } from '../../components/common/PROPaymentModal';
-
-const formatCurrency = (val) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
+import { formatCurrency, roundMoney, safeSubtract } from '../../utils/moneyUtils';
 
 export const PROPatientOverviewPage = () => {
   const { id: paramPatientId } = useParams();

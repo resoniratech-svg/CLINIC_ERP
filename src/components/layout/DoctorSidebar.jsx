@@ -9,7 +9,6 @@ import {
   Pill,
   Activity,
   Target,
-  CalendarOff,
   User,
   LogOut,
   Building,
@@ -124,12 +123,6 @@ export const DoctorSidebar = ({ isMobileOpen, onCloseMobile }) => {
           <NavLink to="/doctor/targets" className={navLinkClasses} onClick={onCloseMobile}>
             <Target className="w-4 h-4" />
             <span>My Targets</span>
-          </NavLink>
-
-          {/* 9. Leave Requests */}
-          <NavLink to="/doctor/leaves" className={navLinkClasses} onClick={onCloseMobile}>
-            <CalendarOff className="w-4 h-4" />
-            <span>Leave Requests</span>
           </NavLink>
 
           {/* Coupon Management — requires: coupon_management */}

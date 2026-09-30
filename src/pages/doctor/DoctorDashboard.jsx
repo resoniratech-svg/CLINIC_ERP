@@ -236,9 +236,9 @@ export const DoctorDashboard = () => {
             <Stethoscope className="w-5 h-5 text-purple-700" />
             <span className="text-xs font-bold text-purple-800">Consultation History</span>
           </Link>
-          <Link to="/doctor/leaves" className="flex flex-col items-center gap-2 p-4 rounded-xl bg-red-50 hover:bg-red-100 border border-red-100 transition-colors text-center">
-            <TrendingUp className="w-5 h-5 text-red-700" />
-            <span className="text-xs font-bold text-red-800">Apply Leave</span>
+          <Link to="/doctor/targets" className="flex flex-col items-center gap-2 p-4 rounded-xl bg-amber-50 hover:bg-amber-100 border border-amber-100 transition-colors text-center">
+            <Target className="w-5 h-5 text-amber-700" />
+            <span className="text-xs font-bold text-amber-800">My Targets</span>
           </Link>
         </div>
       </div>

@@ -18,9 +18,7 @@ import {
 import { proApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-
-const formatCurrency = (val) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
+import { formatCurrency, roundMoney } from '../../utils/moneyUtils';
 
 const PAYMENT_METHODS = [
   { value: 'cash', label: 'Cash (Physical)' },
@@ -102,7 +100,7 @@ export const PROPaymentsPage = () => {
     try {
       const res = await proApi.recordPayment({
         bill_id: parseInt(payForm.bill_id),
-        amount: parseFloat(payForm.amount),
+        amount: roundMoney(payForm.amount),
         payment_method: payForm.payment_method,
         remarks: payForm.remarks || null
       });

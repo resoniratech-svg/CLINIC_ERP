@@ -278,10 +278,6 @@ export const doctorApi = {
   updateProfile: (data) => axiosClient.put('/doctor/profile', data),
   getSchedule: () => axiosClient.get('/doctor/schedule'),
 
-  // Leaves
-  applyLeave: (data) => axiosClient.post('/doctor/leaves', data),
-  getMyLeaves: () => axiosClient.get('/doctor/leaves/mine'),
-
   // Prescription Clarifications
   getClarifications: (params) => axiosClient.get('/doctor/clarifications', { params }),
   respondToClarification: (id, data) => axiosClient.post(`/doctor/clarifications/${id}/respond`, data),

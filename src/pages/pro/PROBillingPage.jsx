@@ -27,9 +27,7 @@ import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
 import { PROPaymentModal } from '../../components/common/PROPaymentModal';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
-
-const formatCurrency = (val) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
+import { formatCurrency, roundMoney, safeAdd, safeSubtract, safeMultiply, toPaise, fromPaise } from '../../utils/moneyUtils';
 
 const PROBillingPageContent = () => {
   const location = useLocation();
@@ -531,11 +529,11 @@ const PROBillingPageContent = () => {
 
   // Calculate live preview subtotal, discount, and total
   const previewSubtotal = (form.items || []).reduce(
-    (sum, it) => sum + (parseFloat(it.unit_price || 0) * parseInt(it.quantity || 1)),
+    (sum, it) => safeAdd(sum, safeMultiply(it.unit_price || 0, it.quantity || 1)),
     0
   );
-  const previewDiscount = Math.max(0, parseFloat(form.discount_amount || 0));
-  const previewTotal = Math.max(0, Math.round((previewSubtotal - previewDiscount) * 100) / 100);
+  const previewDiscount = roundMoney(Math.max(0, parseFloat(form.discount_amount || 0)));
+  const previewTotal = safeSubtract(previewSubtotal, previewDiscount);
   const isDiscountOverSubtotal = previewDiscount > previewSubtotal && previewSubtotal > 0;
 
   // Selected package metadata & duplicate billing protection

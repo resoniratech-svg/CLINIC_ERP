@@ -16,9 +16,7 @@ import {
 import { proApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-
-const formatCurrency = (val) =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
+import { formatCurrency, roundMoney, safeSubtract } from '../../utils/moneyUtils';
 
 export const PROInvoiceModal = ({ billId, initialBill, isOpen, onClose }) => {
   const { showToast } = useToast();
@@ -52,9 +50,9 @@ export const PROInvoiceModal = ({ billId, initialBill, isOpen, onClose }) => {
     window.print();
   };
 
-  const finalAmount = parseFloat(bill?.final_amount || bill?.total_amount || 0);
-  const paidAmount = parseFloat(bill?.paid_amount || 0);
-  const dueAmount = parseFloat(bill?.due_amount || Math.max(0, finalAmount - paidAmount));
+  const finalAmount = roundMoney(bill?.final_amount || bill?.total_amount || 0);
+  const paidAmount = roundMoney(bill?.paid_amount || 0);
+  const dueAmount = roundMoney(bill?.due_amount !== undefined ? bill.due_amount : safeSubtract(finalAmount, paidAmount));
   const isPaid = dueAmount <= 0 || bill?.payment_status === 'paid';
 
   return createPortal(
