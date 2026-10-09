@@ -1556,6 +1556,14 @@ async function updateProfile(req, res) {
     const userId = req.user.user_id;
     const { mobile_number, email } = req.body;
 
+    if (mobile_number !== undefined && mobile_number !== null && String(mobile_number).trim() !== '') {
+      let numericMobile = String(mobile_number).trim().replace(/\D/g, '');
+      if (numericMobile.length === 12 && numericMobile.startsWith('91')) numericMobile = numericMobile.slice(2);
+      if (!/^[0-9]{10}$/.test(numericMobile)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+      }
+    }
+
     // Doctor can only update personal contact fields. Professional fields are restricted to Super Admin.
     const result = await db.query(`
       UPDATE users SET
@@ -1570,6 +1578,12 @@ async function updateProfile(req, res) {
     return res.json(formatResponse(true, result.rows[0], 'Doctor profile contact details updated successfully. Professional fields are Super-Admin-managed.'));
   } catch (err) {
     console.error('updateProfile error:', err);
+    if (err.code === '23505') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Input value exceeds maximum allowed character length'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }

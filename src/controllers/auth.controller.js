@@ -427,7 +427,7 @@ async function forgotPassword(req, res) {
          OR LOWER(TRIM(u.employee_id)) = $1
          OR TRIM(u.mobile_number) = $2
          OR LOWER(TRIM(COALESCE(u.email, ''))) = $1
-         OR (CASE WHEN $2 ~ '^[0-9]+$' THEN u.user_id = $2::integer ELSE FALSE END)
+         OR (CASE WHEN $2 ~ '^[0-9]+$' AND length($2) <= 9 THEN u.user_id = $2::integer ELSE FALSE END)
          OR (LOWER(TRIM(u.role::text)) = 'super_admin' AND $1 IN ('admin', 'superadmin', 'super_admin', 'super-admin', 'super admin'))
       ORDER BY (CASE WHEN LOWER(TRIM(u.role::text)) = 'super_admin' THEN 0 ELSE 1 END), u.user_id ASC
       LIMIT 1

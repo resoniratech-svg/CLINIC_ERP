@@ -2152,8 +2152,33 @@ async function createOCNRPatient(req, res) {
       RETURNING *, id as oc_nr_id, to_char(marked_at, 'YYYY-MM-DD HH24:MI:SS') as marked_at
     `, [pId, cls, reasonText]);
 
-    res.locals.auditEntry = { module: 'PRO OC/NR', action: 'Record OC/NR Patient', recordId: result.rows[0].id, newValue: result.rows[0] };
-    return res.status(201).json(formatResponse(true, result.rows[0], 'OC/NR patient recorded successfully'));
+    const ocnrRow = result.rows[0];
+
+    // Determine assigned staff user for the 14-day reactivation task (Rule 16: receptionist or pro_manager)
+    const branchId = req.user.branch_id || ptCheck.rows[0].branch_id || 1;
+    let assignedUserId = req.user.user_id;
+    if (req.user.role === 'executive') {
+      const staffRes = await db.query(
+        `SELECT user_id FROM users WHERE branch_id = $1 AND role IN ('receptionist', 'pro_manager') AND is_active = true LIMIT 1`,
+        [branchId]
+      );
+      if (staffRes.rows.length > 0) {
+        assignedUserId = staffRes.rows[0].user_id;
+      }
+    }
+
+    // Automatically trigger 14-day reactivation CRM task
+    const reactivationDueDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const reactivationRemarks = `Automated 14-day reactivation task for ${cls.toUpperCase()} dropout (${reasonText || 'No reason provided'})`;
+
+    await db.query(`
+      INSERT INTO crm_followups (
+        patient_id, category, due_date, assigned_to, status, remarks, branch_id
+      ) VALUES ($1, 'ocnr', $2, $3, 'pending', $4, $5)
+    `, [pId, reactivationDueDate, assignedUserId, reactivationRemarks, branchId]);
+
+    res.locals.auditEntry = { module: 'PRO OC/NR', action: 'Record OC/NR Patient', recordId: ocnrRow.id, newValue: ocnrRow };
+    return res.status(201).json(formatResponse(true, ocnrRow, 'OC/NR patient recorded successfully and 14-day reactivation task scheduled'));
   } catch (err) {
     console.error('createOCNRPatient error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -3216,13 +3241,14 @@ async function updateProfile(req, res) {
 
     let cleanMobile = null;
     if (hasMobile) {
-      cleanMobile = String(mobile_number).trim();
-      if (!/^\d{10,15}$/.test(cleanMobile)) {
-        return res.status(400).json(formatResponse(false, null, 'Invalid mobile number format. Must be between 10 and 15 digits'));
+      cleanMobile = String(mobile_number).trim().replace(/\D/g, '');
+      if (cleanMobile.length === 12 && cleanMobile.startsWith('91')) cleanMobile = cleanMobile.slice(2);
+      if (!/^[0-9]{10}$/.test(cleanMobile)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
       }
       const dupMobile = await db.query('SELECT user_id FROM users WHERE mobile_number = $1 AND user_id != $2', [cleanMobile, userId]);
       if (dupMobile.rows.length > 0) {
-        return res.status(409).json(formatResponse(false, null, 'Mobile number is already registered to another account'));
+        return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
       }
     }
 
@@ -3253,6 +3279,12 @@ async function updateProfile(req, res) {
     return res.json(formatResponse(true, result.rows[0], 'PRO contact details updated successfully'));
   } catch (err) {
     console.error('updateProfile error:', err);
+    if (err.code === '23505') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Input value exceeds maximum allowed character length'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }

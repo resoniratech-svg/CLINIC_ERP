@@ -54,8 +54,20 @@ function parseUserAgent(ua = '') {
   return { browser, device };
 }
 
+function isValidMobile(mobile) {
+  if (mobile === null || mobile === undefined) return false;
+  return /^[0-9]{10}$/.test(String(mobile).trim());
+}
+
+function sanitizeMobile(mobile) {
+  if (mobile === null || mobile === undefined) return '';
+  return String(mobile).replace(/\D/g, '').slice(0, 10);
+}
+
 module.exports = {
   formatResponse,
   generateTempPassword,
   parseUserAgent,
+  isValidMobile,
+  sanitizeMobile,
 };

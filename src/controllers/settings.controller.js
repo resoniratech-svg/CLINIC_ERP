@@ -1,6 +1,6 @@
 const db = require('../db');
 const jwt = require('jsonwebtoken');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, isValidMobile } = require('../utils/helpers');
 
 async function getPermissionsMatrix(req, res) {
   try {
@@ -444,12 +444,15 @@ async function updateProfile(req, res) {
     }
 
     // 4. Validate Mobile Number (optional / if provided)
-    const rawMobile = mobile_number !== undefined ? mobile_number : (mobileNumber !== undefined ? mobileNumber : (phone !== undefined ? phone : oldUser.mobile_number));
-    let cleanMobile = rawMobile !== null && rawMobile !== undefined ? String(rawMobile).trim() : '';
-    if (cleanMobile) {
-      const numericMobile = cleanMobile.replace(/[\s\-()+]/g, '');
-      if (numericMobile.length < 7 || numericMobile.length > 15 || !/^\d+$/.test(numericMobile)) {
-        return res.status(400).json(formatResponse(false, null, 'Invalid mobile number format. Must be between 7 and 15 digits'));
+    const rawMobile = mobile_number !== undefined ? mobile_number : (mobileNumber !== undefined ? mobileNumber : (phone !== undefined ? phone : null));
+    let cleanMobile = oldUser.mobile_number;
+    if (rawMobile !== null && rawMobile !== undefined) {
+      const numericMobile = String(rawMobile).trim().replace(/[\s\-()+]/g, '');
+      if (numericMobile) {
+        if (!isValidMobile(numericMobile)) {
+          return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+        }
+        cleanMobile = numericMobile;
       }
     }
 
@@ -627,6 +630,14 @@ async function updateProfile(req, res) {
     }, 'Profile and branch details updated successfully'));
   } catch (err) {
     console.error('updateProfile error:', err);
+    if (err.code === '23505') {
+      const field = err.detail && err.detail.includes('mobile_number') ? 'Mobile number' :
+                    err.detail && err.detail.includes('username') ? 'Username' : 'Field';
+      return res.status(400).json(formatResponse(false, null, `${field} already exists`));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }

@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, isValidMobile } = require('../utils/helpers');
 
 async function searchPatientInbound(req, res) {
   try {
@@ -44,12 +44,17 @@ async function createLead(req, res) {
       return res.status(400).json(formatResponse(false, null, 'lead_name, mobile_number, and lead_source are required'));
     }
 
+    const cleanLeadMobile = String(mobile_number).trim();
+    if (!isValidMobile(cleanLeadMobile)) {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
+
     const branchId = req.user.branch_id || 1;
     const finalRequirement = requirement ? requirement.trim() : (problem ? problem.trim() : (ailment_reason ? ailment_reason.trim() : null));
     const finalRemarks = remarks ? remarks.trim() : null;
 
     // Automatic check: does patient exist in patients table?
-    const existingPatientRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [mobile_number]);
+    const existingPatientRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [cleanLeadMobile]);
     const patientId = existingPatientRes.rows.length > 0 ? existingPatientRes.rows[0].patient_id : null;
 
     // Find executive record if user is an executive
@@ -67,7 +72,7 @@ async function createLead(req, res) {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14, $15, $16)
       RETURNING *
     `, [
-      patientId, lead_name, mobile_number, age || null, gender || null, village || null, mandal || null,
+      patientId, lead_name, cleanLeadMobile, age || null, gender || null, village || null, mandal || null,
       source || 'Call Center', campaign || null, req.user.user_id, execId, lead_source,
       assigned_receptionist_id || null, branchId, finalRequirement, finalRemarks
     ]);
@@ -98,6 +103,12 @@ async function createLead(req, res) {
     return res.status(201).json(formatResponse(true, newLead, 'Lead created and placed in Receptionist queue successfully'));
   } catch (err) {
     console.error('createLead error:', err);
+    if (err.code === '23505') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -127,15 +138,17 @@ async function importOutboundLeads(req, res) {
     const insertedLeads = [];
 
     for (const rec of records) {
-      const mobile = rec.mobile_number || rec.mobile;
-      if (!mobile) continue;
+      const rawMobile = rec.mobile_number || rec.mobile;
+      if (!rawMobile) continue;
+      const cleanMob = String(rawMobile).trim().replace(/\D/g, '');
+      if (!isValidMobile(cleanMob)) continue;
 
       // Duplicate check in patients / leads / outbound_leads
       const dupCheck = await client.query(`
         SELECT mobile_number FROM patients WHERE mobile_number = $1
         UNION
         SELECT mobile_number FROM outbound_leads WHERE mobile_number = $1
-      `, [mobile]);
+      `, [cleanMob]);
 
       if (dupCheck.rows.length > 0) {
         duplicateCount++;
@@ -158,7 +171,7 @@ async function importOutboundLeads(req, res) {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', $11, $12)
         RETURNING *
       `, [
-        batchId, rec.patient_name || rec.name || 'Unknown', mobile, rec.age || null,
+        batchId, rec.patient_name || rec.name || 'Unknown', cleanMob, rec.age || null,
         cleanGender, rec.village || null, rec.mandal || null, rec.source || 'Outbound Excel',
         rec.campaign || 'Outbound Campaign', rec.assigned_executive_id || null, rec.remarks || null, branchId
       ]);

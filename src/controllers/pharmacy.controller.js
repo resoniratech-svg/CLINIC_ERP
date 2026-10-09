@@ -3232,8 +3232,8 @@ async function updateProfile(req, res) {
 
     if (mobile_number !== undefined && mobile_number !== null) {
       mobile_number = String(mobile_number).trim();
-      if (mobile_number && !/^\d{10,15}$/.test(mobile_number)) {
-        return res.status(400).json(formatResponse(false, null, 'Invalid mobile number format. Must be 10 to 15 digits'));
+      if (mobile_number && !/^[0-9]{10}$/.test(mobile_number)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
       }
     }
 
@@ -3272,6 +3272,14 @@ async function updateProfile(req, res) {
     return res.json(formatResponse(true, enriched, 'Pharmacy profile updated successfully'));
   } catch (err) {
     console.error('updateProfile error:', err);
+    if (err.code === '23505') {
+      const field = err.detail && err.detail.includes('mobile_number') ? 'Mobile number' :
+                    err.detail && err.detail.includes('email') ? 'Email' : 'Field';
+      return res.status(400).json(formatResponse(false, null, `${field} already exists`));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Input value exceeds maximum allowed length'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }

@@ -75,23 +75,133 @@ async function createFollowup(req, res) {
   }
 }
 
+async function getAcqPatients(req, res) {
+  try {
+    let query = `
+      SELECT a.id, a.id as acq_id, a.patient_id, a.monthly_plan_amount,
+             to_char(a.start_date, 'YYYY-MM-DD') as start_date,
+             to_char(a.end_date, 'YYYY-MM-DD') as end_date,
+             a.frequency, a.status,
+             to_char(a.renewal_date, 'YYYY-MM-DD') as renewal_date,
+             a.created_at, a.package_id,
+             p.full_name as patient_name,
+             p.mobile_number,
+             p.registration_id
+      FROM acq_patients a
+      JOIN patients p ON a.patient_id = p.patient_id
+    `;
+    const params = [];
+    if (req.user.role !== 'super_admin' || req.query.branch_id) {
+      params.push(req.query.branch_id ? parseInt(req.query.branch_id) : (req.user.branch_id || 1));
+      query += ` WHERE p.branch_id = $1`;
+    }
+    query += ` ORDER BY a.id DESC`;
+
+    const result = await db.query(query, params);
+    return res.json(formatResponse(true, result.rows, 'ACQ patients retrieved successfully'));
+  } catch (err) {
+    console.error('getAcqPatients error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
 async function createAcqPatient(req, res) {
   try {
-    const { patient_id, monthly_plan_amount, start_date, end_date, frequency, renewal_date } = req.body;
+    const { patient_id, monthly_plan_amount, start_date, end_date, frequency, renewal_date, plan_name } = req.body;
     if (!patient_id || monthly_plan_amount === undefined || !start_date) {
       return res.status(400).json(formatResponse(false, null, 'patient_id, monthly_plan_amount, and start_date are required'));
     }
 
+    const pId = parseInt(patient_id);
+    if (isNaN(pId) || pId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
+
+    const numAmount = parseFloat(monthly_plan_amount);
+    if (isNaN(numAmount) || numAmount < 0) {
+      return res.status(400).json(formatResponse(false, null, 'monthly_plan_amount must be a non-negative number'));
+    }
+
+    const ptCheck = await db.query(`SELECT patient_id, branch_id, full_name FROM patients WHERE patient_id = $1`, [pId]);
+    if (ptCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient ID ${pId} not found`));
+    }
+
+    const branchId = req.user.branch_id || ptCheck.rows[0].branch_id || 1;
+
+    // Idempotency: duplicate ACQ creation within 5 seconds
+    const dupCheck = await db.query(`
+      SELECT id FROM acq_patients
+      WHERE patient_id = $1 AND start_date = $2 AND monthly_plan_amount = $3
+        AND created_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [pId, start_date, numAmount]);
+
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate ACQ subscription creation detected. Please wait a moment.'));
+    }
+
+    // Insert ACQ plan record
     const result = await db.query(`
       INSERT INTO acq_patients (patient_id, monthly_plan_amount, start_date, end_date, frequency, status, renewal_date)
       VALUES ($1, $2, $3, $4, $5, 'active', $6)
       RETURNING *
-    `, [patient_id, monthly_plan_amount, start_date, end_date || null, frequency || 'monthly', renewal_date || null]);
+    `, [pId, numAmount, start_date, end_date || null, frequency || 'monthly', renewal_date || null]);
 
-    res.locals.auditEntry = { module: 'CRM Management', action: 'Create ACQ Patient Plan', recordId: result.rows[0].id, newValue: result.rows[0] };
-    return res.status(201).json(formatResponse(true, result.rows[0], 'ACQ patient plan created successfully'));
+    const acqRecord = result.rows[0];
+
+    // Determine assigned staff user for the CRM follow-up task (Rule 16: receptionist or pro_manager)
+    let assignedUserId = req.user.user_id;
+    if (req.user.role === 'executive') {
+      const staffRes = await db.query(
+        `SELECT user_id FROM users WHERE branch_id = $1 AND role IN ('receptionist', 'pro_manager') AND is_active = true LIMIT 1`,
+        [branchId]
+      );
+      if (staffRes.rows.length > 0) {
+        assignedUserId = staffRes.rows[0].user_id;
+      }
+    }
+
+    // Automated CRM Follow-up task under category 'acq' (ACQ Monthly Care)
+    const followupDueDate = renewal_date || new Date(new Date(start_date).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const followupRemarks = `ACQ Monthly Care: Renewal & Medicine Refill (₹${numAmount}/mo) for ${ptCheck.rows[0].full_name || 'Patient #' + pId}`;
+
+    await db.query(`
+      INSERT INTO crm_followups (
+        patient_id, category, due_date, assigned_to, status, remarks, branch_id
+      ) VALUES ($1, 'acq', $2, $3, 'pending', $4, $5)
+    `, [pId, followupDueDate, assignedUserId, followupRemarks, branchId]);
+
+    res.locals.auditEntry = { module: 'CRM Management', action: 'Create ACQ Patient Plan', recordId: acqRecord.id, newValue: acqRecord };
+    return res.status(201).json(formatResponse(true, acqRecord, 'ACQ patient plan created successfully and scheduled in CRM'));
   } catch (err) {
     console.error('createAcqPatient error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function getOcNrPatients(req, res) {
+  try {
+    let query = `
+      SELECT o.id, o.id as oc_nr_id, o.patient_id, o.classification, o.reason,
+             to_char(o.marked_at, 'YYYY-MM-DD HH24:MI:SS') as marked_at,
+             p.full_name as patient_name,
+             p.mobile_number,
+             p.registration_id
+      FROM oc_nr_patients o
+      JOIN patients p ON o.patient_id = p.patient_id
+    `;
+    const params = [];
+    if (req.user.role !== 'super_admin' || req.query.branch_id) {
+      params.push(req.query.branch_id ? parseInt(req.query.branch_id) : (req.user.branch_id || 1));
+      query += ` WHERE p.branch_id = $1`;
+    }
+    query += ` ORDER BY o.id DESC`;
+
+    const result = await db.query(query, params);
+    return res.json(formatResponse(true, result.rows, 'OC/NR patients list retrieved successfully'));
+  } catch (err) {
+    console.error('getOcNrPatients error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -99,18 +209,72 @@ async function createAcqPatient(req, res) {
 async function markOcNrPatient(req, res) {
   try {
     const { patient_id, classification, reason } = req.body;
-    if (!patient_id || !classification || !['oc', 'nr'].includes(classification)) {
+    if (!patient_id || !classification) {
       return res.status(400).json(formatResponse(false, null, 'patient_id and classification (oc/nr) are required'));
     }
 
-    const result = await db.query(`
-      INSERT INTO oc_nr_patients (patient_id, classification, reason)
-      VALUES ($1, $2, $3)
-      RETURNING *
-    `, [patient_id, classification, reason || null]);
+    const pId = parseInt(patient_id);
+    if (isNaN(pId) || pId <= 0) {
+      return res.status(400).json(formatResponse(false, null, 'Valid numeric patient_id is required'));
+    }
 
-    res.locals.auditEntry = { module: 'CRM Management', action: 'Mark OC/NR Patient', recordId: result.rows[0].id, newValue: result.rows[0] };
-    return res.status(201).json(formatResponse(true, result.rows[0], `Patient marked as ${classification.toUpperCase()} successfully`));
+    const normClass = String(classification).trim().toLowerCase();
+    if (!['oc', 'nr'].includes(normClass)) {
+      return res.status(400).json(formatResponse(false, null, "classification must be either 'oc' or 'nr'"));
+    }
+
+    const ptCheck = await db.query(`SELECT patient_id, branch_id, full_name FROM patients WHERE patient_id = $1`, [pId]);
+    if (ptCheck.rows.length === 0) {
+      return res.status(404).json(formatResponse(false, null, `Patient ID ${pId} not found`));
+    }
+
+    const branchId = req.user.branch_id || ptCheck.rows[0].branch_id || 1;
+    const cleanReason = (reason || '').trim();
+
+    // Idempotency: duplicate OC/NR within 5 seconds
+    const dupCheck = await db.query(`
+      SELECT id FROM oc_nr_patients
+      WHERE patient_id = $1 AND classification = $2
+        AND marked_at >= NOW() - INTERVAL '5 seconds'
+      LIMIT 1
+    `, [pId, normClass]);
+
+    if (dupCheck.rows.length > 0) {
+      return res.status(409).json(formatResponse(false, null, 'Duplicate OC/NR recording detected. Please wait a moment.'));
+    }
+
+    const result = await db.query(`
+      INSERT INTO oc_nr_patients (patient_id, classification, reason, marked_at)
+      VALUES ($1, $2, $3, NOW())
+      RETURNING *, id as oc_nr_id, to_char(marked_at, 'YYYY-MM-DD HH24:MI:SS') as marked_at
+    `, [pId, normClass, cleanReason || null]);
+
+    const ocnrRecord = result.rows[0];
+
+    // Determine assigned staff user for the 14-day reactivation task (Rule 16: receptionist or pro_manager)
+    let assignedUserId = req.user.user_id;
+    if (req.user.role === 'executive') {
+      const staffRes = await db.query(
+        `SELECT user_id FROM users WHERE branch_id = $1 AND role IN ('receptionist', 'pro_manager') AND is_active = true LIMIT 1`,
+        [branchId]
+      );
+      if (staffRes.rows.length > 0) {
+        assignedUserId = staffRes.rows[0].user_id;
+      }
+    }
+
+    // Automatically trigger 14-day reactivation CRM task
+    const reactivationDueDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const reactivationRemarks = `Automated 14-day reactivation task for ${normClass.toUpperCase()} dropout (${cleanReason || 'No reason provided'}) - ${ptCheck.rows[0].full_name || 'Patient #' + pId}`;
+
+    await db.query(`
+      INSERT INTO crm_followups (
+        patient_id, category, due_date, assigned_to, status, remarks, branch_id
+      ) VALUES ($1, 'ocnr', $2, $3, 'pending', $4, $5)
+    `, [pId, reactivationDueDate, assignedUserId, reactivationRemarks, branchId]);
+
+    res.locals.auditEntry = { module: 'CRM Management', action: 'Mark OC/NR Patient', recordId: ocnrRecord.id, newValue: ocnrRecord };
+    return res.status(201).json(formatResponse(true, ocnrRecord, `Patient marked as ${normClass.toUpperCase()} successfully and 14-day reactivation task scheduled`));
   } catch (err) {
     console.error('markOcNrPatient error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -216,7 +380,9 @@ async function createReferral(req, res) {
 module.exports = {
   getFollowups,
   createFollowup,
+  getAcqPatients,
   createAcqPatient,
+  getOcNrPatients,
   markOcNrPatient,
   createReferral
 };

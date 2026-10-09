@@ -570,7 +570,7 @@ async function registerPatient(req, res) {
     }
     if (numericMobile.length !== 10) {
       await client.query('ROLLBACK');
-      return res.status(400).json(formatResponse(false, null, 'Mobile number must be a valid 10-digit number'));
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
     }
 
     let parsedAge = null;
@@ -1008,7 +1008,7 @@ async function updatePatient(req, res) {
       }
       if (numericMobile.length !== 10) {
         await client.query('ROLLBACK');
-        return res.status(400).json(formatResponse(false, null, 'Mobile number must be a valid 10-digit number'));
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
       }
 
       // Check duplicate mobile for other patients
@@ -1150,7 +1150,7 @@ async function createEnquiry(req, res) {
     }
 
     if (!trimmedMobile || !/^[0-9]{10}$/.test(trimmedMobile)) {
-      return res.status(400).json(formatResponse(false, null, 'Valid 10-digit mobile number is required'));
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
     }
 
     const branchId = req.user.branch_id || 1;
@@ -1289,8 +1289,14 @@ async function createEmployeeReferral(req, res) {
 
     // Find or create patient
     let ptId = null;
-    const cleanMobile = mobile_number.toString().trim();
-    const ptCheck = await client.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [cleanMobile]);
+    const cleanMobile = mobile_number ? mobile_number.toString().trim() : '';
+    let numericMobile = cleanMobile.replace(/\D/g, '');
+    if (numericMobile.length === 12 && numericMobile.startsWith('91')) numericMobile = numericMobile.slice(2);
+    if (!/^[0-9]{10}$/.test(numericMobile)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
+    const ptCheck = await client.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [numericMobile]);
     if (ptCheck.rows.length > 0) {
       ptId = ptCheck.rows[0].patient_id;
     } else {
@@ -1471,8 +1477,14 @@ async function createPatientReferral(req, res) {
 
     // Find or create patient
     let ptId = null;
-    const cleanMobile = mobile_number.toString().trim();
-    const ptCheck = await client.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [cleanMobile]);
+    const cleanMobile = mobile_number ? mobile_number.toString().trim() : '';
+    let numericMobile = cleanMobile.replace(/\D/g, '');
+    if (numericMobile.length === 12 && numericMobile.startsWith('91')) numericMobile = numericMobile.slice(2);
+    if (!/^[0-9]{10}$/.test(numericMobile)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
+    const ptCheck = await client.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [numericMobile]);
     if (ptCheck.rows.length > 0) {
       ptId = ptCheck.rows[0].patient_id;
     } else {

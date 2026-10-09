@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, isValidMobile } = require('../utils/helpers');
 
 // Helper to resolve executive_id for current user
 async function resolveExecutiveId(userId, branchId) {
@@ -189,6 +189,11 @@ async function createLead(req, res) {
       return res.status(400).json(formatResponse(false, null, 'lead_name and mobile_number are required'));
     }
 
+    const cleanLeadMobile = String(mobile_number).trim();
+    if (!isValidMobile(cleanLeadMobile)) {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
+
     const branchId = req.user.branch_id || 1;
     const execInfo = await resolveExecutiveId(req.user.user_id, branchId);
     const execId = execInfo ? execInfo.executive_id : null;
@@ -197,7 +202,7 @@ async function createLead(req, res) {
     const finalRemarks = remarks ? remarks.trim() : null;
 
     // Link to patient if existing
-    const patRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [mobile_number]);
+    const patRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [cleanLeadMobile]);
     const patientId = patRes.rows.length > 0 ? patRes.rows[0].patient_id : null;
 
     const result = await db.query(`
@@ -208,7 +213,7 @@ async function createLead(req, res) {
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14, $15)
       RETURNING *
     `, [
-      patientId, lead_name, mobile_number, age || null, gender || null, village || null, mandal || null,
+      patientId, lead_name, cleanLeadMobile, age || null, gender || null, village || null, mandal || null,
       source || (sourceTag === 'outbound' ? 'Outbound Excel' : 'Inbound Call'), campaign || null,
       req.user.user_id, execId, sourceTag, branchId, finalRequirement, finalRemarks
     ]);
@@ -249,6 +254,12 @@ async function createLead(req, res) {
 
   } catch (err) {
     console.error('createLead error:', err);
+    if (err.code === '23505') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -360,9 +371,9 @@ async function importOutboundLeads(req, res) {
         continue;
       }
 
-      if (!mobile || mobile.length < 10) {
+      if (!mobile || !isValidMobile(mobile)) {
         failedCount++;
-        rowErrors.push(`Row ${rowNum}: Mobile number is required and must be at least 10 digits`);
+        rowErrors.push(`Row ${rowNum}: Mobile number is required and must be exactly 10 digits`);
         continue;
       }
 
@@ -584,6 +595,13 @@ async function recordCallOutcome(req, res) {
       return res.status(400).json(formatResponse(false, null, 'call_status is required'));
     }
 
+    if (mobile_number) {
+      const cleanCallMobile = String(mobile_number).trim();
+      if (!isValidMobile(cleanCallMobile)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+      }
+    }
+
     const branchId = req.user.branch_id || 1;
     const execInfo = await resolveExecutiveId(req.user.user_id, branchId);
     const execId = execInfo ? execInfo.executive_id : null;
@@ -707,6 +725,9 @@ async function recordCallOutcome(req, res) {
 
   } catch (err) {
     console.error('recordCallOutcome error:', err);
+    if (err.code === '23505' || err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -943,7 +964,14 @@ async function updateLead(req, res) {
 
     const current = leadCheck.rows[0];
     const newName = lead_name !== undefined && lead_name !== null ? lead_name.trim() : current.lead_name;
-    const newMobile = mobile_number !== undefined && mobile_number !== null ? mobile_number.replace(/\D/g, '') : current.mobile_number;
+    let newMobile = current.mobile_number;
+    if (mobile_number !== undefined && mobile_number !== null) {
+      const cleanMob = String(mobile_number).trim().replace(/\D/g, '');
+      if (!isValidMobile(cleanMob)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+      }
+      newMobile = cleanMob;
+    }
     const newAge = age !== undefined ? (age ? parseInt(age) : null) : current.age;
     const newGender = gender !== undefined ? gender : current.gender;
     const newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
@@ -987,6 +1015,12 @@ async function updateLead(req, res) {
     return res.json(formatResponse(true, updatedLead, 'Lead record updated successfully'));
   } catch (err) {
     console.error('updateLead error:', err);
+    if (err.code === '23505') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
@@ -1012,7 +1046,14 @@ async function updateOutboundLead(req, res) {
 
     const current = leadCheck.rows[0];
     const newName = patient_name !== undefined && patient_name !== null ? patient_name.trim() : current.patient_name;
-    const newMobile = mobile_number !== undefined && mobile_number !== null ? mobile_number.replace(/\D/g, '') : current.mobile_number;
+    let newMobile = current.mobile_number;
+    if (mobile_number !== undefined && mobile_number !== null) {
+      const cleanMob = String(mobile_number).trim().replace(/\D/g, '');
+      if (!isValidMobile(cleanMob)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+      }
+      newMobile = cleanMob;
+    }
     let newGender = current.gender;
     if (gender !== undefined && gender !== null) {
       const g = gender.toString().toLowerCase().trim();
@@ -1064,6 +1105,9 @@ async function updateOutboundLead(req, res) {
     return res.json(formatResponse(true, updated, 'Outbound lead updated successfully'));
   } catch (err) {
     console.error('updateOutboundLead error:', err);
+    if (err.code === '23505' || err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }

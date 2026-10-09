@@ -1,6 +1,6 @@
 const db = require('../db');
 const bcrypt = require('bcryptjs');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, isValidMobile } = require('../utils/helpers');
 
 async function getUsers(req, res) {
   try {
@@ -121,6 +121,11 @@ async function createUser(req, res) {
     if (!employee_id || !full_name || !mobile_number || !username || !password || !role) {
       await client.query('ROLLBACK');
       return res.status(400).json(formatResponse(false, null, 'Employee ID, Full Name, Mobile, Username, Password, and Role are required'));
+    }
+
+    if (!isValidMobile(mobile_number)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
     }
 
     const passHash = await bcrypt.hash(password, 10);
@@ -247,7 +252,20 @@ async function createUser(req, res) {
     await client.query('ROLLBACK');
     console.error('createUser error:', err);
     if (err.code === '23505') {
+      const detail = err.detail || '';
+      if (detail.includes('mobile_number') || err.message?.includes('mobile_number')) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+      }
+      if (detail.includes('username') || err.message?.includes('username')) {
+        return res.status(400).json(formatResponse(false, null, 'Username already exists'));
+      }
+      if (detail.includes('employee_id') || err.message?.includes('employee_id')) {
+        return res.status(400).json(formatResponse(false, null, 'Employee ID already exists'));
+      }
       return res.status(400).json(formatResponse(false, null, 'Username, Employee ID, or Mobile number already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number or text field exceeds maximum allowed character length'));
     }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   } finally {
@@ -259,6 +277,12 @@ async function updateUser(req, res) {
   try {
     const userId = parseInt(req.params.id);
     const { full_name, mobile_number, email, gender, department, designation, reporting_manager_id, status } = req.body;
+
+    if (mobile_number !== undefined && mobile_number !== null && String(mobile_number).trim() !== '') {
+      if (!isValidMobile(mobile_number)) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number must be exactly 10 digits'));
+      }
+    }
 
     const oldUserRes = await db.query(`SELECT * FROM users WHERE user_id = $1`, [userId]);
     if (oldUserRes.rows.length === 0) {
@@ -378,6 +402,16 @@ async function updateUser(req, res) {
     return res.json(formatResponse(true, null, 'User updated successfully'));
   } catch (err) {
     console.error('updateUser error:', err);
+    if (err.code === '23505') {
+      const detail = err.detail || '';
+      if (detail.includes('mobile_number') || err.message?.includes('mobile_number')) {
+        return res.status(400).json(formatResponse(false, null, 'Mobile number already exists'));
+      }
+      return res.status(400).json(formatResponse(false, null, 'Record with this identifier already exists'));
+    }
+    if (err.code === '22001') {
+      return res.status(400).json(formatResponse(false, null, 'Input value exceeds maximum allowed character length'));
+    }
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
