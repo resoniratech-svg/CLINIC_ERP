@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
+import { AutocompleteSearch } from '../../components/common/AutocompleteSearch';
 import { useToast } from '../../context/ToastContext';
 import { formatDisplayDate } from '../../utils/dateUtils';
 import {
@@ -452,57 +453,17 @@ export const ReceptionistCrmPage = () => {
             </label>
 
             {!selectedPatient ? (
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={searchPtTerm}
-                    onChange={(e) => setSearchPtTerm(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        handleSearchPatient();
-                      }
-                    }}
-                    placeholder="Search by Mobile, Registration ID, or Name..."
-                    className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-red-300 bg-white focus:ring-2 focus:ring-red-500 focus:outline-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSearchPatient}
-                    disabled={searchingPt}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 active:bg-red-800 text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shrink-0"
-                  >
-                    {searchingPt ? 'Finding...' : 'Find'}
-                  </button>
-                </div>
-
-                {/* Multiple search results picker */}
-                {searchResults.length > 0 && (
-                  <div className="bg-white rounded-xl border border-red-200 divide-y divide-slate-100 max-h-40 overflow-y-auto">
-                    {searchResults.map((pt) => (
-                      <div
-                        key={pt.patient_id}
-                        onClick={() => {
-                          setSelectedPatient(pt);
-                          setSearchResults([]);
-                        }}
-                        className="p-2.5 hover:bg-red-50/60 cursor-pointer flex justify-between items-center transition-colors text-xs"
-                      >
-                        <div>
-                          <span className="font-bold text-slate-900">{pt.full_name || pt.patient_name}</span>
-                          <span className="text-[11px] text-slate-500 font-mono block">
-                            {pt.registration_id} • {pt.mobile_number}
-                          </span>
-                        </div>
-                        <span className="px-2 py-0.5 bg-red-100 text-red-800 text-[10px] font-bold rounded">
-                          Select
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <AutocompleteSearch
+                searchFn={(term, signal) => receptionistApi.searchPatients({ search: term })}
+                onSelect={(pt) => {
+                  setSelectedPatient(pt);
+                  setSearchResults([]);
+                  setSearchPtTerm('');
+                }}
+                placeholder="Search by Mobile, Registration ID, or Name..."
+                findButtonColor="bg-red-600 hover:bg-red-700 active:bg-red-800 text-white"
+                inputClassName="border-red-300 focus:ring-red-500 rounded-xl"
+              />
             ) : (
               <div className="p-3 bg-white rounded-xl border border-red-200 text-xs flex justify-between items-center shadow-2xs">
                 <div>
@@ -518,6 +479,7 @@ export const ReceptionistCrmPage = () => {
                   onClick={() => {
                     setSelectedPatient(null);
                     setSearchResults([]);
+                    setSearchPtTerm('');
                   }}
                   className="px-2.5 py-1 text-[11px] font-bold text-red-700 bg-red-50 hover:bg-red-100 rounded-lg transition-colors cursor-pointer border border-red-200"
                 >

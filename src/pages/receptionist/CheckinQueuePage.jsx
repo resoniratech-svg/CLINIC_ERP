@@ -4,6 +4,7 @@ import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
 import { useToast } from '../../context/ToastContext';
+import { PatientInvoiceReceiptModal } from './PatientInvoiceReceiptModal';
 import {
   UserCheck,
   Clock,
@@ -16,7 +17,8 @@ import {
   Calendar,
   Filter,
   Sparkles,
-  X
+  X,
+  FileText
 } from 'lucide-react';
 
 export const CheckinQueuePage = () => {
@@ -27,6 +29,7 @@ export const CheckinQueuePage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDoctor, setSelectedDoctor] = useState(location.state?.doctorName || 'ALL');
   const [highlightedAppointmentId, setHighlightedAppointmentId] = useState(location.state?.appointmentId || null);
+  const [selectedInvoicePatient, setSelectedInvoicePatient] = useState(null);
   const { showToast } = useToast();
 
   // Sync state if navigation location changes
@@ -264,6 +267,14 @@ export const CheckinQueuePage = () => {
                         <span className="text-[11px] text-slate-500 block">
                           Slot: {item.appointment_time?.slice(0, 5)} hrs • <span className="capitalize">{item.appointment_type}</span>
                         </span>
+                        <button
+                          onClick={() => setSelectedInvoicePatient(item)}
+                          className="mt-1 px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer ml-auto"
+                          title="View & Print Consultation Invoice Receipt"
+                        >
+                          <FileText className="w-3 h-3 text-blue-600" />
+                          <span>Invoice</span>
+                        </button>
                       </div>
                     </div>
                   );
@@ -314,6 +325,14 @@ export const CheckinQueuePage = () => {
           </div>
         </div>
       </div>
+
+      {/* Patient Consultation Invoice & Cash Memo Modal */}
+      <PatientInvoiceReceiptModal
+        isOpen={!!selectedInvoicePatient}
+        onClose={() => setSelectedInvoicePatient(null)}
+        patient={selectedInvoicePatient}
+        patientId={selectedInvoicePatient?.patient_id}
+      />
     </div>
   );
 };

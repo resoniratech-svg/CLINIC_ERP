@@ -198,24 +198,30 @@ export const ExecutiveDashboard = () => {
         </div>
 
         {/* Interested */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs space-y-1">
+        <Link
+          to="/executive/leads/interested"
+          className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs space-y-1 hover:border-emerald-300 hover:shadow-xs transition block cursor-pointer"
+        >
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-bold uppercase tracking-wider">Interested</span>
             <HeartHandshake className="w-3.5 h-3.5 text-emerald-600" />
           </div>
           <div className="text-xl font-bold text-emerald-600 font-mono">{data?.interested || 0}</div>
-          <span className="text-[10px] text-slate-400 block">Converted to Lead</span>
-        </div>
+          <span className="text-[10px] text-slate-400 block">Interested Leads</span>
+        </Link>
 
         {/* Not Interested */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs space-y-1">
+        <Link
+          to="/executive/leads/not-interested"
+          className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs space-y-1 hover:border-rose-300 hover:shadow-xs transition block cursor-pointer"
+        >
           <div className="flex items-center justify-between text-slate-400">
             <span className="text-[10px] font-bold uppercase tracking-wider">Not Interested</span>
             <UserX className="w-3.5 h-3.5 text-red-500" />
           </div>
           <div className="text-xl font-bold text-slate-600 font-mono">{data?.not_interested || 0}</div>
-          <span className="text-[10px] text-slate-400 block">Archived Calls</span>
-        </div>
+          <span className="text-[10px] text-slate-400 block">Not Interested Leads</span>
+        </Link>
 
         {/* Appointments Converted */}
         <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-2xs space-y-1">

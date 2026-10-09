@@ -1,13 +1,15 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { Receipt, DollarSign, Search, Filter, Printer, CheckCircle2, AlertCircle } from 'lucide-react';
+import { PatientInvoiceReceiptModal } from './PatientInvoiceReceiptModal';
+import { Receipt, DollarSign, Search, Filter, Printer, CheckCircle2, AlertCircle, FileText } from 'lucide-react';
 
 export const ConsultationBillingPage = () => {
   const [bills, setBills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedInvoiceTarget, setSelectedInvoiceTarget] = useState(null);
   const { showToast } = useToast();
 
   const fetchBills = async () => {
@@ -92,6 +94,7 @@ export const ConsultationBillingPage = () => {
                   <th className="py-3.5 px-4">Final Payable</th>
                   <th className="py-3.5 px-4">Status</th>
                   <th className="py-3.5 px-4">Date</th>
+                  <th className="py-3.5 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
@@ -131,6 +134,17 @@ export const ConsultationBillingPage = () => {
                     <td className="py-3.5 px-4 text-slate-500 font-mono text-[11px]">
                       {b.created_at ? new Date(b.created_at).toLocaleDateString() : 'Today'}
                     </td>
+
+                    <td className="py-3.5 px-4 text-right">
+                      <button
+                        onClick={() => setSelectedInvoiceTarget({ patientId: b.patient_id, billId: b.bill_id || b.bill_number })}
+                        className="px-2.5 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-2xs inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                        title="View & Print Consultation Invoice Receipt"
+                      >
+                        <FileText className="w-3 h-3 text-blue-600" />
+                        <span>Invoice</span>
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -138,6 +152,14 @@ export const ConsultationBillingPage = () => {
           </div>
         )}
       </div>
+
+      {/* Patient Consultation Invoice & Cash Memo Modal */}
+      <PatientInvoiceReceiptModal
+        isOpen={!!selectedInvoiceTarget}
+        onClose={() => setSelectedInvoiceTarget(null)}
+        patientId={selectedInvoiceTarget?.patientId}
+        targetInvoiceId={selectedInvoiceTarget?.billId}
+      />
     </div>
   );
 };

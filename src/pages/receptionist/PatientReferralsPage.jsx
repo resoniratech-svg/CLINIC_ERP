@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
+import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
 import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { useToast } from '../../context/ToastContext';
 import { HeartHandshake, Plus, Search, CheckCircle2, UserPlus, Users, ChevronDown, X } from 'lucide-react';
@@ -15,12 +16,7 @@ export const PatientReferralsPage = () => {
   const [submitting, setSubmitting] = useState(false);
 
   // Referring patient search state
-  const [allPatients, setAllPatients] = useState([]);
-  const [searchPtTerm, setSearchPtTerm] = useState('');
   const [selectedReferringPt, setSelectedReferringPt] = useState(null);
-  const [isPtDropdownOpen, setIsPtDropdownOpen] = useState(false);
-  const ptDropdownRef = useRef(null);
-  const [searchingPt, setSearchingPt] = useState(false);
 
   const [formData, setFormData] = useState({
     patient_name: '',
@@ -37,16 +33,8 @@ export const PatientReferralsPage = () => {
   const fetchPrerequisites = async () => {
     setLoading(true);
     try {
-      const [refRes, ptRes] = await Promise.all([
-        receptionistApi.getPatientReferrals(),
-        receptionistApi.searchPatients({ search: '%' }).catch(() => ({ data: [] })),
-      ]);
-
+      const refRes = await receptionistApi.getPatientReferrals();
       if (refRes.success) setReferrals(refRes.data || []);
-      if (ptRes.success) {
-        const list = ptRes.data?.patients || (Array.isArray(ptRes.data) ? ptRes.data : []);
-        setAllPatients(list);
-      }
     } catch (err) {
       showToast(err.message || 'Failed to load patient referrals', 'error');
     } finally {
@@ -57,49 +45,6 @@ export const PatientReferralsPage = () => {
   useEffect(() => {
     fetchPrerequisites();
   }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (ptDropdownRef.current && !ptDropdownRef.current.contains(event.target)) {
-        setIsPtDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const filteredPatients = allPatients.filter((p) => {
-    if (!searchPtTerm.trim()) return false;
-    const q = searchPtTerm.toLowerCase();
-    const name = (p.full_name || p.patient_name || '').toLowerCase();
-    const mobile = (p.mobile_number || '').toLowerCase();
-    const regId = (p.registration_id || '').toLowerCase();
-    const id = String(p.patient_id || '');
-    return name.includes(q) || mobile.includes(q) || regId.includes(q) || id.includes(q);
-  });
-
-  const handleSearchReferringPatient = async () => {
-    if (!searchPtTerm.trim()) {
-      showToast('Enter mobile number or registration ID', 'warning');
-      return;
-    }
-    setSearchingPt(true);
-    try {
-      const res = await receptionistApi.searchPatients({ search: searchPtTerm.trim() });
-      if (res.success && res.data?.patients?.length > 0) {
-        const found = res.data.patients[0];
-        setSelectedReferringPt(found);
-        setIsPtDropdownOpen(false);
-        showToast(`Found referring patient: ${found.full_name || found.patient_name}`, 'info');
-      } else {
-        showToast('No registered patient found with that term', 'warning');
-      }
-    } catch (e) {
-      showToast(e.message || 'Search failed', 'error');
-    } finally {
-      setSearchingPt(false);
-    }
-  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -253,106 +198,34 @@ export const PatientReferralsPage = () => {
       >
         <form onSubmit={handleSubmit} className="space-y-4 text-xs text-slate-700">
           {/* Search Existing Referrer */}
-          <div className="p-3 bg-indigo-50/60 rounded-2xl border border-indigo-200 space-y-2 relative" ref={ptDropdownRef}>
+          <div className="p-3 bg-indigo-50/60 rounded-2xl border border-indigo-200 space-y-2">
             <label className="block text-[11px] font-bold text-indigo-900 uppercase tracking-wider">
               1. Search Existing Referring Patient *
             </label>
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                required
-                value={
-                  isPtDropdownOpen
-                    ? searchPtTerm
-                    : selectedReferringPt
-                    ? `${selectedReferringPt.full_name || selectedReferringPt.patient_name} (${selectedReferringPt.registration_id || `#${selectedReferringPt.patient_id}`} • ${selectedReferringPt.mobile_number})`
-                    : searchPtTerm
-                }
-                onFocus={() => {
-                  setIsPtDropdownOpen(true);
-                  if (selectedReferringPt) {
-                    setSearchPtTerm(selectedReferringPt.full_name || selectedReferringPt.patient_name || '');
-                  }
-                }}
-                onChange={(e) => {
-                  setSearchPtTerm(e.target.value);
-                  setIsPtDropdownOpen(true);
-                  if (!e.target.value) setSelectedReferringPt(null);
-                }}
-                placeholder="Search patient by name, mobile, or Reg ID..."
-                className={`w-full pl-9 pr-8 py-2 text-xs rounded-xl border ${
-                  selectedReferringPt ? 'border-indigo-500 bg-indigo-50/30 font-bold text-slate-900' : 'border-indigo-300 bg-white'
-                } focus:ring-2 focus:ring-indigo-500 focus:outline-none transition-all`}
-              />
-
-              {selectedReferringPt ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedReferringPt(null);
-                    setSearchPtTerm('');
-                    setIsPtDropdownOpen(true);
-                  }}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsPtDropdownOpen(!isPtDropdownOpen)}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-                >
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Floating Dropdown */}
-            {isPtDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-52 overflow-y-auto z-50 divide-y divide-slate-100">
-                {filteredPatients.length === 0 ? (
-                  <div className="p-3 text-center text-slate-400 text-xs">
-                    {searchPtTerm ? `No patients found matching "${searchPtTerm}"` : 'Type to search registered patients'}
+            <AutocompleteSearch
+              searchFn={(term) => receptionistApi.searchPatients({ search: term })}
+              onSelect={(p) => setSelectedReferringPt(p)}
+              selectedItem={selectedReferringPt}
+              onClear={() => setSelectedReferringPt(null)}
+              placeholder="Search patient by name, mobile, or Reg ID..."
+              findButtonColor="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white"
+              inputClassName="border-indigo-300 focus:ring-indigo-500 rounded-xl"
+              renderItem={(p, { isSelected, query }) => (
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <HighlightMatch text={p.full_name || p.patient_name || 'Patient'} query={query} />
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
+                        <HighlightMatch text={p.registration_id || `#${p.patient_id}`} query={query} />
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                      <HighlightMatch text={p.mobile_number} query={query} /> • {p.village || p.village_mandal || 'Hyderabad'}
+                    </div>
                   </div>
-                ) : (
-                  filteredPatients.map((p) => {
-                    const isSelected = selectedReferringPt && String(p.patient_id) === String(selectedReferringPt.patient_id);
-                    const name = p.full_name || p.patient_name || 'Patient';
-                    return (
-                      <div
-                        key={p.patient_id}
-                        onClick={() => {
-                          setSelectedReferringPt(p);
-                          setSearchPtTerm(name);
-                          setIsPtDropdownOpen(false);
-                        }}
-                        className={`p-2.5 hover:bg-indigo-50/80 cursor-pointer transition-colors flex items-center justify-between text-xs ${
-                          isSelected ? 'bg-indigo-50 font-bold text-indigo-900' : 'text-slate-700'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                            <span>{name}</span>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
-                              {p.registration_id || `#${p.patient_id}`}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                            {p.mobile_number} • {p.village || p.village_mandal || 'Hyderabad'}
-                          </div>
-                        </div>
-
-                        {isSelected && (
-                          <span className="text-indigo-600 text-xs font-bold">✓</span>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            />
           </div>
 
           {/* New Patient Details */}

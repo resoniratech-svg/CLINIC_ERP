@@ -39,7 +39,8 @@ export const DoctorsListPage = () => {
     (d) =>
       d.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       d.specialization?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      d.doctor_code?.toLowerCase().includes(searchTerm.toLowerCase())
+      d.doctor_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.employee_id?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (

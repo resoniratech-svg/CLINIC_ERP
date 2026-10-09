@@ -13,7 +13,8 @@ import {
   ShieldCheck,
   Users,
   HeartHandshake,
-  Calendar
+  Calendar,
+  UserPlus
 } from 'lucide-react';
 
 const InvoiceReceiptCard = ({
@@ -161,13 +162,19 @@ const InvoiceReceiptCard = ({
               <Calendar className="w-3 h-3 text-slate-400" />
               <span className="text-slate-500">Scheduled:</span>{' '}
               <span className="font-bold text-slate-900">
-                {currentInvoice?.appointment_date
-                  ? new Date(currentInvoice.appointment_date).toLocaleDateString('en-IN', {
-                      day: '2-digit',
-                      month: 'short',
-                      year: 'numeric'
-                    })
-                  : '—'}
+                {(() => {
+                  const dVal = currentInvoice?.appointment_date;
+                  if (!dVal) return '—';
+                  if (typeof dVal === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dVal)) {
+                    const [y, m, d] = dVal.slice(0, 10).split('-');
+                    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                    return `${d} ${months[parseInt(m, 10) - 1]} ${y}`;
+                  }
+                  const dt = new Date(dVal);
+                  return isNaN(dt.getTime())
+                    ? '—'
+                    : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+                })()}
               </span>
               {currentInvoice?.appointment_time && (
                 <span className="text-slate-600 font-mono">
@@ -311,8 +318,18 @@ const InvoiceReceiptCard = ({
   );
 };
 
-export const PatientInvoiceReceiptModal = ({ isOpen, onClose, patient, patientId }) => {
+export const PatientInvoiceReceiptModal = ({
+  isOpen,
+  onClose,
+  patient,
+  patientId,
+  targetInvoiceId,
+  successBanner,
+  onRegisterAnother,
+  onGoToQueue
+}) => {
   const [loading, setLoading] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
   const [invoiceData, setInvoiceData] = useState(null);
   const [selectedInvoiceIndex, setSelectedInvoiceIndex] = useState(0);
   const { showToast } = useToast();
@@ -325,19 +342,37 @@ export const PatientInvoiceReceiptModal = ({ isOpen, onClose, patient, patientId
     } else {
       setInvoiceData(null);
       setSelectedInvoiceIndex(0);
+      setFetchError(null);
     }
   }, [isOpen, targetId]);
 
   const fetchInvoices = async () => {
     setLoading(true);
+    setFetchError(null);
     try {
-      const res = await receptionistApi.getPatientInvoices(targetId);
+      const res = await receptionistApi.getPatientInvoices(
+        targetId,
+        targetInvoiceId ? { invoice_id: targetInvoiceId } : undefined
+      );
       if (res.success && res.data) {
         setInvoiceData(res.data);
+        if (targetInvoiceId && Array.isArray(res.data.invoices)) {
+          const idx = res.data.invoices.findIndex(
+            (inv) =>
+              inv.bill_id === targetInvoiceId ||
+              inv.bill_number === targetInvoiceId ||
+              String(inv.bill_id) === String(targetInvoiceId)
+          );
+          if (idx !== -1) {
+            setSelectedInvoiceIndex(idx);
+          }
+        }
       } else {
+        setFetchError('Failed to load patient invoices');
         showToast('Failed to load patient invoices', 'error');
       }
     } catch (err) {
+      setFetchError(err.message || 'Failed to fetch invoice details');
       showToast(err.message || 'Failed to fetch invoice details', 'error');
     } finally {
       setLoading(false);
@@ -402,6 +437,48 @@ export const PatientInvoiceReceiptModal = ({ isOpen, onClose, patient, patientId
           <div className="py-12">
             <LoadingSpinner label="Generating official invoice receipt..." />
           </div>
+        ) : fetchError ? (
+          <div className="p-8 text-center text-slate-600 text-xs space-y-3">
+            <AlertCircle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
+            <p className="font-semibold text-slate-800">{fetchError}</p>
+            <p className="text-[11px] text-slate-500">
+              The patient registration is completed and saved, but the invoice could not be loaded from the server.
+            </p>
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={fetchInvoices}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Retry Loading Invoice
+              </button>
+              {onRegisterAnother && (
+                <button
+                  type="button"
+                  onClick={onRegisterAnother}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Register Another Patient
+                </button>
+              )}
+              {onGoToQueue && (
+                <button
+                  type="button"
+                  onClick={onGoToQueue}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Go to Waiting Queue
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
         ) : !currentInvoice && !currentPatient ? (
           <div className="p-8 text-center text-slate-500 text-xs">
             <AlertCircle className="w-8 h-8 text-amber-500 mx-auto mb-2" />
@@ -409,6 +486,14 @@ export const PatientInvoiceReceiptModal = ({ isOpen, onClose, patient, patientId
           </div>
         ) : (
           <div className="space-y-4 text-xs text-slate-800">
+            {/* Success Banner if provided */}
+            {successBanner && (
+              <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center gap-2.5 text-emerald-800 text-xs font-semibold print:hidden">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{successBanner}</span>
+              </div>
+            )}
+
             {/* Invoice Version Selector if patient has multiple bills */}
             {invoices.length > 1 && (
               <div className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200 overflow-x-auto print:hidden">
@@ -437,20 +522,12 @@ export const PatientInvoiceReceiptModal = ({ isOpen, onClose, patient, patientId
             </div>
 
             {/* Modal Action Buttons */}
-            <div className="flex items-center justify-between pt-2 print:hidden border-t border-slate-100">
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 print:hidden border-t border-slate-100">
               <span className="text-[11px] text-slate-400">
                 Click print to output receipt on 80mm slip or A4 page.
               </span>
 
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Close
-                </button>
-
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={handlePrint}
@@ -458,6 +535,35 @@ export const PatientInvoiceReceiptModal = ({ isOpen, onClose, patient, patientId
                 >
                   <Printer className="w-4 h-4" />
                   <span>Print Invoice</span>
+                </button>
+
+                {onRegisterAnother && (
+                  <button
+                    type="button"
+                    onClick={onRegisterAnother}
+                    className="px-4 py-2 border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <UserPlus className="w-3.5 h-3.5" />
+                    <span>Register Another Patient</span>
+                  </button>
+                )}
+
+                {onGoToQueue && (
+                  <button
+                    type="button"
+                    onClick={onGoToQueue}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Go to Waiting Queue
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Close
                 </button>
               </div>
             </div>

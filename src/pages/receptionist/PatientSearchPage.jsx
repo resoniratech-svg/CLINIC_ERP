@@ -88,6 +88,34 @@ export const PatientSearchPage = () => {
     loadInitial();
   }, []);
 
+  // Live debounced search on keystroke
+  useEffect(() => {
+    if (!searchTerm.trim()) {
+      if (hasSearched) {
+        loadInitial();
+        setHasSearched(false);
+      }
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setHasSearched(true);
+      try {
+        const res = await receptionistApi.searchPatients({ search: searchTerm.trim() });
+        if (res.success) {
+          setPatients(res.data?.patients || []);
+        }
+      } catch (err) {
+        // silent error during live search
+      } finally {
+        setLoading(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}

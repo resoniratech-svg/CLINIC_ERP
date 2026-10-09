@@ -95,7 +95,7 @@ export const CreateCouponModal = ({ isOpen, onClose, onCouponCreated }) => {
 
   // Debounced search for Referring Patient
   useEffect(() => {
-    if (!refSearch.trim() || refSearch.length < 2) {
+    if (!refSearch.trim()) {
       setRefResults([]);
       setShowRefDropdown(false);
       return;
@@ -121,7 +121,7 @@ export const CreateCouponModal = ({ isOpen, onClose, onCouponCreated }) => {
 
   // Debounced search for Referred Patient
   useEffect(() => {
-    if (!tgtSearch.trim() || tgtSearch.length < 2) {
+    if (!tgtSearch.trim()) {
       setTgtResults([]);
       setShowTgtDropdown(false);
       return;

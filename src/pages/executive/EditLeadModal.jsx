@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '../../components/common/Modal';
 import { AilmentSelect } from '../../components/common/AilmentSelect';
+import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { executiveApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -217,15 +218,20 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
         {/* Location: Village & Mandal */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
-            <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Village / Locality
-            </label>
-            <input
-              type="text"
+            <VillageMandalSelect
+              label="Village / Locality"
+              labelClassName="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1"
+              placeholder="e.g. Gandhi Nagar or type new"
               value={formData.village}
-              onChange={(e) => setFormData({ ...formData, village: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="e.g. Gandhi Nagar"
+              onChange={(val) => setFormData({ ...formData, village: val })}
+              onSelect={({ village, mandal }) => {
+                setFormData(prev => ({
+                  ...prev,
+                  village: village || prev.village,
+                  mandal: mandal || prev.mandal
+                }));
+              }}
+              inputClassName="bg-slate-50 border border-slate-300 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 

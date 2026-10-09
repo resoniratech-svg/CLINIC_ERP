@@ -3,6 +3,7 @@ import { pharmacyApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
 import { Modal } from '../../components/common/Modal';
+import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
 import { useToast } from '../../context/ToastContext';
 import {
   RotateCcw,
@@ -449,48 +450,36 @@ export const MedicineReturnsPage = () => {
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
               Patient *
             </label>
-            <div className="relative">
-              <input
-                type="text"
-                value={patientSearchTerm}
-                onChange={(e) => searchPatients(e.target.value)}
-                placeholder="Search patient by name, mobile, or enter Patient ID..."
-                className="w-full bg-white border border-slate-200 text-slate-800 text-xs rounded-xl p-2.5 font-medium focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
-                required
-              />
-              {patientSearching && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  <LoadingSpinner size="xs" />
+            <AutocompleteSearch
+              searchFn={(term) => pharmacyApi.searchPatients({ search: term })}
+              onSelect={(p) => {
+                setSelectedPatient(p);
+                setFormData((prev) => ({ ...prev, patient_id: p.patient_id }));
+              }}
+              selectedItem={selectedPatient}
+              onClear={() => {
+                setSelectedPatient(null);
+                setFormData((prev) => ({ ...prev, patient_id: '' }));
+              }}
+              placeholder="Search patient by name, mobile, or enter Patient ID..."
+              findButtonColor="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white"
+              inputClassName="border-slate-200 focus:ring-blue-500 rounded-xl"
+              renderItem={(p, { isSelected, query }) => (
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <span className="font-bold text-slate-800">
+                      <HighlightMatch text={p.full_name} query={query} />
+                    </span>
+                    <span className="text-slate-400 text-2xs ml-2">
+                      (<HighlightMatch text={p.registration_id || `#${p.patient_id}`} query={query} />)
+                    </span>
+                  </div>
+                  <span className="text-2xs text-slate-500 font-mono">
+                    <HighlightMatch text={p.mobile_number || p.mobile || ''} query={query} />
+                  </span>
                 </div>
               )}
-            </div>
-
-            {/* Patient Search Results Dropdown */}
-            {patientSearchResults.length > 0 && (
-              <div className="absolute z-20 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto divide-y divide-slate-100">
-                {patientSearchResults.map((p) => (
-                  <button
-                    key={p.patient_id}
-                    type="button"
-                    onClick={() => handleSelectPatient(p)}
-                    className="w-full text-left px-3 py-2 text-xs hover:bg-blue-50 transition flex items-center justify-between"
-                  >
-                    <div>
-                      <span className="font-bold text-slate-800">{p.full_name}</span>
-                      <span className="text-slate-400 text-2xs ml-2">({p.registration_id || `#${p.patient_id}`})</span>
-                    </div>
-                    <span className="text-2xs text-slate-500 font-mono">{p.mobile || ''}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {/* Direct numeric fallback if typing ID */}
-            {!selectedPatient && patientSearchTerm && !isNaN(Number(patientSearchTerm.trim())) && (
-              <div className="mt-1 text-2xs text-blue-600 flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3" /> Using Patient ID #{patientSearchTerm.trim()}
-              </div>
-            )}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

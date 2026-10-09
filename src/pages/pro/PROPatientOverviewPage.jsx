@@ -26,13 +26,15 @@ import {
   Eye,
   CheckSquare,
   Square,
-  Edit3
+  Edit3,
+  RotateCcw
 } from 'lucide-react';
 import { proApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { PROInvoiceModal } from './PROInvoiceModal';
 import { PROPaymentModal } from '../../components/common/PROPaymentModal';
+import { RefundSlipModal } from './RefundSlipModal';
 import { formatCurrency, roundMoney, safeSubtract } from '../../utils/moneyUtils';
 
 export const PROPatientOverviewPage = () => {
@@ -52,6 +54,10 @@ export const PROPatientOverviewPage = () => {
   // Inline payment modal state (replaces navigation to /pro/payments)
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [paymentModalBill, setPaymentModalBill] = useState(null);
+
+  // Refund Slip Modal state
+  const [selectedRefundId, setSelectedRefundId] = useState(null);
+  const [showRefundSlipModal, setShowRefundSlipModal] = useState(false);
 
   // Search state when no paramPatientId
   const [searchQuery, setSearchQuery] = useState('');
@@ -1225,6 +1231,123 @@ export const PROPatientOverviewPage = () => {
                 </div>
               );
             })()}
+
+            {/* SECTION 3: Payment Receipts History */}
+            <div className="pt-4 border-t border-slate-100 space-y-3">
+              <h3 className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Payment Receipts History ({financials?.payments?.length || 0})</span>
+              </h3>
+              {(!financials?.payments || financials.payments.length === 0) ? (
+                <p className="text-xs text-slate-400 py-3 text-center bg-slate-50/50 rounded-xl">No payment receipts recorded yet.</p>
+              ) : (
+                <div className="border border-slate-100 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase">
+                      <tr>
+                        <th className="py-2.5 px-3">Receipt #</th>
+                        <th className="py-2.5 px-3">Date</th>
+                        <th className="py-2.5 px-3">Method</th>
+                        <th className="py-2.5 px-3 text-right">Amount</th>
+                        <th className="py-2.5 px-3 text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {financials.payments.map(p => {
+                        const paid = parseFloat(p.amount || 0);
+                        const refunded = parseFloat(p.refunded_amount || 0);
+                        const isFullyRefunded = refunded >= paid || p.status === 'refunded';
+                        const isPartiallyRefunded = refunded > 0 && refunded < paid;
+
+                        return (
+                          <tr key={p.payment_id} className="hover:bg-slate-50/70">
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-900">REC-{p.payment_id}</td>
+                            <td className="py-2.5 px-3 text-slate-500">
+                              {p.payment_date ? new Date(p.payment_date).toLocaleDateString() : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 capitalize">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700">
+                                {p.payment_method?.replace('_', ' ')}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-700">
+                              {formatCurrency(p.amount)}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {isFullyRefunded ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">Refunded</span>
+                              ) : isPartiallyRefunded ? (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">Partially Refunded ({formatCurrency(refunded)})</span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">Success</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* SECTION 4: Refunds & Credit Vouchers */}
+            {financials?.refunds && financials.refunds.length > 0 && (
+              <div className="pt-4 border-t border-slate-100 space-y-3">
+                <h3 className="text-xs font-bold text-slate-800 flex items-center gap-2">
+                  <RotateCcw className="w-3.5 h-3.5 text-red-600" />
+                  <span>Processed Refunds &amp; Credit Vouchers ({financials.refunds.length})</span>
+                </h3>
+                <div className="border border-slate-100 rounded-xl overflow-hidden">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead className="bg-slate-50/80 border-b border-slate-100 text-[11px] font-bold text-slate-500 uppercase">
+                      <tr>
+                        <th className="py-2.5 px-3">Refund #</th>
+                        <th className="py-2.5 px-3">Date</th>
+                        <th className="py-2.5 px-3">Receipt</th>
+                        <th className="py-2.5 px-3">Method</th>
+                        <th className="py-2.5 px-3 text-right">Refund Amount</th>
+                        <th className="py-2.5 px-3">Reason</th>
+                        <th className="py-2.5 px-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {financials.refunds.map(r => (
+                        <tr key={r.refund_id} className="hover:bg-slate-50/70">
+                          <td className="py-2.5 px-3 font-mono font-bold text-red-700">{r.refund_number}</td>
+                          <td className="py-2.5 px-3 text-slate-500">
+                            {r.created_at ? new Date(r.created_at).toLocaleDateString() : '—'}
+                          </td>
+                          <td className="py-2.5 px-3 font-mono text-slate-700">REC-{r.payment_id}</td>
+                          <td className="py-2.5 px-3">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-slate-100 text-slate-700">
+                              {r.refund_method?.replace('_', ' ')}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-red-600">
+                            {formatCurrency(r.amount)}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-600 max-w-xs truncate">{r.reason}</td>
+                          <td className="py-2.5 px-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedRefundId(r.refund_id);
+                                setShowRefundSlipModal(true);
+                              }}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition border border-slate-200 cursor-pointer"
+                            >
+                              <Printer className="w-3 h-3 text-blue-700" />
+                              <span>Slip</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

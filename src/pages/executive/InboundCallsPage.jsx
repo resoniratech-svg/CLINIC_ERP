@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { executiveApi, settingsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { AilmentSelect } from '../../components/common/AilmentSelect';
+import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -447,40 +448,23 @@ export const InboundCallsPage = () => {
                 </select>
               </div>
 
-              {/* Village */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Village / Locality
-                </label>
-                <input
-                  type="text"
-                  list="inbound-villages-datalist"
-                  placeholder="e.g. Subhash Nagar"
+              {/* Village / Mandal */}
+              <div className="col-span-1 sm:col-span-2">
+                <VillageMandalSelect
+                  label="Village / Locality"
+                  labelClassName="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
+                  placeholder="e.g. Subhash Nagar or type new"
                   value={leadForm.village}
-                  onChange={(e) => setLeadForm({ ...leadForm, village: e.target.value })}
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  onChange={(val) => setLeadForm({ ...leadForm, village: val })}
+                  onSelect={({ village, mandal }) => {
+                    setLeadForm(prev => ({
+                      ...prev,
+                      village: village || prev.village,
+                      mandal: mandal || prev.mandal
+                    }));
+                  }}
+                  inputClassName="bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
-                <datalist id="inbound-villages-datalist">
-                  {villagesList.map(v => <option key={v.id || v.name} value={v.name} />)}
-                </datalist>
-              </div>
-
-              {/* Mandal */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                  Mandal / City
-                </label>
-                <input
-                  type="text"
-                  list="inbound-mandals-datalist"
-                  placeholder="e.g. Karimnagar"
-                  value={leadForm.mandal}
-                  onChange={(e) => setLeadForm({ ...leadForm, mandal: e.target.value })}
-                  className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-                <datalist id="inbound-mandals-datalist">
-                  {mandalsList.map(m => <option key={m.id || m.name} value={m.name} />)}
-                </datalist>
               </div>
             </div>
 

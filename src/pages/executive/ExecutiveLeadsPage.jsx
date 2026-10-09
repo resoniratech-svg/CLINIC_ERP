@@ -4,6 +4,7 @@ import { executiveApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { AilmentSelect } from '../../components/common/AilmentSelect';
+import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { LeadDetailsModal } from './LeadDetailsModal';
 import { EditLeadModal } from './EditLeadModal';
 import { useToast } from '../../context/ToastContext';
@@ -51,6 +52,7 @@ export const ExecutiveLeadsPage = () => {
     gender: 'male',
     village: '',
     mandal: '',
+    status: 'new',
     requirement: '',
     lead_source: 'inbound',
     campaign: '',
@@ -124,6 +126,7 @@ export const ExecutiveLeadsPage = () => {
         gender: newLeadForm.gender,
         village: newLeadForm.village.trim() || null,
         mandal: newLeadForm.mandal.trim() || null,
+        status: newLeadForm.status || 'new',
         requirement: newLeadForm.requirement.trim() || null,
         source: newLeadForm.lead_source === 'outbound' ? 'Outbound Call' : 'Inbound Call',
         lead_source: newLeadForm.lead_source,
@@ -142,6 +145,7 @@ export const ExecutiveLeadsPage = () => {
           gender: 'male',
           village: '',
           mandal: '',
+          status: 'new',
           requirement: '',
           lead_source: 'inbound',
           campaign: '',
@@ -433,7 +437,7 @@ export const ExecutiveLeadsPage = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div>
               <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1">
                 Channel
@@ -445,6 +449,21 @@ export const ExecutiveLeadsPage = () => {
               >
                 <option value="inbound">Inbound Call</option>
                 <option value="outbound">Outbound Campaign</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1">
+                Lead Status
+              </label>
+              <select
+                value={newLeadForm.status}
+                onChange={(e) => setNewLeadForm({ ...newLeadForm, status: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="new">New / Pending</option>
+                <option value="interested">Interested</option>
+                <option value="not_interested">Not Interested</option>
               </select>
             </div>
 
@@ -477,17 +496,22 @@ export const ExecutiveLeadsPage = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1">
-                Village / Locality
-              </label>
-              <input
-                type="text"
-                placeholder="e.g. Subhash Nagar"
+              <VillageMandalSelect
+                label="Village / Locality"
+                labelClassName="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1"
+                placeholder="e.g. Subhash Nagar or type new"
                 value={newLeadForm.village}
-                onChange={(e) => setNewLeadForm({ ...newLeadForm, village: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                onChange={(val) => setNewLeadForm({ ...newLeadForm, village: val })}
+                onSelect={({ village, mandal }) => {
+                  setNewLeadForm(prev => ({
+                    ...prev,
+                    village: village || prev.village,
+                    mandal: mandal || prev.mandal
+                  }));
+                }}
+                inputClassName="bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
 

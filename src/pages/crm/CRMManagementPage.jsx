@@ -4,6 +4,7 @@ import { Badge } from '../../components/common/Badge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
 import { Modal } from '../../components/common/Modal';
+import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
 import { useToast } from '../../context/ToastContext';
 import { Layers, Plus, Calendar, Phone, CheckCircle2, ShieldAlert, Search, ChevronDown, X, User } from 'lucide-react';
 
@@ -15,10 +16,7 @@ export const CRMManagementPage = () => {
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [eligibleStaff, setEligibleStaff] = useState([]);
-  const [patients, setPatients] = useState([]);
-  const [patientSearchTerm, setPatientSearchTerm] = useState('');
-  const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
-  const patientDropdownRef = useRef(null);
+  const [selectedPatient, setSelectedPatient] = useState(null);
 
   const [taskForm, setTaskForm] = useState({
     patient_id: '',
@@ -59,30 +57,21 @@ export const CRMManagementPage = () => {
     }
   };
 
-  const fetchStaffAndPatients = async () => {
+  const fetchStaff = async () => {
     try {
-      const [usersRes, ptsRes] = await Promise.all([
-        usersApi.getUsers({ status: 'active' }),
-        receptionistApi.searchPatients({ search: '%' }),
-      ]);
-
+      const usersRes = await usersApi.getUsers({ status: 'active' });
       if (usersRes.success) {
         const staff = (usersRes.data || []).filter(
           (u) => u.role === 'receptionist' || u.role === 'pro_manager'
         );
         setEligibleStaff(staff);
       }
-
-      if (ptsRes.success) {
-        const ptsList = ptsRes.data?.patients || (Array.isArray(ptsRes.data) ? ptsRes.data : []);
-        setPatients(ptsList);
-      }
     } catch (err) {}
   };
 
   useEffect(() => {
     fetchFollowups();
-    fetchStaffAndPatients();
+    fetchStaff();
   }, [categoryFilter, statusFilter]);
 
   const handleCreateTask = async (e) => {
@@ -112,6 +101,7 @@ export const CRMManagementPage = () => {
           assigned_to: '',
           remarks: '',
         });
+        setSelectedPatient(null);
         fetchFollowups();
       }
     } catch (err) {
@@ -120,18 +110,6 @@ export const CRMManagementPage = () => {
       setSavingTask(false);
     }
   };
-
-  const filteredPatients = patients.filter((p) => {
-    if (!patientSearchTerm.trim()) return true;
-    const q = patientSearchTerm.toLowerCase();
-    const name = (p.patient_name || p.full_name || '').toLowerCase();
-    const mobile = (p.mobile_number || '').toLowerCase();
-    const regId = (p.registration_id || '').toLowerCase();
-    const id = String(p.patient_id || '');
-    return name.includes(q) || mobile.includes(q) || regId.includes(q) || id.includes(q);
-  });
-
-  const selectedPatientObj = patients.find((p) => String(p.patient_id) === String(taskForm.patient_id));
 
   return (
     <div className="space-y-6">
@@ -281,108 +259,40 @@ export const CRMManagementPage = () => {
       >
         <form onSubmit={handleCreateTask} className="space-y-4 text-xs text-slate-700">
           {/* Unified Single-Field Searchable Patient Selector */}
-          <div className="space-y-1 relative" ref={patientDropdownRef}>
+          <div className="space-y-1">
             <label className="block font-bold text-slate-800 uppercase text-[11px] mb-1">
               Patient *
             </label>
-
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                required
-                value={
-                  isPatientDropdownOpen
-                    ? patientSearchTerm
-                    : selectedPatientObj
-                    ? `${selectedPatientObj.patient_name || selectedPatientObj.full_name} (ID: #${selectedPatientObj.patient_id} • ${selectedPatientObj.mobile_number})`
-                    : patientSearchTerm
-                }
-                onFocus={() => {
-                  setIsPatientDropdownOpen(true);
-                  if (selectedPatientObj) {
-                    setPatientSearchTerm(selectedPatientObj.patient_name || selectedPatientObj.full_name);
-                  }
-                }}
-                onChange={(e) => {
-                  setPatientSearchTerm(e.target.value);
-                  setIsPatientDropdownOpen(true);
-                  if (!e.target.value) {
-                    setTaskForm({ ...taskForm, patient_id: '' });
-                  }
-                }}
-                placeholder="Search by patient name, mobile, or ID..."
-                className={`w-full pl-9 pr-8 py-2 text-xs rounded-xl border ${
-                  taskForm.patient_id ? 'border-blue-500 bg-blue-50/20 font-bold text-slate-900' : 'border-slate-300 bg-white'
-                } focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all`}
-              />
-
-              {taskForm.patient_id ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTaskForm({ ...taskForm, patient_id: '' });
-                    setPatientSearchTerm('');
-                    setIsPatientDropdownOpen(true);
-                  }}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsPatientDropdownOpen(!isPatientDropdownOpen)}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-                >
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Floating Dropdown Menu */}
-            {isPatientDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-52 overflow-y-auto z-50 divide-y divide-slate-100">
-                {filteredPatients.length === 0 ? (
-                  <div className="p-3 text-center text-slate-400 text-xs">
-                    No patients found matching "{patientSearchTerm}"
+            <AutocompleteSearch
+              searchFn={(term) => receptionistApi.searchPatients({ search: term })}
+              onSelect={(p) => {
+                setSelectedPatient(p);
+                setTaskForm((prev) => ({ ...prev, patient_id: p.patient_id }));
+              }}
+              selectedItem={selectedPatient}
+              onClear={() => {
+                setSelectedPatient(null);
+                setTaskForm((prev) => ({ ...prev, patient_id: '' }));
+              }}
+              placeholder="Search by patient name, mobile, or ID..."
+              findButtonColor="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white"
+              inputClassName="border-slate-300 focus:ring-blue-500 rounded-xl"
+              renderItem={(p, { isSelected, query }) => (
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <HighlightMatch text={p.patient_name || p.full_name} query={query} />
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
+                        ID: #{p.patient_id}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                      <HighlightMatch text={p.mobile_number} query={query} /> • <HighlightMatch text={p.registration_id || 'REG'} query={query} />
+                    </div>
                   </div>
-                ) : (
-                  filteredPatients.map((p) => {
-                    const isSelected = String(p.patient_id) === String(taskForm.patient_id);
-                    return (
-                      <div
-                        key={p.patient_id}
-                        onClick={() => {
-                          setTaskForm({ ...taskForm, patient_id: p.patient_id });
-                          setPatientSearchTerm(p.patient_name || p.full_name);
-                          setIsPatientDropdownOpen(false);
-                        }}
-                        className={`p-2.5 hover:bg-blue-50/80 cursor-pointer transition-colors flex items-center justify-between text-xs ${
-                          isSelected ? 'bg-blue-50 font-bold text-blue-900' : 'text-slate-700'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                            <span>{p.patient_name || p.full_name}</span>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
-                              ID: #{p.patient_id}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                            {p.mobile_number} • {p.registration_id || 'REG'}
-                          </div>
-                        </div>
-
-                        {isSelected && (
-                          <span className="text-blue-600 text-[11px] font-bold">✓</span>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            />
           </div>
 
           <div>

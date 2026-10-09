@@ -5,6 +5,9 @@ import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { AilmentSelect } from '../../components/common/AilmentSelect';
 import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
+import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
+import { PatientInvoiceReceiptModal } from './PatientInvoiceReceiptModal';
+import { getTodayDateString } from '../../utils/dateUtils';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -75,7 +78,7 @@ export const NewRegistrationPage = () => {
     referring_employee_id: '',
     referring_patient_name: '',
     assigned_doctor_id: '',
-    appointment_date: new Date().toISOString().split('T')[0],
+    appointment_date: getTodayDateString(),
     appointment_time: '10:00:00',
     appointment_type: 'new',
     discount_amount: 0,
@@ -94,8 +97,8 @@ export const NewRegistrationPage = () => {
   const [existingCheckLoading, setExistingCheckLoading] = useState(false);
   const [existingPatientInfo, setExistingPatientInfo] = useState(null);
 
-  // Completion Modal State
-  const [completedRecord, setCompletedRecord] = useState(null);
+  // Completion Modal State (Real Consultation Invoice)
+  const [registeredInvoiceTarget, setRegisteredInvoiceTarget] = useState(null);
 
   // Referring Employee & Patient State for Referral Source
   const [employeesList, setEmployeesList] = useState([]);
@@ -305,7 +308,7 @@ export const NewRegistrationPage = () => {
       referring_employee_id: '',
       referring_patient_name: '',
       assigned_doctor_id: defaultDocId,
-      appointment_date: new Date().toISOString().split('T')[0],
+      appointment_date: getTodayDateString(),
       appointment_time: '10:00:00',
       appointment_type: 'new',
       discount_amount: 0,
@@ -446,18 +449,10 @@ export const NewRegistrationPage = () => {
           if (r?.success && Array.isArray(r.data)) setMandalsList(r.data);
         }).catch(() => {});
 
-        setCompletedRecord({
-          ...res.data,
-          patientName: formData.full_name,
-          mobile: formData.mobile_number,
-          doctorName: selectedDoctor?.doctor_name || selectedDoctor?.full_name,
-          defaultFee,
-          chargedFee: rawPatientFeeNum,
-          discount,
-          finalFee,
-          paidAmount: paymentAmount,
-          dueAmount,
-          paymentMethod: formData.payment_method,
+        setRegisteredInvoiceTarget({
+          patientId: res.data?.patient_id,
+          patient: res.data?.patient,
+          invoiceId: res.data?.bill?.bill_id || res.data?.bill?.bill_number,
         });
       }
     } catch (err) {
@@ -782,85 +777,43 @@ export const NewRegistrationPage = () => {
                 )}
               </div>
 
-              <div className="space-y-2 relative" ref={ptDropdownRef}>
+              <div className="space-y-2">
                 <label className="block text-[11px] font-semibold text-indigo-900">
                   Search & Link Existing Referring Patient *
                 </label>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={
-                        selectedReferringPt
-                          ? `${selectedReferringPt.full_name || selectedReferringPt.patient_name} (${selectedReferringPt.registration_id} • ${selectedReferringPt.mobile_number})`
-                          : ptSearchTerm
-                      }
-                      onFocus={() => {
-                        if (!selectedReferringPt) setIsPtDropdownOpen(true);
-                      }}
-                      onChange={(e) => {
-                        setPtSearchTerm(e.target.value);
-                        if (selectedReferringPt) setSelectedReferringPt(null);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          handleSearchReferringPatient();
-                        }
-                      }}
-                      placeholder="Enter mobile number, registration ID, or patient name..."
-                      className="w-full pl-9 pr-8 py-2 text-xs rounded-xl border border-indigo-300 bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-medium"
-                    />
-                    {selectedReferringPt && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedReferringPt(null);
-                          setPtSearchTerm('');
-                        }}
-                        className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={handleSearchReferringPatient}
-                    disabled={searchingPt}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50 cursor-pointer shadow-sm shadow-indigo-500/20"
-                  >
-                    {searchingPt ? 'Searching...' : 'Search Patient'}
-                  </button>
-                </div>
-
-                {isPtDropdownOpen && referringPatientList.length > 0 && !selectedReferringPt && (
-                  <div className="absolute z-30 mt-1 w-full bg-white rounded-xl shadow-xl border border-slate-200 max-h-52 overflow-y-auto py-1">
-                    {referringPatientList.map((pt) => (
-                      <div
-                        key={pt.patient_id}
-                        onClick={() => {
-                          setSelectedReferringPt(pt);
-                          setIsPtDropdownOpen(false);
-                          setPtSearchTerm('');
-                        }}
-                        className="px-3 py-2 text-xs hover:bg-indigo-50 cursor-pointer flex items-center justify-between border-b border-slate-50 last:border-0"
-                      >
-                        <div>
-                          <div className="font-semibold text-slate-900">{pt.full_name || pt.patient_name}</div>
-                          <div className="text-[10px] text-slate-500 font-mono">
-                            {pt.registration_id} • {pt.mobile_number} • {pt.village || pt.village_mandal || 'Location N/A'}
-                          </div>
+                <AutocompleteSearch
+                  searchFn={(term) => receptionistApi.searchPatients({ search: term })}
+                  onSelect={(pt) => {
+                    setSelectedReferringPt(pt);
+                    setReferringPatientList([]);
+                    setPtSearchTerm('');
+                  }}
+                  selectedItem={selectedReferringPt}
+                  onClear={() => {
+                    setSelectedReferringPt(null);
+                    setReferringPatientList([]);
+                    setPtSearchTerm('');
+                  }}
+                  placeholder="Enter mobile number, registration ID, or patient name..."
+                  findButtonText="Search Patient"
+                  findButtonColor="bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white"
+                  inputClassName="border-indigo-300 focus:ring-indigo-500 rounded-xl"
+                  renderItem={(pt, { isSelected, query }) => (
+                    <div className="flex items-center justify-between text-xs">
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          <HighlightMatch text={pt.full_name || pt.patient_name} query={query} />
                         </div>
-                        <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-bold">
-                          Select
-                        </span>
+                        <div className="text-[10px] text-slate-500 font-mono">
+                          <HighlightMatch text={pt.registration_id} query={query} /> • <HighlightMatch text={pt.mobile_number} query={query} /> • {pt.village || pt.village_mandal || 'Location N/A'}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-bold">
+                        Select
+                      </span>
+                    </div>
+                  )}
+                />
               </div>
             </div>
           )}
@@ -1224,130 +1177,28 @@ export const NewRegistrationPage = () => {
         </div>
       </form>
 
-      {/* Instant Completion & Bill Receipt Modal */}
-      {completedRecord && (
-        <Modal
-          isOpen={true}
-          onClose={() => {
-            resetForm();
-            setCompletedRecord(null);
-            navigate('/receptionist/dashboard');
-          }}
-          title="Registration & Consultation Bill Receipt"
-          maxWidth="max-w-lg"
-        >
-          <div className="space-y-5 text-xs text-slate-700">
-            {/* Success Badge */}
-            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 text-center space-y-1">
-              <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
-              <h3 className="font-bold text-sm text-emerald-900">Patient Successfully Registered</h3>
-              <p className="text-[11px] text-emerald-700">
-                Patient has been added to the doctor consultation schedule.
-              </p>
-            </div>
-
-            {/* Generated System IDs */}
-            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-2 gap-3">
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Registration ID</span>
-                <span className="font-mono font-bold text-blue-700 text-xs">
-                  {completedRecord.registration_id || completedRecord.patient?.registration_id || `REG-${completedRecord.patient_id}`}
-                </span>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Patient ID</span>
-                <span className="font-mono font-bold text-slate-800 text-xs">#{completedRecord.patient_id}</span>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Appointment Token</span>
-                <span className="font-mono font-bold text-slate-800 text-xs">#{completedRecord.appointment?.appointment_id}</span>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Bill Invoice #</span>
-                <span className="font-mono font-bold text-slate-800 text-xs">{completedRecord.bill?.bill_number}</span>
-              </div>
-            </div>
-
-            {/* Consultation Summary */}
-            <div className="space-y-1.5 pt-1 text-xs">
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Patient:</span>
-                <span className="font-bold text-slate-900">{completedRecord.patientName}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Doctor:</span>
-                <span className="font-bold text-slate-900">{formatDocName(completedRecord.doctorName)}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Standard Doctor Fee:</span>
-                <span className="font-mono text-slate-500">₹{completedRecord.defaultFee}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Consultation Fee (This Patient):</span>
-                <span className="font-mono font-bold text-slate-900">₹{completedRecord.chargedFee || completedRecord.finalFee}</span>
-              </div>
-              {completedRecord.discount > 0 && (
-                <div className="flex justify-between py-1 border-b border-slate-100">
-                  <span className="text-slate-500">Discount Applied:</span>
-                  <span className="font-mono font-bold text-red-600">-₹{completedRecord.discount}</span>
-                </div>
-              )}
-              <div className="flex justify-between py-1 border-b border-slate-100 font-bold">
-                <span className="text-slate-700">Final Payable:</span>
-                <span className="font-mono text-blue-900 text-sm">₹{completedRecord.finalFee}</span>
-              </div>
-              <div className="flex justify-between py-1 border-b border-slate-100">
-                <span className="text-slate-500">Paid Amount ({completedRecord.paymentMethod?.toUpperCase()}):</span>
-                <span className="font-mono font-bold text-emerald-700">₹{completedRecord.paidAmount}</span>
-              </div>
-              {completedRecord.dueAmount > 0 && (
-                <div className="flex justify-between py-1 border-b border-slate-100">
-                  <span className="text-red-600 font-bold">Outstanding Balance (Due):</span>
-                  <span className="font-mono font-bold text-red-600">₹{completedRecord.dueAmount}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Modal Actions */}
-            <div className="pt-2 flex flex-wrap items-center justify-end gap-3">
-              <button
-                type="button"
-                onClick={() => {
-                  window.print();
-                }}
-                className="px-4 py-2 border border-slate-200 text-slate-700 hover:bg-slate-50 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print Slip</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  resetForm();
-                  setCompletedRecord(null);
-                }}
-                className="px-4 py-2 border border-blue-200 text-blue-700 bg-blue-50 hover:bg-blue-100 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>Register Another Patient</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => {
-                  resetForm();
-                  setCompletedRecord(null);
-                  navigate('/receptionist/check-in');
-                }}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-md transition-colors cursor-pointer"
-              >
-                Go to Waiting Queue
-              </button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      {/* Real Patient Consultation Invoice & Cash Memo Modal */}
+      <PatientInvoiceReceiptModal
+        isOpen={!!registeredInvoiceTarget}
+        onClose={() => {
+          resetForm();
+          setRegisteredInvoiceTarget(null);
+          navigate('/receptionist/dashboard');
+        }}
+        patientId={registeredInvoiceTarget?.patientId}
+        patient={registeredInvoiceTarget?.patient}
+        targetInvoiceId={registeredInvoiceTarget?.invoiceId}
+        successBanner="Patient registered & consultation payment recorded successfully!"
+        onRegisterAnother={() => {
+          resetForm();
+          setRegisteredInvoiceTarget(null);
+        }}
+        onGoToQueue={() => {
+          resetForm();
+          setRegisteredInvoiceTarget(null);
+          navigate('/receptionist/check-in');
+        }}
+      />
     </div>
   );
 };

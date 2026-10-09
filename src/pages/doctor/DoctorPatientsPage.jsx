@@ -30,7 +30,12 @@ export const DoctorPatientsPage = () => {
     }
   }, []);
 
-  useEffect(() => { fetchPatients(); }, []);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetchPatients(search);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search, fetchPatients]);
 
   // Automatically select and load patient if passed via router location.state
   useEffect(() => {

@@ -213,7 +213,8 @@ export const receptionistApi = {
   reassignDoctor: (id, data) => axiosClient.post(`/receptionist/appointments/${id}/reassign-doctor`, data),
   cancelAppointment: (id, data) => axiosClient.post(`/receptionist/appointments/${id}/cancel`, data),
   getConsultationBills: (params) => axiosClient.get('/receptionist/billing/bills', { params }),
-  getPatientInvoices: (id) => axiosClient.get(`/receptionist/patients/${id}/invoices`),
+  getPatientInvoices: (id, params) => axiosClient.get(`/receptionist/patients/${id}/invoices`, { params }),
+  getInvoiceById: (id) => axiosClient.get(`/receptionist/invoices/${id}`),
   createConsultationBill: (data) => axiosClient.post('/receptionist/billing/bills', data),
   checkinAppointment: (id) => axiosClient.post(`/receptionist/appointments/${id}/checkin`),
   getWaitingQueue: () => axiosClient.get('/receptionist/checkin/waiting'),
@@ -351,12 +352,14 @@ export const proApi = {
   getPartialDueBills: (params) => axiosClient.get('/pro/bills/partial-due', { params }),
   getBillingHistory: (params) => axiosClient.get('/pro/bills/history', { params }),
 
-  // 8. Payments
+  // 8. Payments & Refunds
   recordPayment: (data) => axiosClient.post('/pro/payments', data),
-  refundPayment: (id) => axiosClient.post(`/pro/payments/${id}/refund`),
+  refundPayment: (id, data) => axiosClient.post(`/pro/payments/${id}/refund`, data),
   getTodayPayments: (params) => axiosClient.get('/pro/payments/today', { params }),
   getDueCollections: (params) => axiosClient.get('/pro/payments/due-collection', { params }),
   getPaymentHistory: (params) => axiosClient.get('/pro/payments/history', { params }),
+  getRefunds: (params) => axiosClient.get('/pro/refunds', { params }),
+  getRefundById: (id) => axiosClient.get(`/pro/refunds/${id}`),
 
   // 9. CRM / Calling & Renewals & Dues & ACQ & OC/NR
   createCall: (data) => axiosClient.post('/pro/calls', data),

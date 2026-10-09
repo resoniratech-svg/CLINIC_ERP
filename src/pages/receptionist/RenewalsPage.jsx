@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
+import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
+import { PatientInvoiceReceiptModal } from './PatientInvoiceReceiptModal';
 import { useToast } from '../../context/ToastContext';
 import {
   RotateCcw,
@@ -24,12 +26,7 @@ export const RenewalsPage = () => {
   const navigate = useNavigate();
   const { showToast } = useToast();
 
-  const [searchQuery, setSearchQuery] = useState('');
   const [selectedPatient, setSelectedPatient] = useState(location.state?.patient || null);
-  const [allPatients, setAllPatients] = useState([]);
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const patientDropdownRef = useRef(null);
-
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(false);
   const [renewing, setRenewing] = useState(false);
@@ -55,71 +52,17 @@ export const RenewalsPage = () => {
   useEffect(() => {
     const fetchPrerequisites = async () => {
       try {
-        const [docRes, ptRes] = await Promise.all([
-          receptionistApi.getActiveDoctors(),
-          receptionistApi.searchPatients({ limit: 50 }).catch(() => ({ data: [] })),
-        ]);
-
+        const docRes = await receptionistApi.getActiveDoctors();
         if (docRes.success && docRes.data?.length > 0) {
           setDoctors(docRes.data);
           setFormData((prev) => ({ ...prev, assigned_doctor_id: docRes.data[0].doctor_id }));
         }
-
-        if (ptRes.success) {
-          const list = ptRes.data?.patients || (Array.isArray(ptRes.data) ? ptRes.data : []);
-          setAllPatients(list);
-        }
       } catch (err) {
-        showToast('Failed to load active doctors or patient registry', 'error');
+        showToast('Failed to load active doctors', 'error');
       }
     };
     fetchPrerequisites();
   }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (patientDropdownRef.current && !patientDropdownRef.current.contains(event.target)) {
-        setIsDropdownOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const filteredPatients = allPatients.filter((p) => {
-    if (!searchQuery.trim()) return false;
-    const q = searchQuery.toLowerCase();
-    const name = (p.full_name || p.patient_name || '').toLowerCase();
-    const mobile = (p.mobile_number || '').toLowerCase();
-    const regId = (p.registration_id || '').toLowerCase();
-    const id = String(p.patient_id || '');
-    return name.includes(q) || mobile.includes(q) || regId.includes(q) || id.includes(q);
-  });
-
-  const handleSearchPatient = async (e) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) {
-      showToast('Please enter mobile or registration ID', 'warning');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const res = await receptionistApi.searchPatients({ search: searchQuery.trim() });
-      if (res.success && res.data?.patients?.length > 0) {
-        const found = res.data.patients[0];
-        setSelectedPatient(found);
-        setIsDropdownOpen(false);
-        showToast(`Selected patient: ${found.full_name || found.patient_name} (${found.registration_id})`, 'info');
-      } else {
-        showToast('No patient found with that mobile or registration ID', 'warning');
-      }
-    } catch (err) {
-      showToast(err.message || 'Search failed', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const selectedDocObj = doctors.find((d) => String(d.doctor_id) === String(formData.assigned_doctor_id));
   const renewalFee = selectedDocObj ? parseFloat(selectedDocObj.renewal_consultation_fee || 300) : 300;
@@ -215,97 +158,45 @@ export const RenewalsPage = () => {
           Step 1: Select Existing Patient for Renewal
         </h3>
 
-        <div className="space-y-2 relative" ref={patientDropdownRef}>
-          <form onSubmit={handleSearchPatient} className="flex gap-3">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onFocus={() => {
-                  if (searchQuery.trim()) setIsDropdownOpen(true);
-                }}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setIsDropdownOpen(true);
-                  if (!e.target.value) setSelectedPatient(null);
-                }}
-                placeholder="Type Patient Name, Mobile Number, or Registration ID..."
-                className="w-full pl-10 pr-9 py-2.5 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none font-medium"
-              />
+        <div className="space-y-2">
+          <AutocompleteSearch
+            searchFn={(term) => receptionistApi.searchPatients({ search: term })}
+            onSelect={(p) => setSelectedPatient(p)}
+            onClear={() => setSelectedPatient(null)}
+            placeholder="Type Patient Name, Mobile Number, or Registration ID..."
+            findButtonText="Find Patient"
+            findButtonColor="bg-teal-600 hover:bg-teal-700 active:bg-teal-800 text-white"
+            inputClassName="border-slate-300 focus:ring-teal-500 py-2 text-xs rounded-xl"
+            renderItem={(p, { isSelected, query }) => {
+              const patientName = p.full_name || p.patient_name || p.name || 'Patient';
+              const regExpiry = p.registration_expiry || p.expiry_date;
+              const isExp = p.registration_status === 'expired' || (regExpiry && new Date(regExpiry) < new Date());
 
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setSelectedPatient(null);
-                    setIsDropdownOpen(false);
-                  }}
-                  className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shrink-0 shadow-xs"
-            >
-              {loading ? 'Searching...' : 'Find Patient'}
-            </button>
-          </form>
-
-          {/* Autocomplete Patient Dropdown */}
-          {isDropdownOpen && searchQuery.trim() && (
-            <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-56 overflow-y-auto z-50 divide-y divide-slate-100">
-              {filteredPatients.length === 0 ? (
-                <div className="p-3 text-center text-slate-400 text-xs">
-                  No patients found matching "{searchQuery}"
-                </div>
-              ) : (
-                filteredPatients.map((p) => {
-                  const patientName = p.full_name || p.patient_name || p.name || 'Patient';
-                  const regExpiry = p.registration_expiry || p.expiry_date;
-                  const isExp = p.registration_status === 'expired' || (regExpiry && new Date(regExpiry) < new Date());
-
-                  return (
-                    <div
-                      key={p.patient_id}
-                      onClick={() => {
-                        setSelectedPatient(p);
-                        setSearchQuery(`${patientName} (${p.registration_id || `#${p.patient_id}`})`);
-                        setIsDropdownOpen(false);
-                      }}
-                      className="p-3 hover:bg-teal-50/80 cursor-pointer transition-colors flex items-center justify-between text-xs"
-                    >
-                      <div>
-                        <div className="font-bold text-slate-900 flex items-center gap-2">
-                          <span>{patientName}</span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
-                            {p.registration_id || `REG-${String(p.patient_id).padStart(5, '0')}`}
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                          {p.mobile_number} • {p.age ? `${p.age} yrs` : '—'} • {p.gender} • {p.village || p.village_mandal || p.address || 'Local'}
-                        </div>
-                      </div>
-
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          isExp ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-800'
-                        }`}
-                      >
-                        {isExp ? 'EXPIRED' : 'ACTIVE'}
+              return (
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-bold text-slate-900 flex items-center gap-2">
+                      <HighlightMatch text={patientName} query={query} />
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
+                        <HighlightMatch text={p.registration_id || `REG-${String(p.patient_id).padStart(5, '0')}`} query={query} />
                       </span>
                     </div>
-                  );
-                })
-              )}
-            </div>
-          )}
+                    <div className="text-[11px] text-slate-500 font-mono mt-0.5">
+                      <HighlightMatch text={p.mobile_number} query={query} /> • {p.age ? `${p.age} yrs` : '—'} • {p.gender} • {p.village || p.village_mandal || p.address || 'Local'}
+                    </div>
+                  </div>
+
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      isExp ? 'bg-red-100 text-red-700' : 'bg-emerald-100 text-emerald-800'
+                    }`}
+                  >
+                    {isExp ? 'EXPIRED' : 'ACTIVE'}
+                  </span>
+                </div>
+              );
+            }}
+          />
         </div>
 
         {selectedPatient && (
@@ -480,81 +371,17 @@ export const RenewalsPage = () => {
         </form>
       )}
 
-      {/* Renewal Confirmation / Receipt Modal */}
-      {completedRenewal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full overflow-hidden">
-            <div className="bg-emerald-600 text-white p-6 text-center relative">
-              <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-2 backdrop-blur-xs">
-                <CheckCircle2 className="w-7 h-7 text-white" />
-              </div>
-              <h2 className="text-lg font-black tracking-tight">Registration Renewal Completed</h2>
-              <p className="text-xs text-emerald-100 mt-0.5">
-                Invoice & Consultation Appointment Created Successfully
-              </p>
-            </div>
-
-            <div className="p-6 space-y-4 text-xs">
-              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-2">
-                <div className="flex justify-between items-center pb-2 border-b border-slate-200">
-                  <span className="text-slate-500">Invoice Number</span>
-                  <span className="font-mono font-black text-slate-900 text-sm">
-                    {completedRenewal.bill?.bill_number || 'INV-00000'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Patient</span>
-                  <span className="font-bold text-slate-800">
-                    {completedRenewal.patient?.full_name || completedRenewal.patient?.patient_name || completedRenewal.patient?.name} ({completedRenewal.patient?.registration_id})
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Assigned Doctor</span>
-                  <span className="font-bold text-slate-800">
-                    {formatDocName(completedRenewal.doctor?.doctor_name || completedRenewal.doctor?.full_name)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">New Registration Expiry</span>
-                  <span className="font-mono font-bold text-emerald-700">
-                    {completedRenewal.new_expiry}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Amount Paid</span>
-                  <span className="font-mono font-bold text-slate-900">
-                    ₹{completedRenewal.paid_amount} ({formData.payment_method.toUpperCase()})
-                  </span>
-                </div>
-                {completedRenewal.due_amount > 0 && (
-                  <div className="flex justify-between items-center text-red-600 font-bold">
-                    <span>Due Amount</span>
-                    <span className="font-mono">₹{completedRenewal.due_amount}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={handleResetForNext}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition-colors cursor-pointer text-center"
-                >
-                  Renew Another
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/receptionist/check-in')}
-                  className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-md shadow-teal-600/20"
-                >
-                  <span>Go to Waiting Queue</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Real Patient Consultation Invoice & Cash Memo Modal */}
+      <PatientInvoiceReceiptModal
+        isOpen={!!completedRenewal}
+        onClose={handleResetForNext}
+        patientId={completedRenewal?.patient?.patient_id}
+        patient={completedRenewal?.patient}
+        targetInvoiceId={completedRenewal?.bill?.bill_id || completedRenewal?.bill?.bill_number}
+        successBanner="Registration renewal and consultation scheduled successfully!"
+        onRegisterAnother={handleResetForNext}
+        onGoToQueue={() => navigate('/receptionist/check-in')}
+      />
     </div>
   );
 };

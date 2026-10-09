@@ -4,6 +4,7 @@ import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { Modal } from '../../components/common/Modal';
 import { ReassignDoctorModal } from '../../components/common/ReassignDoctorModal';
+import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
 import { useToast } from '../../context/ToastContext';
 import {
   Calendar,
@@ -37,7 +38,6 @@ export const ReceptionistAppointmentsPage = () => {
 
   const [appointments, setAppointments] = useState([]);
   const [doctors, setDoctors] = useState([]);
-  const [allPatients, setAllPatients] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Filters
@@ -67,9 +67,6 @@ export const ReceptionistAppointmentsPage = () => {
   // New Appointment Modal for quick booking
   const [isNewBookingOpen, setIsNewBookingOpen] = useState(false);
   const [bookingPatient, setBookingPatient] = useState(location.state?.patient || null);
-  const [searchPtTerm, setSearchPtTerm] = useState('');
-  const [isPtDropdownOpen, setIsPtDropdownOpen] = useState(false);
-  const ptDropdownRef = useRef(null);
 
   // Doctor search state in booking modal
   const [docSearchTerm, setDocSearchTerm] = useState('');
@@ -141,9 +138,6 @@ export const ReceptionistAppointmentsPage = () => {
 
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (ptDropdownRef.current && !ptDropdownRef.current.contains(event.target)) {
-        setIsPtDropdownOpen(false);
-      }
       if (docDropdownRef.current && !docDropdownRef.current.contains(event.target)) {
         setIsDocDropdownOpen(false);
       }
@@ -160,10 +154,9 @@ export const ReceptionistAppointmentsPage = () => {
       if (selectedDoctorId) params.doctor_id = selectedDoctorId;
       if (selectedStatus) params.status = selectedStatus;
 
-      const [apptRes, docRes, ptRes] = await Promise.all([
+      const [apptRes, docRes] = await Promise.all([
         receptionistApi.getAppointments(params),
         receptionistApi.getActiveDoctors(),
-        receptionistApi.searchPatients({ search: '%' }).catch(() => ({ data: [] })),
       ]);
 
       if (apptRes.success) setAppointments(apptRes.data || []);
@@ -173,26 +166,12 @@ export const ReceptionistAppointmentsPage = () => {
           setNewBookingData((prev) => ({ ...prev, doctor_id: docRes.data[0].doctor_id }));
         }
       }
-      if (ptRes.success) {
-        const list = ptRes.data?.patients || (Array.isArray(ptRes.data) ? ptRes.data : []);
-        setAllPatients(list);
-      }
     } catch (err) {
       showToast(err.message || 'Failed to fetch appointments', 'error');
     } finally {
       setLoading(false);
     }
   };
-
-  const filteredPatients = allPatients.filter((p) => {
-    if (!searchPtTerm.trim()) return true;
-    const q = searchPtTerm.toLowerCase();
-    const name = (p.full_name || p.patient_name || '').toLowerCase();
-    const mobile = (p.mobile_number || '').toLowerCase();
-    const regId = (p.registration_id || '').toLowerCase();
-    const id = String(p.patient_id || '');
-    return name.includes(q) || mobile.includes(q) || regId.includes(q) || id.includes(q);
-  });
 
   const filteredDoctors = doctors.filter((doc) => {
     if (!docSearchTerm.trim()) return true;
@@ -695,106 +674,34 @@ export const ReceptionistAppointmentsPage = () => {
       >
         <form onSubmit={handleCreateAppointment} className="space-y-4 text-xs text-slate-700">
           {/* Patient Selection */}
-          <div className="p-3 bg-blue-50/60 rounded-2xl border border-blue-200 space-y-2 relative" ref={ptDropdownRef}>
+          <div className="p-3 bg-blue-50/60 rounded-2xl border border-blue-200 space-y-2">
             <label className="block text-[11px] font-bold text-blue-900 uppercase tracking-wider">
               1. Search Patient *
             </label>
-            <div className="relative">
-              <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400 pointer-events-none" />
-              <input
-                type="text"
-                required
-                value={
-                  isPtDropdownOpen
-                    ? searchPtTerm
-                    : bookingPatient
-                    ? `${bookingPatient.full_name || bookingPatient.patient_name} (${bookingPatient.registration_id || `#${bookingPatient.patient_id}`} • ${bookingPatient.mobile_number})`
-                    : searchPtTerm
-                }
-                onFocus={() => {
-                  setIsPtDropdownOpen(true);
-                  if (bookingPatient) {
-                    setSearchPtTerm(bookingPatient.full_name || bookingPatient.patient_name || '');
-                  }
-                }}
-                onChange={(e) => {
-                  setSearchPtTerm(e.target.value);
-                  setIsPtDropdownOpen(true);
-                  if (!e.target.value) setBookingPatient(null);
-                }}
-                placeholder="Search patient by name, mobile, or Reg ID..."
-                className={`w-full pl-9 pr-8 py-2 text-xs rounded-xl border ${
-                  bookingPatient ? 'border-blue-500 bg-blue-50/30 font-bold text-slate-900' : 'border-blue-300 bg-white'
-                } focus:ring-2 focus:ring-blue-500 focus:outline-none transition-all`}
-              />
-
-              {bookingPatient ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setBookingPatient(null);
-                    setSearchPtTerm('');
-                    setIsPtDropdownOpen(true);
-                  }}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setIsPtDropdownOpen(!isPtDropdownOpen)}
-                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
-                >
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </button>
-              )}
-            </div>
-
-            {/* Floating Patient Dropdown */}
-            {isPtDropdownOpen && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-2xl border border-slate-200 shadow-xl max-h-48 overflow-y-auto z-50 divide-y divide-slate-100">
-                {filteredPatients.length === 0 ? (
-                  <div className="p-3 text-center text-slate-400 text-xs">
-                    {searchPtTerm ? `No registered patients matching "${searchPtTerm}"` : 'No registered patients in database'}
+            <AutocompleteSearch
+              searchFn={(term) => receptionistApi.searchPatients({ search: term })}
+              onSelect={(p) => setBookingPatient(p)}
+              selectedItem={bookingPatient}
+              onClear={() => setBookingPatient(null)}
+              placeholder="Search patient by name, mobile, or Reg ID..."
+              findButtonColor="bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white"
+              inputClassName="border-blue-300 focus:ring-blue-500 rounded-xl"
+              renderItem={(p, { isSelected, query }) => (
+                <div className="flex items-center justify-between text-xs">
+                  <div>
+                    <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                      <HighlightMatch text={p.full_name || p.patient_name || 'Patient'} query={query} />
+                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
+                        <HighlightMatch text={p.registration_id || `#${p.patient_id}`} query={query} />
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                      <HighlightMatch text={p.mobile_number} query={query} /> • {p.village || p.village_mandal || 'Hyderabad'}
+                    </div>
                   </div>
-                ) : (
-                  filteredPatients.map((p) => {
-                    const isSelected = bookingPatient && String(p.patient_id) === String(bookingPatient.patient_id);
-                    const name = p.full_name || p.patient_name || 'Patient';
-                    return (
-                      <div
-                        key={p.patient_id}
-                        onClick={() => {
-                          setBookingPatient(p);
-                          setSearchPtTerm(name);
-                          setIsPtDropdownOpen(false);
-                        }}
-                        className={`p-2.5 hover:bg-blue-50/80 cursor-pointer transition-colors flex items-center justify-between text-xs ${
-                          isSelected ? 'bg-blue-50 font-bold text-blue-900' : 'text-slate-700'
-                        }`}
-                      >
-                        <div>
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                            <span>{name}</span>
-                            <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-100 font-mono text-slate-600">
-                              {p.registration_id || `#${p.patient_id}`}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                            {p.mobile_number} • {p.village || p.village_mandal || 'Hyderabad'}
-                          </div>
-                        </div>
-
-                        {isSelected && (
-                          <span className="text-blue-600 text-xs font-bold">✓</span>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            />
           </div>
 
           {/* 2. Previous Visit Status Card (When Patient is Selected) */}
