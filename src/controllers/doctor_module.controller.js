@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, escapeLike } = require('../utils/helpers');
 const { resolveOrCreateLocation } = require('../utils/locationResolver');
 const { validateDoctorAvailability, generateDoctorSlots } = require('../utils/doctorScheduleHelper');
 
@@ -92,11 +92,15 @@ async function getDashboard(req, res) {
       refTarget = parseFloat(targetRes.rows[0].referral_target || 30000);
     }
 
-    // Revenue achieved (consultation bills completed for doctor)
+    // Revenue achieved (consultation bills completed for doctor, net of refunds)
     const revAchievedRes = await db.query(`
-      SELECT COALESCE(SUM(b.final_amount), 0) as total_revenue, COUNT(*) as completed_units
+      SELECT (
+        COALESCE(SUM(b.final_amount), 0) -
+        COALESCE((SELECT SUM(r.amount) FROM refunds r JOIN bills rb ON r.bill_id = rb.bill_id WHERE ($1::integer IS NULL OR rb.doctor_id = $1) AND EXTRACT(MONTH FROM r.created_at) = $2 AND EXTRACT(YEAR FROM r.created_at) = $3), 0)
+      ) as total_revenue, COUNT(*) as completed_units
       FROM bills b
       WHERE ($1::integer IS NULL OR b.doctor_id = $1)
+        AND b.status != 'refunded'
         AND EXTRACT(MONTH FROM b.created_at) = $2 AND EXTRACT(YEAR FROM b.created_at) = $3
     `, [doctorFilterId, curMonth, curYear]);
 
@@ -306,16 +310,56 @@ async function getPatients(req, res) {
     `;
     const params = [doctorFilterId];
 
-    if (search) {
-      params.push(`%${search}%`);
-      query += ` AND (p.full_name ILIKE $${params.length} OR p.mobile_number ILIKE $${params.length} OR p.registration_id ILIKE $${params.length})`;
+    const rawSearch = (search || req.query.q || '').trim();
+
+    if (rawSearch && rawSearch !== '%') {
+      const esc = escapeLike(rawSearch);
+      const cleanDigits = rawSearch.replace(/\D/g, '');
+      const num = parseInt(rawSearch);
+
+      const orClauses = [
+        `p.full_name ILIKE $${params.length + 1}`,
+        `p.mobile_number ILIKE $${params.length + 1}`,
+        `p.registration_id ILIKE $${params.length + 1}`
+      ];
+      params.push(`%${esc}%`);
+
+      if (!isNaN(num) && String(num) === rawSearch) {
+        params.push(num);
+        orClauses.push(`p.patient_id = $${params.length}`);
+      }
+
+      if (cleanDigits && cleanDigits.length <= 6) {
+        const paddedReg = `REG-${cleanDigits.padStart(5, '0')}`;
+        params.push(`%${paddedReg}%`);
+        orClauses.push(`p.registration_id ILIKE $${params.length}`);
+      }
+
+      query += ` AND (${orClauses.join(' OR ')})`;
     }
     if (date) {
       params.push(date);
       query += ` AND a.appointment_date = $${params.length}`;
     }
 
-    query += ` GROUP BY p.patient_id, p.registration_id, p.full_name, p.mobile_number, p.age, p.gender, p.village, p.mandal ORDER BY last_visit_date DESC LIMIT 50`;
+    if (rawSearch && rawSearch !== '%') {
+      const exactIdx = params.length + 1;
+      params.push(rawSearch);
+      const prefixIdx = params.length + 1;
+      params.push(`${escapeLike(rawSearch)}%`);
+
+      query += ` GROUP BY p.patient_id, p.registration_id, p.full_name, p.mobile_number, p.age, p.gender, p.village, p.mandal
+                 ORDER BY 
+                   CASE 
+                     WHEN LOWER(p.full_name) = LOWER($${exactIdx}) OR p.mobile_number = $${exactIdx} OR LOWER(p.registration_id) = LOWER($${exactIdx}) THEN 1
+                     WHEN LOWER(p.full_name) ILIKE $${prefixIdx} OR p.mobile_number ILIKE $${prefixIdx} OR LOWER(p.registration_id) ILIKE $${prefixIdx} THEN 2
+                     ELSE 3
+                   END,
+                   last_visit_date DESC LIMIT 50`;
+    } else {
+      query += ` GROUP BY p.patient_id, p.registration_id, p.full_name, p.mobile_number, p.age, p.gender, p.village, p.mandal ORDER BY last_visit_date DESC LIMIT 50`;
+    }
+
     const result = await db.query(query, params);
 
     return res.json(formatResponse(true, result.rows, 'Patients list retrieved successfully'));
@@ -575,17 +619,24 @@ async function updateConsultation(req, res) {
 // 7. Master Diagnoses Search
 async function searchDiagnoses(req, res) {
   try {
-    const { q } = req.query;
-    const queryTerm = q ? `%${q}%` : '%';
+    const rawQ = (req.query.q || req.query.search || '').trim();
+    const queryTerm = (rawQ && rawQ !== '%') ? `%${escapeLike(rawQ)}%` : '%';
 
     const result = await db.query(`
-      SELECT id, name, COALESCE(category, 'General') as category FROM master_diagnoses
+      SELECT id, name, COALESCE(category, 'General') as category,
+        CASE 
+          WHEN LOWER(name) = LOWER($2) THEN 1
+          WHEN LOWER(name) ILIKE $3 THEN 2
+          ELSE 3
+        END as rank
+      FROM (
+        SELECT id, name, category, status FROM master_diagnoses
+        UNION ALL
+        SELECT id, name, 'Ailment' as category, status FROM master_ailments
+      ) combined
       WHERE status = 'active' AND name ILIKE $1
-      UNION
-      SELECT id, name, 'Ailment' as category FROM master_ailments
-      WHERE status = 'active' AND name ILIKE $1
-      ORDER BY name ASC LIMIT 30
-    `, [queryTerm]);
+      ORDER BY rank ASC, name ASC LIMIT 30
+    `, [queryTerm, rawQ, `${escapeLike(rawQ)}%`]);
 
     return res.json(formatResponse(true, result.rows, 'Master diagnoses search retrieved successfully'));
   } catch (err) {
@@ -1486,12 +1537,15 @@ async function getMyTargets(req, res) {
     }
 
     const revAchievedRes = await db.query(`
-      SELECT COALESCE(SUM(p.amount), 0) as total_revenue, COUNT(DISTINCT b.bill_id) as completed_units
+      SELECT (
+        COALESCE(SUM(p.amount), 0) -
+        COALESCE((SELECT SUM(r.amount) FROM refunds r JOIN bills rb ON r.bill_id = rb.bill_id WHERE ($1::integer IS NULL OR rb.doctor_id = $1) AND EXTRACT(MONTH FROM r.created_at) = $2 AND EXTRACT(YEAR FROM r.created_at) = $3), 0)
+      ) as total_revenue, COUNT(DISTINCT b.bill_id) as completed_units
       FROM payments p
       JOIN bills b ON p.bill_id = b.bill_id
       WHERE ($1::integer IS NULL OR b.doctor_id = $1)
         AND b.status != 'refunded'
-        AND p.status = 'success'
+        AND p.status IN ('success', 'partially_refunded')
         AND EXTRACT(MONTH FROM p.payment_date) = $2 AND EXTRACT(YEAR FROM p.payment_date) = $3
     `, [doctorFilterId, targetMonth, targetYear]);
 

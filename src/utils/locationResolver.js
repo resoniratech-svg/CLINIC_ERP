@@ -115,19 +115,8 @@ async function resolveOrCreateLocation(client, params = {}) {
         };
       }
 
-      const words = input.split(/\s+/);
-      if (words.length >= 2) {
-        rawVillage = words[0];
-        rawMandal = words.slice(1).join(' ');
-      } else if (words.length === 1 && words[0].length > 0) {
-        return {
-          error: "Please specify both Village and Mandal in the format 'Village, Mandal' (e.g. 'mandhapur, domakonda')",
-          statusCode: 400,
-          village: words[0],
-          mandal: null,
-          village_id: null,
-          mandal_id: null
-        };
+      if (!rawVillage) {
+        rawVillage = input;
       }
     }
   }

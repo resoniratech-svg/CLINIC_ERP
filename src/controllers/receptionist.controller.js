@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, escapeLike } = require('../utils/helpers');
 const { resolveOrCreateLocation, ensurePatientLocationColumns } = require('../utils/locationResolver');
 const { validateDoctorAvailability, generateDoctorSlots } = require('../utils/doctorScheduleHelper');
 
@@ -100,8 +100,10 @@ async function getDashboard(req, res) {
 // 3.3 Patient Search
 async function searchPatients(req, res) {
   try {
-    const { mobile, name, registration_id, registered_id, patient_id, prescription_date, search, limit, offset } = req.query;
-    const branchId = req.user.branch_id || 1;
+    const { mobile, name, registration_id, registered_id, patient_id, prescription_date, search, q, limit, offset } = req.query;
+    
+    // Branch scoping: super_admin can view all branches or filter by branch_id; other roles scoped to their branch
+    const branchId = (req.user.role === 'super_admin' && !req.query.branch_id) ? null : (req.query.branch_id ? parseInt(req.query.branch_id) : (req.user.branch_id || 1));
 
     const regId = registration_id || registered_id;
 
@@ -127,8 +129,10 @@ async function searchPatients(req, res) {
     const params = [];
     const conditions = [];
 
-    params.push(branchId);
-    conditions.push(`p.branch_id = $${params.length}`);
+    if (branchId) {
+      params.push(branchId);
+      conditions.push(`p.branch_id = $${params.length}`);
+    }
 
     if (prescription_date) {
       query += ` JOIN prescriptions pr ON p.patient_id = pr.patient_id`;
@@ -136,34 +140,77 @@ async function searchPatients(req, res) {
       conditions.push(`DATE(pr.created_at) = $${params.length}`);
     }
 
+    const rawTerm = (search || q || '').trim();
+
     if (mobile) {
-      params.push(`%${mobile.trim()}%`);
+      const esc = escapeLike(mobile.trim());
+      params.push(`%${esc}%`);
       conditions.push(`p.mobile_number ILIKE $${params.length}`);
     } else if (name) {
-      params.push(`%${name.trim()}%`);
+      const esc = escapeLike(name.trim());
+      params.push(`%${esc}%`);
       conditions.push(`p.full_name ILIKE $${params.length}`);
     } else if (regId) {
-      params.push(`%${regId.trim()}%`);
+      const esc = escapeLike(regId.trim());
+      params.push(`%${esc}%`);
       conditions.push(`p.registration_id ILIKE $${params.length}`);
     } else if (patient_id) {
       params.push(parseInt(patient_id));
       conditions.push(`p.patient_id = $${params.length}`);
-    } else if (search && search.trim() !== '' && search.trim() !== '%') {
-      const s = search.trim();
-      params.push(`%${s}%`);
-      conditions.push(`(p.full_name ILIKE $${params.length} OR p.mobile_number ILIKE $${params.length} OR p.registration_id ILIKE $${params.length} OR p.village ILIKE $${params.length})`);
+    } else if (rawTerm && rawTerm !== '%') {
+      const escTerm = escapeLike(rawTerm);
+      const cleanDigits = rawTerm.replace(/\D/g, '');
+      const parsedNum = parseInt(rawTerm);
+
+      const orClauses = [
+        `p.full_name ILIKE $${params.length + 1}`,
+        `p.mobile_number ILIKE $${params.length + 1}`,
+        `p.registration_id ILIKE $${params.length + 1}`,
+        `p.village ILIKE $${params.length + 1}`
+      ];
+      params.push(`%${escTerm}%`);
+
+      if (!isNaN(parsedNum) && String(parsedNum) === rawTerm) {
+        params.push(parsedNum);
+        orClauses.push(`p.patient_id = $${params.length}`);
+      }
+
+      // Support numeric match for registration ID (e.g. "13" or "00013" matches "REG-00013")
+      if (cleanDigits && cleanDigits.length <= 6) {
+        const paddedReg = `REG-${cleanDigits.padStart(5, '0')}`;
+        params.push(`%${paddedReg}%`);
+        orClauses.push(`p.registration_id ILIKE $${params.length}`);
+      }
+
+      conditions.push(`(${orClauses.join(' OR ')})`);
     }
 
     if (conditions.length > 0) {
       query += ` WHERE ` + conditions.join(' AND ');
     }
 
-    query += ` ORDER BY p.patient_id DESC`;
+    // Rank best matches first: exact match > starts-with > contains
+    if (rawTerm && rawTerm !== '%') {
+      const exactParamIdx = params.length + 1;
+      params.push(rawTerm);
+      const prefixParamIdx = params.length + 1;
+      params.push(`${escapeLike(rawTerm)}%`);
 
-    if (limit) {
-      params.push(parseInt(limit));
-      query += ` LIMIT $${params.length}`;
+      query += ` ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) = LOWER($${exactParamIdx}) OR p.mobile_number = $${exactParamIdx} OR LOWER(p.registration_id) = LOWER($${exactParamIdx}) THEN 1
+          WHEN LOWER(p.full_name) ILIKE $${prefixParamIdx} OR p.mobile_number ILIKE $${prefixParamIdx} OR LOWER(p.registration_id) ILIKE $${prefixParamIdx} THEN 2
+          ELSE 3
+        END,
+        p.patient_id DESC`;
+    } else {
+      query += ` ORDER BY p.patient_id DESC`;
     }
+
+    const resLimit = limit ? parseInt(limit) : 25;
+    params.push(resLimit);
+    query += ` LIMIT $${params.length}`;
+
     if (offset) {
       params.push(parseInt(offset));
       query += ` OFFSET $${params.length}`;
@@ -2500,9 +2547,22 @@ async function getConsultationBills(req, res) {
 
 async function getPatientInvoices(req, res) {
   try {
-    const patientId = parseInt(req.params.id);
+    let patientId = parseInt(req.params.id);
+    let resolvedInvoiceParam = req.query.invoice_id || req.query.bill_id || null;
+
+    if (isNaN(patientId) || String(req.params.id).toUpperCase().startsWith('INV-')) {
+      const billCheck = await db.query(
+        `SELECT bill_id, patient_id, bill_number FROM bills WHERE bill_number = $1 OR bill_id::text = $1 LIMIT 1`,
+        [req.params.id]
+      );
+      if (billCheck.rows.length > 0) {
+        patientId = billCheck.rows[0].patient_id;
+        resolvedInvoiceParam = resolvedInvoiceParam || billCheck.rows[0].bill_number;
+      }
+    }
+
     if (!patientId || isNaN(patientId)) {
-      return res.status(400).json(formatResponse(false, null, 'Valid patient_id is required'));
+      return res.status(400).json(formatResponse(false, null, 'Valid patient_id or invoice identifier is required'));
     }
 
     // Fetch patient info
@@ -2571,6 +2631,8 @@ async function getPatientInvoices(req, res) {
 
     patient.referral = referral;
 
+    const targetInvoiceParam = resolvedInvoiceParam;
+
     // Fetch all bills for patient
     const billsRes = await db.query(`
       SELECT b.*,
@@ -2585,11 +2647,11 @@ async function getPatientInvoices(req, res) {
              ) as payment_method,
              COALESCE(
                (SELECT SUM(py.amount) FROM payments py WHERE py.bill_id = b.bill_id AND py.status = 'success'),
-               b.final_amount
+               0
              ) as paid_amount,
              COALESCE(
                (SELECT dp.due_amount FROM due_patients dp WHERE dp.bill_id = b.bill_id AND dp.status = 'pending' LIMIT 1),
-               0
+               GREATEST(0, b.final_amount - COALESCE((SELECT SUM(py.amount) FROM payments py WHERE py.bill_id = b.bill_id AND py.status = 'success'), 0))
              ) as due_amount,
              a.appointment_date,
              a.appointment_time,
@@ -2598,15 +2660,36 @@ async function getPatientInvoices(req, res) {
       LEFT JOIN doctors d ON b.doctor_id = d.doctor_id
       LEFT JOIN users u ON d.user_id = u.user_id
       LEFT JOIN users rec ON b.created_by = rec.user_id
-      LEFT JOIN appointments a ON a.patient_id = b.patient_id AND a.doctor_id = b.doctor_id
+      LEFT JOIN LATERAL (
+        SELECT ap.appointment_id,
+               TO_CHAR(ap.appointment_date, 'YYYY-MM-DD') as appointment_date,
+               ap.appointment_time::text as appointment_time,
+               ap.appointment_type
+        FROM appointments ap
+        WHERE (b.appointment_id IS NOT NULL AND ap.appointment_id = b.appointment_id)
+           OR (b.appointment_id IS NULL AND ap.patient_id = b.patient_id AND (b.doctor_id IS NULL OR ap.doctor_id = b.doctor_id))
+        ORDER BY ap.appointment_date DESC, ap.appointment_time DESC, ap.appointment_id DESC
+        LIMIT 1
+      ) a ON true
       WHERE b.patient_id = $1
-      ORDER BY b.bill_id DESC
-    `, [patientId]);
+      ORDER BY
+        CASE
+          WHEN $2::text IS NOT NULL AND (b.bill_number = $2::text OR b.bill_id::text = $2::text) THEN 0
+          ELSE 1
+        END,
+        b.bill_id DESC
+    `, [patientId, targetInvoiceParam]);
 
     let invoices = billsRes.rows;
     if (invoices.length === 0) {
       const apptRes = await db.query(`
-        SELECT a.*, u.full_name as doctor_name, d.specialization, d.new_consultation_fee, d.renewal_consultation_fee
+        SELECT a.appointment_id,
+               TO_CHAR(a.appointment_date, 'YYYY-MM-DD') as appointment_date,
+               a.appointment_time::text as appointment_time,
+               a.appointment_type,
+               a.doctor_id,
+               a.created_at,
+               u.full_name as doctor_name, d.specialization, d.new_consultation_fee, d.renewal_consultation_fee
         FROM appointments a
         JOIN doctors d ON a.doctor_id = d.doctor_id
         JOIN users u ON d.user_id = u.user_id

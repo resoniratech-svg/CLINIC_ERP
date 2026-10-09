@@ -20,6 +20,7 @@ router.get('/patients/search', receptionistController.searchPatients);
 router.get('/patients/:id/overview', receptionistController.getPatientOverview);
 router.get('/patients/:id/visit-status', receptionistController.getPatientVisitStatus);
 router.get('/patients/:id/invoices', receptionistController.getPatientInvoices);
+router.get('/invoices/:id', receptionistController.getPatientInvoices);
 router.get('/doctors', receptionistController.getActiveDoctors);
 router.get('/active-doctors', receptionistController.getActiveDoctors);
 router.get('/doctors/:id/available-slots', receptionistController.getDoctorAvailableSlots);

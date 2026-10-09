@@ -1,28 +1,48 @@
 const db = require('../db');
-const { formatResponse, isValidMobile } = require('../utils/helpers');
+const { formatResponse, isValidMobile, escapeLike } = require('../utils/helpers');
 
 async function searchPatientInbound(req, res) {
   try {
-    const { mobile_number } = req.body;
-    if (!mobile_number) {
-      return res.status(400).json(formatResponse(false, null, 'Mobile number is required'));
+    const rawSearch = (req.body.mobile_number || req.body.mobile || req.query.mobile || req.query.search || req.query.q || '').trim();
+    if (!rawSearch) {
+      return res.status(400).json(formatResponse(false, null, 'Mobile number or search term is required'));
     }
 
+    const esc = escapeLike(rawSearch);
+    const cleanDigits = rawSearch.replace(/\D/g, '');
+    const paddedReg = (cleanDigits && cleanDigits.length <= 6) ? `%REG-${cleanDigits.padStart(5, '0')}%` : '';
+
     const patientRes = await db.query(
-      `SELECT * FROM patients WHERE mobile_number = $1`,
-      [mobile_number]
+      `SELECT * FROM patients 
+       WHERE mobile_number ILIKE $1 
+          OR full_name ILIKE $1 
+          OR registration_id ILIKE $1
+          OR ($2::text != '' AND registration_id ILIKE $2)
+       ORDER BY 
+         CASE 
+           WHEN mobile_number = $3 OR LOWER(full_name) = LOWER($3) OR LOWER(registration_id) = LOWER($3) THEN 1
+           WHEN mobile_number ILIKE $4 OR LOWER(full_name) ILIKE $4 OR LOWER(registration_id) ILIKE $4 THEN 2
+           ELSE 3
+         END,
+         patient_id DESC
+       LIMIT 10`,
+      [`%${esc}%`, paddedReg, rawSearch, `${esc}%`]
     );
 
     if (patientRes.rows.length > 0) {
       return res.json(formatResponse(true, {
         is_existing: true,
         patient_type: 'existing',
+        count: patientRes.rows.length,
+        patients: patientRes.rows,
         patient: patientRes.rows[0]
-      }, 'Existing patient record found'));
+      }, `${patientRes.rows.length} existing patient record(s) found`));
     } else {
       return res.json(formatResponse(true, {
         is_existing: false,
         patient_type: 'new',
+        count: 0,
+        patients: [],
         patient: null
       }, 'No existing patient found. Proceed to Lead creation.'));
     }

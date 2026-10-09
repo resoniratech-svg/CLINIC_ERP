@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, escapeLike } = require('../utils/helpers');
 const { toPaise, fromPaise, roundMoney, safeAdd, safeSubtract, safeMultiply, formatCurrency } = require('../utils/moneyUtils');
 
 // Helper: Format Date cleanly to YYYY-MM-DD without UTC timezone shift
@@ -35,11 +35,25 @@ async function getDashboard(req, res) {
     const completedRes = await db.query(`SELECT COUNT(*) as cnt FROM appointments WHERE status = 'pro_completed' AND DATE(updated_at) = $1`, [today]);
 
     // Pending Bills
-    const billsRes = await db.query(`SELECT COUNT(*) as cnt FROM bills WHERE status != 'refunded' AND (final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = bills.bill_id), 0))`);
-    // Today's Cash
-    const cashRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1`, [today]);
-    // Today's Revenue (Grand Total)
-    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE DATE(payment_date) = $1`, [today]);
+    const billsRes = await db.query(`
+      SELECT COUNT(*) as cnt FROM bills
+      WHERE status != 'refunded'
+        AND (final_amount > (COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = bills.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = bills.bill_id), 0)))
+    `);
+    // Today's Cash (net of cash refunds today)
+    const cashRes = await db.query(`
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE refund_method = 'cash' AND DATE(created_at) = $1), 0)
+      ) as total
+    `, [today]);
+    // Today's Revenue (Grand Total net collections)
+    const revRes = await db.query(`
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE DATE(payment_date) = $1), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE DATE(created_at) = $1), 0)
+      ) as total
+    `, [today]);
 
     // Due Amount
     const dueRes = await db.query(`SELECT COALESCE(SUM(due_amount), 0) as total FROM due_patients WHERE status IN ('due', 'pending', 'partially_paid')`);
@@ -57,10 +71,10 @@ async function getDashboard(req, res) {
     `);
 
     const paidRevRes = await db.query(`
-      SELECT COALESCE(SUM(amount), 0) as paid_rev
-      FROM payments
-      WHERE EXTRACT(MONTH FROM payment_date) = EXTRACT(MONTH FROM CURRENT_DATE)
-        AND EXTRACT(YEAR FROM payment_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE EXTRACT(MONTH FROM payment_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM payment_date) = EXTRACT(YEAR FROM CURRENT_DATE)), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE EXTRACT(MONTH FROM created_at) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM created_at) = EXTRACT(YEAR FROM CURRENT_DATE)), 0)
+      ) as paid_rev
     `);
 
     const summary = {
@@ -128,7 +142,7 @@ async function getPatientQueue(req, res) {
 async function searchPatients(req, res) {
   try {
     const { search, q, name, patient_id, mobile, limit } = req.query;
-    const branchId = req.user.branch_id || 1;
+    const branchId = (req.user.role === 'super_admin' && !req.query.branch_id) ? null : (req.query.branch_id ? parseInt(req.query.branch_id) : (req.user.branch_id || 1));
 
     const searchTerm = (search || q || name || '').trim();
     const specificPatientId = patient_id ? parseInt(patient_id) : null;
@@ -137,30 +151,67 @@ async function searchPatients(req, res) {
       SELECT p.patient_id, p.registration_id, p.full_name as patient_name, p.full_name,
              p.mobile_number, p.age, p.gender, p.village, p.patient_type
       FROM patients p
-      WHERE p.branch_id = $1
+      WHERE 1=1
     `;
-    const params = [branchId];
+    const params = [];
+
+    if (branchId) {
+      params.push(branchId);
+      query += ` AND p.branch_id = $${params.length}`;
+    }
 
     if (specificPatientId && !isNaN(specificPatientId)) {
       params.push(specificPatientId);
       query += ` AND p.patient_id = $${params.length}`;
     } else if (mobile && mobile.trim()) {
-      params.push(`%${mobile.trim()}%`);
+      params.push(`%${escapeLike(mobile.trim())}%`);
       query += ` AND p.mobile_number ILIKE $${params.length}`;
-    } else if (searchTerm) {
+    } else if (searchTerm && searchTerm !== '%') {
+      const escTerm = escapeLike(searchTerm);
+      const cleanDigits = searchTerm.replace(/\D/g, '');
       const num = parseInt(searchTerm);
+
+      const orClauses = [
+        `p.full_name ILIKE $${params.length + 1}`,
+        `p.mobile_number ILIKE $${params.length + 1}`,
+        `p.registration_id ILIKE $${params.length + 1}`,
+        `p.village ILIKE $${params.length + 1}`
+      ];
+      params.push(`%${escTerm}%`);
+
       if (!isNaN(num) && String(num) === searchTerm) {
         params.push(num);
-        params.push(`%${searchTerm}%`);
-        query += ` AND (p.patient_id = $${params.length - 1} OR p.mobile_number ILIKE $${params.length} OR p.full_name ILIKE $${params.length})`;
-      } else {
-        params.push(`%${searchTerm}%`);
-        query += ` AND (p.full_name ILIKE $${params.length} OR p.mobile_number ILIKE $${params.length} OR p.registration_id ILIKE $${params.length})`;
+        orClauses.push(`p.patient_id = $${params.length}`);
       }
+
+      if (cleanDigits && cleanDigits.length <= 6) {
+        const paddedReg = `REG-${cleanDigits.padStart(5, '0')}`;
+        params.push(`%${paddedReg}%`);
+        orClauses.push(`p.registration_id ILIKE $${params.length}`);
+      }
+
+      query += ` AND (${orClauses.join(' OR ')})`;
     }
 
-    query += ` ORDER BY p.patient_id DESC LIMIT $${params.length + 1}`;
-    params.push(limit ? parseInt(limit) : 50);
+    if (searchTerm && searchTerm !== '%') {
+      const exactIdx = params.length + 1;
+      params.push(searchTerm);
+      const prefixIdx = params.length + 1;
+      params.push(`${escapeLike(searchTerm)}%`);
+
+      query += ` ORDER BY 
+        CASE 
+          WHEN LOWER(p.full_name) = LOWER($${exactIdx}) OR p.mobile_number = $${exactIdx} OR LOWER(p.registration_id) = LOWER($${exactIdx}) THEN 1
+          WHEN LOWER(p.full_name) ILIKE $${prefixIdx} OR p.mobile_number ILIKE $${prefixIdx} OR LOWER(p.registration_id) ILIKE $${prefixIdx} THEN 2
+          ELSE 3
+        END,
+        p.patient_id DESC`;
+    } else {
+      query += ` ORDER BY p.patient_id DESC`;
+    }
+
+    query += ` LIMIT $${params.length + 1}`;
+    params.push(limit ? parseInt(limit) : 25);
 
     const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Patients retrieved successfully'));
@@ -271,10 +322,11 @@ async function getPatientOverview(req, res) {
     // Financials
     const billsRes = await db.query(`
       SELECT b.*,
-             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) as paid_amount,
+             GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) as paid_amount,
              CASE
-               WHEN COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) >= b.final_amount THEN 'paid'
-               WHEN COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id AND status = 'success'), 0) > 0 THEN 'partial'
+               WHEN b.status = 'refunded' THEN 'refunded'
+               WHEN (COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) >= b.final_amount THEN 'paid'
+               WHEN (COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) > 0 THEN 'partial'
                ELSE 'unpaid'
              END as payment_status,
              u.full_name as created_by_name,
@@ -284,7 +336,25 @@ async function getPatientOverview(req, res) {
       WHERE b.patient_id = $1
       ORDER BY b.bill_id DESC
     `, [patientId]);
-    const paymentsRes = await db.query(`SELECT * FROM payments WHERE patient_id = $1 ORDER BY payment_id DESC`, [patientId]);
+    const paymentsRes = await db.query(`
+      SELECT p.*,
+             COALESCE((SELECT SUM(amount) FROM refunds WHERE payment_id = p.payment_id), 0) as refunded_amount
+      FROM payments p
+      WHERE p.patient_id = $1
+      ORDER BY p.payment_id DESC
+    `, [patientId]);
+    const refundsRes = await db.query(`
+      SELECT r.*,
+             p.payment_id as receipt_id,
+             b.bill_number,
+             u.full_name as refunded_by_name
+      FROM refunds r
+      JOIN payments p ON r.payment_id = p.payment_id
+      JOIN bills b ON r.bill_id = b.bill_id
+      JOIN users u ON r.refunded_by = u.user_id
+      WHERE r.patient_id = $1
+      ORDER BY r.refund_id DESC
+    `, [patientId]);
     const duesRes = await db.query(`SELECT id as due_id, patient_id, bill_id, due_amount, status FROM due_patients WHERE patient_id = $1 ORDER BY id DESC`, [patientId]);
 
     // CRM
@@ -358,6 +428,7 @@ async function getPatientOverview(req, res) {
       financials: {
         bills: billsRes.rows,
         payments: paymentsRes.rows,
+        refunds: refundsRes.rows,
         dues: duesRes.rows
       },
       crm: {
@@ -374,6 +445,7 @@ async function getPatientOverview(req, res) {
         packages: packagesRes.rows,
         bills: billsRes.rows,
         payments: paymentsRes.rows,
+        refunds: refundsRes.rows,
         dues: duesRes.rows
       }
     };
@@ -1380,11 +1452,12 @@ async function getPendingBills(req, res) {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
              pkg.package_name, pkg.package_type,
-             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
+             GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
       LEFT JOIN packages pkg ON b.package_id = pkg.package_id
-      WHERE b.status != 'refunded' AND b.bill_type != 'consultation' AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
+      WHERE b.status != 'refunded' AND b.bill_type != 'consultation'
+        AND b.final_amount > GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0))
       ORDER BY b.bill_id DESC
     `);
     return res.json(formatResponse(true, result.rows, 'Pending bills retrieved successfully'));
@@ -1399,11 +1472,12 @@ async function getPaidBills(req, res) {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
              pkg.package_name, pkg.package_type,
-             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
+             GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
       LEFT JOIN packages pkg ON b.package_id = pkg.package_id
-      WHERE b.final_amount <= COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
+      WHERE b.status != 'refunded'
+        AND b.final_amount <= GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0))
       ORDER BY b.bill_id DESC
     `);
     return res.json(formatResponse(true, result.rows, 'Paid bills retrieved successfully'));
@@ -1418,13 +1492,14 @@ async function getPartialDueBills(req, res) {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
              pkg.package_name, pkg.package_type,
-             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
+             GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
       LEFT JOIN packages pkg ON b.package_id = pkg.package_id
       WHERE b.bill_type != 'consultation'
-        AND COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) > 0
-        AND b.final_amount > COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0)
+        AND b.status != 'refunded'
+        AND GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) > 0
+        AND b.final_amount > GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0))
       ORDER BY b.bill_id DESC
     `);
     return res.json(formatResponse(true, result.rows, 'Partial due bills retrieved successfully'));
@@ -1439,7 +1514,7 @@ async function getBillingHistory(req, res) {
     const result = await db.query(`
       SELECT b.*, b.amount as subtotal, b.final_amount as total_amount, p.full_name as patient_name,
              pkg.package_name, pkg.package_type,
-             COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) as paid_amount
+             GREATEST(0, COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = b.bill_id), 0) - COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = b.bill_id), 0)) as paid_amount
       FROM bills b
       JOIN patients p ON b.patient_id = p.patient_id
       LEFT JOIN packages pkg ON b.package_id = pkg.package_id
@@ -1493,9 +1568,13 @@ async function recordPayment(req, res) {
       }
     }
 
-    // ── OVERPAYMENT PROTECTION ────────────────────────────────────────────
-    const prevPayCheck = await client.query(`SELECT COALESCE(SUM(amount), 0) as prev_paid FROM payments WHERE bill_id = $1`, [bill_id]);
-    const prevPaidPaise = toPaise(prevPayCheck.rows[0].prev_paid);
+    // ── OVERPAYMENT PROTECTION (NET OF REFUNDS) ────────────────────────────
+    const prevPayCheck = await client.query(`
+      SELECT
+        COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = $1), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = $1), 0) as net_paid
+    `, [bill_id]);
+    const prevPaidPaise = toPaise(Math.max(0, parseFloat(prevPayCheck.rows[0].net_paid)));
     const newPaymentPaise = payList.reduce((s, p) => s + toPaise(p.amount || 0), 0);
     const billFinalPaise = toPaise(bill.final_amount);
     if (prevPaidPaise + newPaymentPaise > billFinalPaise) {
@@ -1613,44 +1692,287 @@ async function recordPayment(req, res) {
   }
 }
 
+async function getRefundSlipData(refundId) {
+  const query = `
+    SELECT
+      r.*,
+      p.amount as original_payment_amount,
+      p.payment_method as original_payment_method,
+      p.payment_date as original_payment_date,
+      pt.full_name as patient_name,
+      pt.registration_id,
+      pt.mobile_number,
+      pt.age,
+      pt.gender,
+      COALESCE(NULLIF(CONCAT_WS(', ', pt.village, pt.mandal), ''), pt.address, '') as patient_location,
+      b.bill_number,
+      b.final_amount as bill_final_amount,
+      b.bill_type,
+      d.doctor_id,
+      doc_u.full_name as doctor_name,
+      u.full_name as refunded_by_name,
+      u.username as refunded_by_username,
+      br.branch_name,
+      br.address as branch_address,
+      br.phone_number as branch_phone,
+      GREATEST(0, (
+        (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = r.bill_id) -
+        (SELECT COALESCE(SUM(amount), 0) FROM refunds WHERE bill_id = r.bill_id)
+      )) as net_bill_paid,
+      GREATEST(0, b.final_amount - (
+        (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = r.bill_id) -
+        (SELECT COALESCE(SUM(amount), 0) FROM refunds WHERE bill_id = r.bill_id)
+      )) as remaining_due
+    FROM refunds r
+    JOIN payments p ON r.payment_id = p.payment_id
+    JOIN bills b ON r.bill_id = b.bill_id
+    JOIN patients pt ON r.patient_id = pt.patient_id
+    LEFT JOIN doctors d ON b.doctor_id = d.doctor_id
+    LEFT JOIN users doc_u ON d.user_id = doc_u.user_id
+    JOIN users u ON r.refunded_by = u.user_id
+    LEFT JOIN branches br ON r.branch_id = br.branch_id
+    WHERE r.refund_id = $1
+  `;
+  const res = await db.query(query, [refundId]);
+  return res.rows[0] || null;
+}
+
 async function refundPayment(req, res) {
   const client = await db.pool.connect();
   try {
-    const paymentId = parseInt(req.params.id);
+    const paymentId = parseInt(req.params.id, 10);
+    if (!paymentId || isNaN(paymentId)) {
+      return res.status(400).json(formatResponse(false, null, 'Valid payment ID is required'));
+    }
+
+    const { amount, refund_amount, refund_method, reason } = req.body || {};
+    if (!reason || typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json(formatResponse(false, null, 'Refund reason is required'));
+    }
+
+    // Role check: Super Admin, PRO / Manager
+    const ALLOWED_REFUND_ROLES = ['super_admin', 'pro_manager', 'manager'];
+    if (!ALLOWED_REFUND_ROLES.includes(req.user.role)) {
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Your role is not authorized to process refunds'));
+    }
+
     await client.query('BEGIN');
 
-    const payRes = await client.query(`SELECT * FROM payments WHERE payment_id = $1`, [paymentId]);
+    // 1. Lock payment row
+    const payRes = await client.query(`SELECT * FROM payments WHERE payment_id = $1 FOR UPDATE`, [paymentId]);
     if (payRes.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json(formatResponse(false, null, 'Payment record not found'));
     }
     const payment = payRes.rows[0];
-    const refundAmt = parseFloat(payment.amount);
 
-    // Update bill status
-    await client.query(`
-      UPDATE bills
-      SET status = 'refunded'::bill_status,
-          updated_at = now()
-      WHERE bill_id = $1
-    `, [payment.bill_id]);
+    // Branch authorization check
+    if (req.user.role !== 'super_admin' && payment.branch_id && req.user.branch_id && payment.branch_id !== req.user.branch_id) {
+      await client.query('ROLLBACK');
+      return res.status(403).json(formatResponse(false, null, 'Forbidden: Cannot refund payments from another branch'));
+    }
+
+    // 2. Calculate already refunded for this payment
+    const refundedRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as already_refunded FROM refunds WHERE payment_id = $1`, [paymentId]);
+    const alreadyRefunded = parseFloat(refundedRes.rows[0].already_refunded);
+    const originalPaymentAmount = parseFloat(payment.amount);
+    const maxRefundable = Math.max(0, Math.round((originalPaymentAmount - alreadyRefunded) * 100) / 100);
+
+    if (maxRefundable <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'This payment has already been fully refunded'));
+    }
+
+    // Validate refund amount (if omitted, default to maxRefundable)
+    const rawAmt = amount !== undefined && amount !== null && amount !== '' ? amount : refund_amount;
+    const refundAmt = rawAmt !== undefined && rawAmt !== null && rawAmt !== '' ? parseFloat(rawAmt) : maxRefundable;
+    if (isNaN(refundAmt) || refundAmt <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, 'Refund amount must be a positive number greater than 0'));
+    }
+
+    if (Math.round(refundAmt * 100) > Math.round(maxRefundable * 100)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Refund amount ₹${refundAmt.toFixed(2)} exceeds maximum refundable amount of ₹${maxRefundable.toFixed(2)}`));
+    }
+
+    // Validate refund method
+    const validMethods = ['cash', 'card', 'upi', 'razorpay', 'bajaj_pay'];
+    const selectedMethod = refund_method || payment.payment_method || 'cash';
+    if (!validMethods.includes(selectedMethod)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json(formatResponse(false, null, `Invalid refund method. Allowed: ${validMethods.join(', ')}`));
+    }
+
+    // 3. Generate sequential refund number RFD-XXXX
+    const seqRes = await client.query(`SELECT COALESCE(MAX(refund_id), 0) + 1 as next_id FROM refunds`);
+    const nextId = seqRes.rows[0].next_id;
+    const refundNumber = `RFD-${String(nextId).padStart(4, '0')}`;
+
+    const refundedBy = req.user.user_id;
+    const branchId = payment.branch_id || req.user.branch_id || 1;
+
+    // 4. Insert refund record
+    const insRes = await client.query(`
+      INSERT INTO refunds (
+        refund_number, payment_id, bill_id, patient_id, amount,
+        refund_method, reason, refunded_by, branch_id, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+      RETURNING *
+    `, [refundNumber, paymentId, payment.bill_id, payment.patient_id, refundAmt, selectedMethod, reason.trim(), refundedBy, branchId]);
+    const refundRecord = insRes.rows[0];
+
+    // 5. Update payment status
+    const newTotalRefunded = alreadyRefunded + refundAmt;
+    const newPaymentStatus = newTotalRefunded >= originalPaymentAmount ? 'refunded' : 'partially_refunded';
+    await client.query(`UPDATE payments SET status = $1 WHERE payment_id = $2`, [newPaymentStatus, paymentId]);
+
+    // 6. Lock and update bill & dues
+    const billRes = await client.query(`SELECT * FROM bills WHERE bill_id = $1 FOR UPDATE`, [payment.bill_id]);
+    let updatedBill = null;
+    let newDue = 0;
+    if (billRes.rows.length > 0) {
+      const bill = billRes.rows[0];
+      const billFinalAmount = parseFloat(bill.final_amount);
+
+      const netPaidRes = await client.query(`
+        SELECT
+          COALESCE((SELECT SUM(amount) FROM payments WHERE bill_id = $1), 0) as total_paid,
+          COALESCE((SELECT SUM(amount) FROM refunds WHERE bill_id = $1), 0) as total_refunded
+      `, [payment.bill_id]);
+      const totalPaid = parseFloat(netPaidRes.rows[0].total_paid);
+      const totalRefunded = parseFloat(netPaidRes.rows[0].total_refunded);
+      const netPaid = Math.max(0, totalPaid - totalRefunded);
+      newDue = Math.max(0, Math.round((billFinalAmount - netPaid) * 100) / 100);
+
+      const billStatus = netPaid <= 0 ? 'refunded' : 'created';
+      await client.query(`
+        UPDATE bills
+        SET status = $1::bill_status, updated_at = now()
+        WHERE bill_id = $2
+      `, [billStatus, payment.bill_id]);
+
+      // Update due_patients
+      if (newDue > 0) {
+        const dueCheck = await client.query(`SELECT * FROM due_patients WHERE bill_id = $1`, [payment.bill_id]);
+        if (dueCheck.rows.length > 0) {
+          await client.query(`UPDATE due_patients SET due_amount = $1, status = 'pending' WHERE bill_id = $2`, [newDue, payment.bill_id]);
+        } else {
+          await client.query(`
+            INSERT INTO due_patients (patient_id, bill_id, due_amount, status, branch_id)
+            VALUES ($1, $2, $3, 'pending', $4)
+          `, [payment.patient_id, payment.bill_id, newDue, branchId]);
+        }
+      } else {
+        await client.query(`UPDATE due_patients SET due_amount = 0, status = 'paid' WHERE bill_id = $1`, [payment.bill_id]);
+      }
+
+      updatedBill = {
+        bill_id: bill.bill_id,
+        bill_number: bill.bill_number,
+        final_amount: billFinalAmount,
+        net_paid: netPaid,
+        remaining_due: newDue,
+        status: billStatus
+      };
+    }
+
+    // 7. Audit log
+    res.locals.auditEntry = {
+      module: 'PRO Payment',
+      action: 'Refund Payment',
+      recordId: refundRecord.refund_id,
+      newValue: {
+        refund_number: refundNumber,
+        payment_id: paymentId,
+        bill_id: payment.bill_id,
+        refunded_amount: refundAmt,
+        refund_method: selectedMethod,
+        reason: reason.trim()
+      }
+    };
 
     await client.query('COMMIT');
-    res.locals.auditEntry = { module: 'PRO Payment', action: 'Refund Payment', recordId: paymentId, newValue: { refunded_amount: refundAmt } };
-    return res.json(formatResponse(true, { payment_id: paymentId, refunded_amount: refundAmt }, 'Payment refunded successfully'));
+
+    const slipDetails = await getRefundSlipData(refundRecord.refund_id);
+
+    return res.status(201).json(formatResponse(true, {
+      refund: refundRecord,
+      slip: slipDetails,
+      payment_id: paymentId,
+      refunded_amount: refundAmt,
+      remaining_refundable: Math.max(0, maxRefundable - refundAmt),
+      bill: updatedBill
+    }, `Refund ${refundNumber} of ₹${refundAmt.toFixed(2)} processed successfully`));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('refundPayment error:', err);
-    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+    return res.status(500).json(formatResponse(false, null, 'Internal server error processing refund'));
   } finally {
     client.release();
+  }
+}
+
+async function getRefunds(req, res) {
+  try {
+    const branchId = (req.user.role === 'super_admin' && req.query.branch_id)
+      ? parseInt(req.query.branch_id, 10)
+      : (req.user.branch_id || 1);
+
+    const query = `
+      SELECT
+        r.*,
+        p.amount as original_payment_amount,
+        p.payment_method as original_payment_method,
+        pt.full_name as patient_name,
+        pt.registration_id,
+        pt.mobile_number,
+        b.bill_number,
+        b.final_amount as bill_final_amount,
+        u.full_name as refunded_by_name,
+        br.branch_name
+      FROM refunds r
+      JOIN payments p ON r.payment_id = p.payment_id
+      JOIN bills b ON r.bill_id = b.bill_id
+      JOIN patients pt ON r.patient_id = pt.patient_id
+      JOIN users u ON r.refunded_by = u.user_id
+      LEFT JOIN branches br ON r.branch_id = br.branch_id
+      WHERE ($1::integer IS NULL OR r.branch_id = $1)
+      ORDER BY r.refund_id DESC
+    `;
+    const result = await db.query(query, [req.user.role === 'super_admin' && !req.query.branch_id ? null : branchId]);
+    return res.json(formatResponse(true, result.rows, 'Refund history retrieved successfully'));
+  } catch (err) {
+    console.error('getRefunds error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
+  }
+}
+
+async function getRefundById(req, res) {
+  try {
+    const refundId = parseInt(req.params.id, 10);
+    const slip = await getRefundSlipData(refundId);
+    if (!slip) {
+      return res.status(404).json(formatResponse(false, null, 'Refund record not found'));
+    }
+    return res.json(formatResponse(true, slip, 'Refund slip retrieved successfully'));
+  } catch (err) {
+    console.error('getRefundById error:', err);
+    return res.status(500).json(formatResponse(false, null, 'Internal server error'));
   }
 }
 
 async function getTodayPayments(req, res) {
   try {
     const result = await db.query(`
-      SELECT p.*, pt.full_name as patient_name, b.bill_number
+      SELECT
+        p.*,
+        pt.full_name as patient_name,
+        pt.registration_id,
+        b.bill_number,
+        b.final_amount as bill_final_amount,
+        b.status as bill_status,
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE payment_id = p.payment_id), 0) as refunded_amount
       FROM payments p
       JOIN patients pt ON p.patient_id = pt.patient_id
       LEFT JOIN bills b ON p.bill_id = b.bill_id
@@ -1684,7 +2006,14 @@ async function getDueCollections(req, res) {
 async function getPaymentHistory(req, res) {
   try {
     const result = await db.query(`
-      SELECT p.*, pt.full_name as patient_name, b.bill_number
+      SELECT
+        p.*,
+        pt.full_name as patient_name,
+        pt.registration_id,
+        b.bill_number,
+        b.final_amount as bill_final_amount,
+        b.status as bill_status,
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE payment_id = p.payment_id), 0) as refunded_amount
       FROM payments p
       JOIN patients pt ON p.patient_id = pt.patient_id
       LEFT JOIN bills b ON p.bill_id = b.bill_id
@@ -2278,9 +2607,10 @@ async function getCashRevenue(req, res) {
     const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
 
     const result = await db.query(`
-      SELECT COALESCE(SUM(amount), 0) as cash_revenue
-      FROM payments
-      WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE refund_method = 'cash' AND DATE(created_at) = $1 AND branch_id = $2), 0)
+      ) as cash_revenue
     `, [dateParam, branchId]);
 
     return res.json(formatResponse(true, { date: dateParam, cash_revenue: parseFloat(result.rows[0].cash_revenue), branch_id: branchId }, 'Cash revenue retrieved successfully'));
@@ -2364,8 +2694,13 @@ async function getClosingBalance(req, res) {
     const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1`, [branchId, dateParam]);
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
-    // Cash Revenue
-    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2`, [dateParam, branchId]);
+    // Cash Revenue (net of cash refunds)
+    const revRes = await db.query(`
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE refund_method = 'cash' AND DATE(created_at) = $1 AND branch_id = $2), 0)
+      ) as cash_rev
+    `, [dateParam, branchId]);
     const cashRev = parseFloat(revRes.rows[0].cash_rev);
 
     // Cash Expenditure
@@ -2416,8 +2751,13 @@ async function depositCash(req, res) {
     const prevRes = await client.query(`SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1`, [branchId, today]);
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
-    // Compute Cash Revenue
-    const revRes = await client.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2`, [today, branchId]);
+    // Compute Cash Revenue (net of cash refunds)
+    const revRes = await client.query(`
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE refund_method = 'cash' AND DATE(created_at) = $1 AND branch_id = $2), 0)
+      ) as cash_rev
+    `, [today, branchId]);
     const cashRev = parseFloat(revRes.rows[0].cash_rev);
 
     // Compute Cash Expenditure
@@ -2490,8 +2830,13 @@ async function getDailyCashSummary(req, res) {
     const prevRes = await db.query(`SELECT closing_balance FROM cash_ledger WHERE branch_id = $1 AND ledger_date < $2 ORDER BY ledger_date DESC LIMIT 1`, [branchId, dateParam]);
     const openingCash = prevRes.rows.length > 0 ? parseFloat(prevRes.rows[0].closing_balance) : 0.00;
 
-    // Cash Revenue
-    const revRes = await db.query(`SELECT COALESCE(SUM(amount), 0) as cash_rev FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2`, [dateParam, branchId]);
+    // Cash Revenue (net of cash refunds)
+    const revRes = await db.query(`
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE payment_method = 'cash' AND DATE(payment_date) = $1 AND branch_id = $2), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE refund_method = 'cash' AND DATE(created_at) = $1 AND branch_id = $2), 0)
+      ) as cash_rev
+    `, [dateParam, branchId]);
     const cashRev = parseFloat(revRes.rows[0].cash_rev);
 
     // Cash Expenditure
@@ -2505,19 +2850,24 @@ async function getDailyCashSummary(req, res) {
     const cashDeposited = parseFloat(depRes.rows[0].total_dep);
     const closingCash = expectedCash - cashDeposited;
 
-    // Method Breakdown
+    // Method Breakdown (net of refunds)
     const methodRes = await db.query(`
-      SELECT payment_method, COALESCE(SUM(amount), 0) as total
-      FROM payments
-      WHERE DATE(payment_date) = $1 AND branch_id = $2
-      GROUP BY payment_method
+      SELECT
+        p.payment_method,
+        (
+          COALESCE(SUM(p.amount), 0) -
+          COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.refund_method = p.payment_method AND DATE(r.created_at) = $1 AND r.branch_id = $2), 0)
+        ) as total
+      FROM payments p
+      WHERE DATE(p.payment_date) = $1 AND p.branch_id = $2
+      GROUP BY p.payment_method
     `, [dateParam, branchId]);
 
     const breakdown = { cash: 0, card: 0, upi: 0, razorpay: 0, bajaj_pay: 0 };
     let grandTotal = 0;
 
     for (const r of methodRes.rows) {
-      const val = parseFloat(r.total);
+      const val = Math.max(0, parseFloat(r.total));
       grandTotal += val;
       if (breakdown[r.payment_method] !== undefined) {
         breakdown[r.payment_method] = val;
@@ -2550,12 +2900,13 @@ async function getGrandTotal(req, res) {
     const branchId = (req.user.role === 'super_admin' && req.query.branch_id) ? parseInt(req.query.branch_id) : (req.user.branch_id || 1);
 
     const result = await db.query(`
-      SELECT COALESCE(SUM(amount), 0) as grand_total
-      FROM payments
-      WHERE DATE(payment_date) = $1 AND branch_id = $2
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE DATE(payment_date) = $1 AND branch_id = $2), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE DATE(created_at) = $1 AND branch_id = $2), 0)
+      ) as grand_total
     `, [dateParam, branchId]);
 
-    return res.json(formatResponse(true, { date: dateParam, grand_total: parseFloat(result.rows[0].grand_total), branch_id: branchId }, 'Grand total retrieved successfully'));
+    return res.json(formatResponse(true, { date: dateParam, grand_total: Math.max(0, parseFloat(result.rows[0].grand_total)), branch_id: branchId }, 'Grand total retrieved successfully'));
   } catch (err) {
     console.error('getGrandTotal error:', err);
     return res.status(500).json(formatResponse(false, null, 'Internal server error'));
@@ -3309,6 +3660,8 @@ module.exports = {
   getBillingHistory,
   recordPayment,
   refundPayment,
+  getRefunds,
+  getRefundById,
   getTodayPayments,
   getDueCollections,
   getPaymentHistory,

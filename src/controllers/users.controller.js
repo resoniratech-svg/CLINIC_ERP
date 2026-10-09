@@ -1,6 +1,6 @@
 const db = require('../db');
 const bcrypt = require('bcryptjs');
-const { formatResponse, isValidMobile } = require('../utils/helpers');
+const { formatResponse, isValidMobile, escapeLike } = require('../utils/helpers');
 
 async function getUsers(req, res) {
   try {
@@ -51,7 +51,8 @@ async function getUsers(req, res) {
     }
 
     if (search) {
-      params.push(`%${search.trim()}%`);
+      const escaped = escapeLike(search.trim());
+      params.push(`%${escaped}%`);
       query += ` AND (u.full_name ILIKE $${params.length} OR u.username ILIKE $${params.length} OR u.employee_id ILIKE $${params.length} OR u.mobile_number ILIKE $${params.length})`;
     }
 

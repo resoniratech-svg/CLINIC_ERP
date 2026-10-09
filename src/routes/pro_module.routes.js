@@ -55,6 +55,9 @@ router.get('/payments/today', proController.getTodayPayments);
 router.get('/payments/due-collection', proController.getDueCollections);
 router.get('/payments/due-collections', proController.getDueCollections);
 router.get('/payments/history', proController.getPaymentHistory);
+router.get('/refunds', proController.getRefunds);
+router.get('/refunds/:id', proController.getRefundById);
+router.post('/refunds/:id', proController.refundPayment);
 
 // 9. CRM / Calling & Renewals & Dues & ACQ & OC/NR
 router.post('/calls', proController.createCall);

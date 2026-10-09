@@ -1,16 +1,23 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, escapeLike } = require('../utils/helpers');
 
 async function getDoctors(req, res) {
   try {
-    const { status, specialization } = req.query;
+    const { status, specialization, search, q } = req.query;
+    const branchId = (req.user.role === 'super_admin' && !req.query.branch_id) ? null : (req.query.branch_id ? parseInt(req.query.branch_id) : (req.user.branch_id || 1));
+
     let query = `
       SELECT d.*, u.full_name, u.mobile_number, u.email, u.employee_id, u.status as user_status
       FROM doctors d
       JOIN users u ON d.user_id = u.user_id
-      WHERE d.branch_id = $1 AND d.status::text != 'deleted' AND u.status::text != 'deleted'
+      WHERE d.status::text != 'deleted' AND u.status::text != 'deleted'
     `;
-    const params = [req.user.branch_id || 1];
+    const params = [];
+
+    if (branchId) {
+      params.push(branchId);
+      query += ` AND d.branch_id = $${params.length}`;
+    }
 
     if (status) {
       params.push(status);
@@ -18,11 +25,32 @@ async function getDoctors(req, res) {
     }
 
     if (specialization) {
-      params.push(`%${specialization}%`);
+      params.push(`%${escapeLike(specialization.trim())}%`);
       query += ` AND d.specialization ILIKE $${params.length}`;
     }
 
-    query += ` ORDER BY d.doctor_id DESC`;
+    const rawTerm = (search || q || '').trim();
+    if (rawTerm && rawTerm !== '%') {
+      const esc = escapeLike(rawTerm);
+      params.push(`%${esc}%`);
+      query += ` AND (u.full_name ILIKE $${params.length} OR d.doctor_code ILIKE $${params.length} OR u.employee_id ILIKE $${params.length} OR d.specialization ILIKE $${params.length})`;
+      
+      const exactIdx = params.length + 1;
+      params.push(rawTerm);
+      const prefixIdx = params.length + 1;
+      params.push(`${esc}%`);
+
+      query += ` ORDER BY 
+        CASE 
+          WHEN LOWER(u.full_name) = LOWER($${exactIdx}) OR LOWER(d.doctor_code) = LOWER($${exactIdx}) THEN 1
+          WHEN LOWER(u.full_name) ILIKE $${prefixIdx} OR LOWER(d.doctor_code) ILIKE $${prefixIdx} THEN 2
+          ELSE 3
+        END,
+        d.doctor_id DESC`;
+    } else {
+      query += ` ORDER BY d.doctor_id DESC`;
+    }
+
     const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Doctors retrieved successfully'));
   } catch (err) {

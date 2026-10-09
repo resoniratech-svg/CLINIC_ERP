@@ -64,10 +64,15 @@ function sanitizeMobile(mobile) {
   return String(mobile).replace(/\D/g, '').slice(0, 10);
 }
 
+function escapeLike(str = '') {
+  return String(str).replace(/([%_\\])/g, '\\$1');
+}
+
 module.exports = {
   formatResponse,
   generateTempPassword,
   parseUserAgent,
   isValidMobile,
   sanitizeMobile,
+  escapeLike
 };

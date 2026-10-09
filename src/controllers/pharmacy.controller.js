@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, escapeLike } = require('../utils/helpers');
 const xlsx = require('xlsx');
 
 // -------------------------------------------------------------
@@ -1042,12 +1042,27 @@ async function getMedicines(req, res) {
     } else {
       query += ` AND mm.status != 'deleted'`;
     }
-    if (search) {
-      params.push(`%${search}%`);
+    const rawSearch = (search || req.query.q || '').trim();
+    if (rawSearch && rawSearch !== '%') {
+      const esc = escapeLike(rawSearch);
+      params.push(`%${esc}%`);
       query += ` AND (mm.medicine_name ILIKE $${params.length} OR mm.generic_name ILIKE $${params.length} OR mm.serial_number ILIKE $${params.length} OR mm.strength ILIKE $${params.length})`;
-    }
 
-    query += ` ORDER BY mm.updated_at DESC NULLS LAST, mm.id DESC`;
+      const exactIdx = params.length + 1;
+      params.push(rawSearch);
+      const prefixIdx = params.length + 1;
+      params.push(`${esc}%`);
+
+      query += ` ORDER BY 
+        CASE 
+          WHEN LOWER(mm.medicine_name) = LOWER($${exactIdx}) OR LOWER(mm.serial_number) = LOWER($${exactIdx}) THEN 1
+          WHEN LOWER(mm.medicine_name) ILIKE $${prefixIdx} OR LOWER(mm.serial_number) ILIKE $${prefixIdx} THEN 2
+          ELSE 3
+        END,
+        mm.updated_at DESC NULLS LAST, mm.id DESC`;
+    } else {
+      query += ` ORDER BY mm.updated_at DESC NULLS LAST, mm.id DESC`;
+    }
     const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Medicine master list retrieved successfully'));
   } catch (err) {
@@ -3158,32 +3173,71 @@ async function searchPatients(req, res) {
     const params = [];
 
     if (patient_id) {
-      params.push(patient_id);
+      params.push(parseInt(patient_id));
       query += ` AND pt.patient_id = $${params.length}`;
     }
     if (registration_id) {
-      params.push(registration_id);
-      query += ` AND pt.patient_id = $${params.length}`;
+      params.push(`%${escapeLike(registration_id.trim())}%`);
+      query += ` AND pt.registration_id ILIKE $${params.length}`;
     }
     if (name) {
-      params.push(`%${name}%`);
+      params.push(`%${escapeLike(name.trim())}%`);
       query += ` AND pt.full_name ILIKE $${params.length}`;
     }
     if (mobile) {
-      params.push(`%${mobile}%`);
+      params.push(`%${escapeLike(mobile.trim())}%`);
       query += ` AND pt.mobile_number ILIKE $${params.length}`;
     }
     if (prescription_id) {
-      params.push(prescription_id);
+      params.push(parseInt(prescription_id));
       query += ` AND p.id = $${params.length}`;
     }
-    const generalSearch = search || q;
-    if (generalSearch && generalSearch.trim() !== '') {
-      params.push(`%${generalSearch.trim()}%`);
-      query += ` AND (pt.full_name ILIKE $${params.length} OR pt.mobile_number ILIKE $${params.length} OR CAST(pt.patient_id AS TEXT) ILIKE $${params.length})`;
+    const rawSearch = (search || q || '').trim();
+    if (rawSearch && rawSearch !== '%') {
+      const esc = escapeLike(rawSearch);
+      const cleanDigits = rawSearch.replace(/\D/g, '');
+      const num = parseInt(rawSearch);
+
+      const orClauses = [
+        `pt.full_name ILIKE $${params.length + 1}`,
+        `pt.mobile_number ILIKE $${params.length + 1}`,
+        `pt.registration_id ILIKE $${params.length + 1}`,
+        `CAST(pt.patient_id AS TEXT) ILIKE $${params.length + 1}`
+      ];
+      params.push(`%${esc}%`);
+
+      if (!isNaN(num) && String(num) === rawSearch) {
+        params.push(num);
+        orClauses.push(`pt.patient_id = $${params.length}`);
+      }
+
+      if (cleanDigits && cleanDigits.length <= 6) {
+        const paddedReg = `REG-${cleanDigits.padStart(5, '0')}`;
+        params.push(`%${paddedReg}%`);
+        orClauses.push(`pt.registration_id ILIKE $${params.length}`);
+      }
+
+      query += ` AND (${orClauses.join(' OR ')})`;
     }
 
-    query += ` LIMIT 50`;
+    if (rawSearch && rawSearch !== '%') {
+      const exactIdx = params.length + 1;
+      params.push(rawSearch);
+      const prefixIdx = params.length + 1;
+      params.push(`${escapeLike(rawSearch)}%`);
+
+      query += ` ORDER BY 
+        CASE 
+          WHEN LOWER(pt.full_name) = LOWER($${exactIdx}) OR pt.mobile_number = $${exactIdx} OR LOWER(pt.registration_id) = LOWER($${exactIdx}) THEN 1
+          WHEN LOWER(pt.full_name) ILIKE $${prefixIdx} OR pt.mobile_number ILIKE $${prefixIdx} OR LOWER(pt.registration_id) ILIKE $${prefixIdx} THEN 2
+          ELSE 3
+        END,
+        pt.patient_id DESC`;
+    } else {
+      query += ` ORDER BY pt.patient_id DESC`;
+    }
+
+    query += ` LIMIT 25`;
     const result = await db.query(query, params);
     return res.json(formatResponse(true, result.rows, 'Pharmacy patient search results retrieved successfully (excluding doctor notes)'));
   } catch (err) {

@@ -30,15 +30,20 @@ async function getRevenueReport(req, res) {
   try {
     const branchId = req.user.branch_id || 1;
     const revRes = await db.query(`
-      SELECT payment_method, COALESCE(SUM(amount), 0) as total
-      FROM payments WHERE branch_id = $1 AND status = 'success'
-      GROUP BY payment_method
+      SELECT
+        p.payment_method,
+        (
+          COALESCE(SUM(p.amount), 0) -
+          COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.refund_method = p.payment_method AND r.branch_id = $1), 0)
+        ) as total
+      FROM payments p WHERE p.branch_id = $1
+      GROUP BY p.payment_method
     `, [branchId]);
 
     const breakdown = { cash: 0, card: 0, upi: 0, razorpay: 0, bajaj_pay: 0 };
     revRes.rows.forEach(r => {
       if (breakdown[r.payment_method] !== undefined) {
-        breakdown[r.payment_method] = parseFloat(r.total);
+        breakdown[r.payment_method] = Math.max(0, parseFloat(r.total));
       }
     });
 
@@ -70,8 +75,10 @@ async function getTargetReport(req, res) {
     const target = targetRes.rows[0] || { overall_target: 0, enquiry_target: 0, unit_target: 0 };
 
     const revRes = await db.query(`
-      SELECT COALESCE(SUM(amount), 0) as total FROM payments
-      WHERE branch_id = $1 AND EXTRACT(MONTH FROM payment_date) = $2 AND EXTRACT(YEAR FROM payment_date) = $3 AND status = 'success'
+      SELECT (
+        COALESCE((SELECT SUM(amount) FROM payments WHERE branch_id = $1 AND EXTRACT(MONTH FROM payment_date) = $2 AND EXTRACT(YEAR FROM payment_date) = $3), 0) -
+        COALESCE((SELECT SUM(amount) FROM refunds WHERE branch_id = $1 AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3), 0)
+      ) as total
     `, [branchId, curMonth, curYear]);
     const achieved = parseFloat(revRes.rows[0].total);
 

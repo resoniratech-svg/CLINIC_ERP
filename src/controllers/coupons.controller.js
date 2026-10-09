@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const db = require('../db');
-const { formatResponse } = require('../utils/helpers');
+const { formatResponse, escapeLike } = require('../utils/helpers');
 
 /**
  * Helper: Generate a unique coupon code with collision retries.
@@ -54,10 +54,14 @@ async function getGeneratedCode(req, res) {
  */
 async function searchPatientsForCoupon(req, res) {
   try {
-    const q = (req.query.q || '').trim();
-    if (!q || q.length < 2) {
-      return res.json(formatResponse(true, [], 'Please enter at least 2 characters to search'));
+    const q = (req.query.q || req.query.search || '').trim();
+    if (!q || q === '%') {
+      return res.json(formatResponse(true, [], 'Please enter a search term'));
     }
+
+    const esc = escapeLike(q);
+    const cleanDigits = q.replace(/\D/g, '');
+    const num = parseInt(q);
 
     const query = `
       SELECT patient_id, registration_id, registration_id as uhid, full_name, mobile_number, gender, patient_type, village, mandal
@@ -65,11 +69,29 @@ async function searchPatientsForCoupon(req, res) {
       WHERE full_name ILIKE $1 
          OR mobile_number ILIKE $1 
          OR registration_id ILIKE $1
-         OR patient_id::text = $2
-      ORDER BY patient_id DESC
-      LIMIT 20
+         OR ($2::text != '' AND registration_id ILIKE $2)
+         OR ($3::integer IS NOT NULL AND patient_id = $3)
+      ORDER BY 
+        CASE 
+          WHEN LOWER(full_name) = LOWER($4) OR mobile_number = $4 OR LOWER(registration_id) = LOWER($4) THEN 1
+          WHEN LOWER(full_name) ILIKE $5 OR mobile_number ILIKE $5 OR LOWER(registration_id) ILIKE $5 THEN 2
+          ELSE 3
+        END,
+        patient_id DESC
+      LIMIT 25
     `;
-    const result = await db.query(query, [`%${q}%`, isNaN(Number(q)) ? -1 : Number(q)]);
+
+    const paddedReg = (cleanDigits && cleanDigits.length <= 6) ? `%REG-${cleanDigits.padStart(5, '0')}%` : '';
+    const parsedPatientId = (!isNaN(num) && String(num) === q) ? num : null;
+
+    const result = await db.query(query, [
+      `%${esc}%`,
+      paddedReg,
+      parsedPatientId,
+      q,
+      `${esc}%`
+    ]);
+
     return res.json(formatResponse(true, result.rows, 'Patients found'));
   } catch (err) {
     console.error('searchPatientsForCoupon error:', err);

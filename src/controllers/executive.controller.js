@@ -1,5 +1,6 @@
 const db = require('../db');
-const { formatResponse, isValidMobile } = require('../utils/helpers');
+const { formatResponse, isValidMobile, escapeLike } = require('../utils/helpers');
+const { resolveOrCreateLocation } = require('../utils/locationResolver');
 
 // Helper to resolve executive_id for current user
 async function resolveExecutiveId(userId, branchId) {
@@ -63,11 +64,15 @@ async function getDashboard(req, res) {
       WHERE handled_by = $1 AND DATE(created_at) = $2
     `, [userId, today]);
 
-    // Leads created today
+    // Leads created today & status counts
     const leadsRes = await db.query(`
-      SELECT COUNT(*) as leads_created FROM leads
-      WHERE lead_created_by_user_id = $1 AND DATE(created_at) = $2
-    `, [userId, today]);
+      SELECT 
+        COUNT(*) as leads_created,
+        COUNT(CASE WHEN status = 'interested' THEN 1 END) as interested_leads,
+        COUNT(CASE WHEN status = 'not_interested' THEN 1 END) as not_interested_leads
+      FROM leads
+      WHERE (lead_created_by_user_id = $1 OR executive_id = $2) AND DATE(created_at) = $3
+    `, [userId, execId, today]);
 
     // Appointments converted from executive leads
     const apptsRes = await db.query(`
@@ -104,8 +109,8 @@ async function getDashboard(req, res) {
       inbound: parseInt(stats.inbound || 0),
       outbound: parseInt(stats.outbound || 0),
       callbacks: parseInt(stats.callbacks || 0),
-      interested: parseInt(stats.interested || 0),
-      not_interested: parseInt(stats.not_interested || 0),
+      interested: parseInt(leadsRes.rows[0].interested_leads || 0),
+      not_interested: parseInt(leadsRes.rows[0].not_interested_leads || 0),
       appointments_converted: parseInt(apptsRes.rows[0].appointments_converted || 0),
       incentive: {
         month: curMonth,
@@ -126,14 +131,33 @@ async function getDashboard(req, res) {
 // 4 & 5. Inbound Patient Search (Existing vs New)
 async function searchPatientInbound(req, res) {
   try {
-    const mobile = req.query.mobile || req.body.mobile_number || req.body.mobile;
-    if (!mobile) {
-      return res.status(400).json(formatResponse(false, null, 'Mobile number parameter (mobile) is required'));
+    const rawSearch = (req.query.mobile || req.query.search || req.query.q || req.body.mobile_number || req.body.mobile || '').trim();
+    if (!rawSearch) {
+      return res.status(400).json(formatResponse(false, null, 'Search term or mobile number is required'));
     }
 
+    const esc = escapeLike(rawSearch);
+    const cleanDigits = rawSearch.replace(/\D/g, '');
+    const num = parseInt(rawSearch);
+    const paddedReg = (cleanDigits && cleanDigits.length <= 6) ? `%REG-${cleanDigits.padStart(5, '0')}%` : '';
+
     const patientRes = await db.query(
-      `SELECT patient_id, full_name, mobile_number, registration_id, patient_type, created_at FROM patients WHERE mobile_number = $1`,
-      [mobile]
+      `SELECT patient_id, full_name, mobile_number, registration_id, patient_type, created_at 
+       FROM patients 
+       WHERE mobile_number ILIKE $1 
+          OR full_name ILIKE $1 
+          OR registration_id ILIKE $1
+          OR ($2::text != '' AND registration_id ILIKE $2)
+          OR ($3::integer IS NOT NULL AND patient_id = $3)
+       ORDER BY 
+         CASE 
+           WHEN mobile_number = $4 OR LOWER(full_name) = LOWER($4) OR LOWER(registration_id) = LOWER($4) THEN 1
+           WHEN mobile_number ILIKE $5 OR LOWER(full_name) ILIKE $5 OR LOWER(registration_id) ILIKE $5 THEN 2
+           ELSE 3
+         END,
+         patient_id DESC
+       LIMIT 10`,
+      [`%${esc}%`, paddedReg, (!isNaN(num) && String(num) === rawSearch) ? num : null, rawSearch, `${esc}%`]
     );
 
     if (patientRes.rows.length > 0) {
@@ -156,19 +180,23 @@ async function searchPatientInbound(req, res) {
       return res.json(formatResponse(true, {
         is_existing: true,
         patient_type: 'existing',
+        count: patientRes.rows.length,
+        patients: patientRes.rows,
         patient: {
           ...patient,
           previous_appointments: apptsRes.rows,
           previous_leads: leadsRes.rows,
           call_history: callsRes.rows
         }
-      }, 'Existing patient record found. Non-clinical overview retrieved.'));
+      }, `${patientRes.rows.length} existing patient record(s) found.`));
     } else {
       return res.json(formatResponse(true, {
         is_existing: false,
         patient_type: 'new',
+        count: 0,
+        patients: [],
         patient: null
-      }, 'No existing patient found with this mobile number. Proceed to New Lead creation.'));
+      }, 'No existing patient found. Proceed to New Lead creation.'));
     }
   } catch (err) {
     console.error('searchPatientInbound error:', err);
@@ -180,9 +208,9 @@ async function searchPatientInbound(req, res) {
 async function createLead(req, res) {
   try {
     const {
-      lead_name, mobile_number, age, gender, village, mandal,
+      lead_name, mobile_number, age, gender, village, mandal, village_mandal, village_id, mandal_id,
       source, campaign, lead_source, preferred_doctor_id, preferred_date, preferred_time, remarks,
-      requirement, problem, ailment_reason
+      requirement, problem, ailment_reason, status
     } = req.body;
 
     if (!lead_name || !mobile_number) {
@@ -201,6 +229,34 @@ async function createLead(req, res) {
     const finalRequirement = requirement ? requirement.trim() : (problem ? problem.trim() : (ailment_reason ? ailment_reason.trim() : null));
     const finalRemarks = remarks ? remarks.trim() : null;
 
+    // Resolve or auto-create Village / Mandal in master data
+    let resolvedVillage = village ? String(village).trim() : null;
+    let resolvedMandal = mandal ? String(mandal).trim() : null;
+    const rawLoc = village_mandal || village;
+    if (rawLoc || mandal || village_id || mandal_id) {
+      try {
+        const locRes = await resolveOrCreateLocation(db, {
+          village: resolvedVillage,
+          mandal: resolvedMandal,
+          village_mandal: rawLoc,
+          village_id,
+          mandal_id
+        });
+        if (locRes && !locRes.error) {
+          resolvedVillage = locRes.village || resolvedVillage;
+          resolvedMandal = locRes.mandal || resolvedMandal;
+        }
+      } catch (locErr) {
+        console.error('resolveOrCreateLocation error in createLead:', locErr);
+      }
+    }
+
+    // Determine lead status
+    const validStatuses = ['new', 'interested', 'not_interested', 'converted', 'rejected', 'contacted', 'call_back', 'assigned', 'closed'];
+    const leadStatus = status && validStatuses.includes(String(status).toLowerCase().trim())
+      ? String(status).toLowerCase().trim()
+      : 'new';
+
     // Link to patient if existing
     const patRes = await db.query(`SELECT patient_id FROM patients WHERE mobile_number = $1`, [cleanLeadMobile]);
     const patientId = patRes.rows.length > 0 ? patRes.rows[0].patient_id : null;
@@ -210,23 +266,24 @@ async function createLead(req, res) {
         patient_id, lead_name, mobile_number, age, gender, village, mandal,
         source, campaign, lead_created_by_user_id, executive_id, lead_source,
         status, branch_id, requirement, remarks
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'new', $13, $14, $15)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
       RETURNING *
     `, [
-      patientId, lead_name, cleanLeadMobile, age || null, gender || null, village || null, mandal || null,
+      patientId, lead_name, cleanLeadMobile, age || null, gender || null, resolvedVillage || null, resolvedMandal || null,
       source || (sourceTag === 'outbound' ? 'Outbound Excel' : 'Inbound Call'), campaign || null,
-      req.user.user_id, execId, sourceTag, branchId, finalRequirement, finalRemarks
+      req.user.user_id, execId, sourceTag, leadStatus, branchId, finalRequirement, finalRemarks
     ]);
 
     const newLead = result.rows[0];
 
-    // Log call record for lead creation
+    // Log call record for lead creation with accurate status
+    const callStatus = leadStatus === 'interested' ? 'interested' : (leadStatus === 'not_interested' ? 'not_interested' : 'connected');
     await db.query(`
       INSERT INTO call_records (
         patient_id, lead_id, interaction_type, call_purpose, call_status,
         handled_by, branch_id, remarks
-      ) VALUES ($1, $2, $3, 'followup', 'interested', $4, $5, $6)
-    `, [patientId, newLead.lead_id, sourceTag, req.user.user_id, branchId, remarks || 'Lead created']);
+      ) VALUES ($1, $2, $3, 'followup', $4, $5, $6, $7)
+    `, [patientId, newLead.lead_id, sourceTag, callStatus, req.user.user_id, branchId, remarks || `Lead created (${leadStatus})`]);
 
     // Update Executive Performance & Incentive
     if (execId) {
@@ -974,8 +1031,23 @@ async function updateLead(req, res) {
     }
     const newAge = age !== undefined ? (age ? parseInt(age) : null) : current.age;
     const newGender = gender !== undefined ? gender : current.gender;
-    const newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
-    const newMandal = mandal !== undefined ? (mandal ? mandal.trim() : null) : current.mandal;
+    let newVillage = village !== undefined ? (village ? village.trim() : null) : current.village;
+    let newMandal = mandal !== undefined ? (mandal ? mandal.trim() : null) : current.mandal;
+    if (village || mandal) {
+      try {
+        const locRes = await resolveOrCreateLocation(db, {
+          village: newVillage,
+          mandal: newMandal,
+          village_mandal: village
+        });
+        if (locRes && !locRes.error) {
+          newVillage = locRes.village || newVillage;
+          newMandal = locRes.mandal || newMandal;
+        }
+      } catch (locErr) {
+        console.error('resolveOrCreateLocation error in updateLead:', locErr);
+      }
+    }
     const newCampaign = campaign !== undefined ? (campaign ? campaign.trim() : null) : current.campaign;
     const newSource = source !== undefined ? (source ? source.trim() : null) : current.source;
     const newStatus = status !== undefined ? status : current.status;
