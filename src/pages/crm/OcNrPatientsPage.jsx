@@ -1,7 +1,9 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { crmApi, receptionistApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
-import { UserMinus, CheckCircle2, AlertTriangle, Search, ChevronDown, X } from 'lucide-react';
+import { Badge } from '../../components/common/Badge';
+import { formatDisplayDate } from '../../utils/dateUtils';
+import { UserMinus, CheckCircle2, AlertTriangle, Search, ChevronDown, X, History } from 'lucide-react';
 
 export const OcNrPatientsPage = () => {
   const [patientId, setPatientId] = useState('');
@@ -15,19 +17,39 @@ export const OcNrPatientsPage = () => {
   const [isPatientDropdownOpen, setIsPatientDropdownOpen] = useState(false);
   const patientDropdownRef = useRef(null);
 
+  // OC / NR Dropout History
+  const [ocnrList, setOcnrList] = useState([]);
+  const [loadingOcnr, setLoadingOcnr] = useState(false);
+
   const { showToast } = useToast();
 
+  const fetchPatients = async () => {
+    try {
+      const res = await receptionistApi.searchPatients({ search: '%' });
+      if (res.success) {
+        const list = res.data?.patients || (Array.isArray(res.data) ? res.data : []);
+        setPatients(list);
+      }
+    } catch (err) {}
+  };
+
+  const fetchOcnrList = async () => {
+    setLoadingOcnr(true);
+    try {
+      const res = await crmApi.getOcNrPatients();
+      if (res.success) {
+        setOcnrList(res.data || []);
+      }
+    } catch (err) {
+      // Quiet fail if not authorized
+    } finally {
+      setLoadingOcnr(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchPatients = async () => {
-      try {
-        const res = await receptionistApi.searchPatients({ search: '%' });
-        if (res.success) {
-          const list = res.data?.patients || (Array.isArray(res.data) ? res.data : []);
-          setPatients(list);
-        }
-      } catch (err) {}
-    };
     fetchPatients();
+    fetchOcnrList();
   }, []);
 
   useEffect(() => {
@@ -68,9 +90,10 @@ export const OcNrPatientsPage = () => {
       });
 
       if (res.success) {
-        showToast(`Patient #${patientId} classified as ${classification.toUpperCase()}`, 'success');
+        showToast(`Patient #${patientId} classified as ${classification.toUpperCase()} (14-day reactivation scheduled)`, 'success');
         setPatientId('');
         setPatientSearchTerm('');
+        fetchOcnrList();
       }
     } catch (err) {
       showToast(err.message || 'Failed to classify patient', 'error');
@@ -279,6 +302,79 @@ export const OcNrPatientsPage = () => {
             </li>
           </ul>
         </div>
+      </div>
+
+      {/* Classified OC / NR Dropouts History Table */}
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-2xs overflow-hidden">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+            <History className="w-4 h-4 text-slate-500" />
+            <span>Classified OC / NR Drop Patients ({ocnrList.length})</span>
+          </h3>
+        </div>
+
+        {ocnrList.length === 0 ? (
+          <div className="p-6 text-center text-xs text-slate-400">
+            No patients classified as OC or NR yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  <th className="py-3 px-4">Patient</th>
+                  <th className="py-3 px-4">Classification</th>
+                  <th className="py-3 px-4">Primary Reason / Feedback</th>
+                  <th className="py-3 px-4">Marked Date</th>
+                  <th className="py-3 px-4 text-right">Reactivation Protocol</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                {ocnrList.map((item) => {
+                  const isOC = (item.classification || '').toLowerCase() === 'oc';
+                  return (
+                    <tr key={item.id || item.oc_nr_id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-slate-900">
+                        <div>{item.patient_name || `Patient #${item.patient_id}`}</div>
+                        <div className="text-[10px] text-slate-400 font-mono font-normal">
+                          ID: #{item.patient_id} {item.mobile_number ? `• ${item.mobile_number}` : ''}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                            isOC
+                              ? 'bg-red-50 text-red-700 border-red-200'
+                              : 'bg-amber-50 text-amber-700 border-amber-200'
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${isOC ? 'bg-red-500' : 'bg-amber-500'}`} />
+                          {isOC ? 'OC (One Consultation)' : 'NR (Not Returned)'}
+                        </span>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-slate-600 max-w-xs truncate">
+                        {item.reason || <span className="italic text-slate-400">No reason specified</span>}
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono text-slate-700">
+                        {formatDisplayDate(item.marked_at || item.created_at)}
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 rounded-full">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          14-Day CRM Task Active
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

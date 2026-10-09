@@ -15,14 +15,20 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!identifier.trim()) {
+    const trimmedId = identifier.trim();
+    if (!trimmedId) {
       showToast('Please enter your Employee ID, Username, or Mobile', 'warning');
+      return;
+    }
+
+    if (/^\d+$/.test(trimmedId) && trimmedId.length !== 10) {
+      showToast('Mobile number must be exactly 10 digits', 'error');
       return;
     }
 
     setLoading(true);
     try {
-      const res = await authApi.forgotPassword({ identifier: identifier.trim(), reason: reason.trim() });
+      const res = await authApi.forgotPassword({ identifier: trimmedId, reason: reason.trim() });
       if (res?.success) {
         setSubmitted(true);
         const wf = res.data?.workflow || 'authorization_queue';
@@ -69,7 +75,18 @@ export const ForgotPasswordModal = ({ isOpen, onClose }) => {
               type="text"
               required
               value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (/^\d+$/.test(val) && val.length > 10) return;
+                setIdentifier(val);
+              }}
+              onPaste={(e) => {
+                const pasted = e.clipboardData?.getData('text') || '';
+                if (/^\d+$/.test(pasted.trim())) {
+                  e.preventDefault();
+                  setIdentifier(pasted.trim().slice(0, 10));
+                }
+              }}
               placeholder="e.g. EMP005 or 9876543210"
               className="w-full px-3.5 py-2.5 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
             />

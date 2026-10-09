@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '../../components/common/Modal';
+import { MobileInput } from '../../components/common/MobileInput';
+import { isValidMobile } from '../../utils/mobileUtils';
 import { usersApi, settingsApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import { UserCheck, Loader2, Edit3, Shield } from 'lucide-react';
@@ -105,6 +107,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
 
   const [loading, setLoading] = useState(false);
   const [departmentsList, setDepartmentsList] = useState([]);
+  const [mobileError, setMobileError] = useState('');
   const { showToast } = useToast();
 
   useEffect(() => {
@@ -126,6 +129,7 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
         designation: '',
         status: 'active',
       });
+      setMobileError('');
       setReceptionistPerms({ ...EMPTY_RECEPTIONIST_PERMS });
       setProPerms({ ...EMPTY_PRO_PERMS });
       setDoctorPerms({ ...EMPTY_DOCTOR_PERMS });
@@ -209,6 +213,12 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
       return;
     }
 
+    if (!isValidMobile(formData.mobile_number)) {
+      setMobileError('Mobile number must be exactly 10 digits');
+      showToast('Mobile number must be exactly 10 digits', 'error');
+      return;
+    }
+
     setLoading(true);
     try {
       const payload = {
@@ -283,12 +293,16 @@ export const EditUserModal = ({ isOpen, onClose, user, onUserUpdated }) => {
 
             <div>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Mobile Number *</label>
-              <input
-                type="tel"
+              <MobileInput
                 required
+                name="mobile_number"
+                placeholder="9876543210"
                 value={formData.mobile_number}
-                onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value })}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-medium"
+                onChange={(e) => {
+                  setFormData({ ...formData, mobile_number: e.target.value });
+                  if (mobileError && isValidMobile(e.target.value)) setMobileError('');
+                }}
+                error={mobileError}
               />
             </div>
 

@@ -1,26 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { Modal } from '../../components/common/Modal';
+import { MobileInput } from '../../components/common/MobileInput';
+import { isValidMobile } from '../../utils/mobileUtils';
 import { usersApi, settingsApi } from '../../api';
 import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import { UserPlus, Loader2 } from 'lucide-react';
 
+const getInitialFormData = () => ({
+  full_name: '',
+  employee_id: '',
+  mobile_number: '',
+  email: '',
+  gender: 'male',
+  date_of_joining: new Date().toISOString().split('T')[0],
+  username: '',
+  password: '',
+  department: 'Front Desk',
+  designation: 'Receptionist',
+  status: 'active',
+});
+
 export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
   const { user } = useAuth();
   const [role, setRole] = useState('receptionist');
-  const [formData, setFormData] = useState({
-    full_name: '',
-    employee_id: '',
-    mobile_number: '',
-    email: '',
-    gender: 'male',
-    date_of_joining: new Date().toISOString().split('T')[0],
-    username: '',
-    password: '',
-    department: '',
-    designation: '',
-    status: 'active',
-  });
+  const [formData, setFormData] = useState(getInitialFormData());
+  const [mobileError, setMobileError] = useState('');
 
   // Role-specific sub-states
   const [receptionistPerms, setReceptionistPerms] = useState({
@@ -94,6 +99,81 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
   const [specializationsList, setSpecializationsList] = useState([]);
   const { showToast } = useToast();
 
+  const resetForm = () => {
+    setRole('receptionist');
+    setFormData(getInitialFormData());
+    setMobileError('');
+    setReceptionistPerms({
+      registration: true,
+      enquiry: true,
+      appointment: true,
+      checkin: true,
+      consultation_fee_billing: true,
+      payment_collection: true,
+      crm_calling: true,
+      followup: true,
+      renewal: true,
+      due_management: true,
+      coupon_management: false,
+    });
+    setDoctorDetails({
+      qualification: 'MBBS, MD',
+      specialization: 'Homeopathy Specialist',
+      medical_registration_number: '',
+      experience_years: 5,
+      working_days: 'Mon,Tue,Wed,Thu,Fri',
+      start_time: '09:00',
+      end_time: '17:00',
+      slot_duration_minutes: 15,
+      new_consultation_fee: 500,
+      renewal_consultation_fee: 300,
+      followup_consultation_fee: 200,
+    });
+    setDoctorPerms({ coupon_management: false });
+    setProPerms({
+      counselling: true,
+      billing: true,
+      payment: true,
+      due_collection: true,
+      crm: true,
+      followup: true,
+      renewals: true,
+      complaints: true,
+      feedback: true,
+      reports: true,
+      accountant: true,
+      coupon_management: false,
+    });
+    setExecDetails({
+      per_lead_incentive: 100,
+      incentive_type: 'per_lead',
+      incentive_amount: 100,
+      incentive_trigger: 'created',
+    });
+    setPharmacyPerms({
+      prescription_queue: true,
+      dispensing: true,
+      inventory: true,
+      stock: true,
+      batch: true,
+      expiry: true,
+      returns: true,
+      stock_adjustment: true,
+      stock_transactions: true,
+    });
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      resetForm();
+    }
+  }, [isOpen]);
+
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
   useEffect(() => {
     settingsApi.getMasterData('departments', { status: 'active' })
       .then(res => { if (res?.success && Array.isArray(res.data)) setDepartmentsList(res.data); })
@@ -102,7 +182,6 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
       .then(res => { if (res?.success && Array.isArray(res.data)) setSpecializationsList(res.data); })
       .catch(() => {});
   }, []);
-
 
   const handleRoleChange = (newRole) => {
     setRole(newRole);
@@ -125,6 +204,12 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
     e.preventDefault();
     if (!formData.full_name || !formData.employee_id || !formData.mobile_number || !formData.username || !formData.password) {
       showToast('Please fill all required personal & login fields', 'warning');
+      return;
+    }
+
+    if (!isValidMobile(formData.mobile_number)) {
+      setMobileError('Mobile number must be exactly 10 digits');
+      showToast('Mobile number must be exactly 10 digits', 'error');
       return;
     }
 
@@ -152,6 +237,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
       const res = await usersApi.createUser(payload);
       if (res.success) {
         showToast(`User ${formData.full_name} (${role}) created successfully!`, 'success');
+        resetForm();
         if (onUserCreated) onUserCreated();
         onClose();
       }
@@ -163,8 +249,8 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Onboard Hospital Staff User" maxWidth="max-w-3xl">
-      <form onSubmit={handleSubmit} className="space-y-6">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Onboard Hospital Staff User" maxWidth="max-w-3xl">
+      <form onSubmit={handleSubmit} autoComplete="off" className="space-y-6">
         {/* Role Selection Tabs */}
         <div>
           <label className="block text-xs font-bold text-slate-700 uppercase mb-2">Select User Role *</label>
@@ -223,13 +309,16 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
 
             <div>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Mobile Number *</label>
-              <input
-                type="tel"
+              <MobileInput
                 required
+                name="mobile_number"
                 placeholder="9876543210"
                 value={formData.mobile_number}
-                onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value })}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                onChange={(e) => {
+                  setFormData({ ...formData, mobile_number: e.target.value });
+                  if (mobileError && isValidMobile(e.target.value)) setMobileError('');
+                }}
+                error={mobileError}
               />
             </div>
 
@@ -305,6 +394,8 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
               <input
                 type="text"
                 required
+                name="new-user-username"
+                autoComplete="off"
                 value={formData.username}
                 onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                 placeholder="e.g. ramesh_k"
@@ -317,6 +408,8 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
               <input
                 type="password"
                 required
+                name="new-user-password"
+                autoComplete="new-password"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                 placeholder="••••••••"
@@ -513,7 +606,7 @@ export const CreateUserModal = ({ isOpen, onClose, onUserCreated }) => {
         <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-200">
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleClose}
             className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
           >
             Cancel

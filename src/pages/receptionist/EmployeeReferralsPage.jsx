@@ -126,11 +126,17 @@ export const EmployeeReferralsPage = () => {
       return;
     }
 
+    const cleanMobile = formData.mobile_number.trim().replace(/\D/g, '');
+    if (!/^[0-9]{10}$/.test(cleanMobile)) {
+      showToast('Mobile number must be exactly 10 digits', 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const res = await receptionistApi.createEmployeeReferral({
         patient_name: formData.patient_name.trim(),
-        mobile_number: formData.mobile_number.trim(),
+        mobile_number: cleanMobile,
         age: formData.age ? parseInt(formData.age) : null,
         gender: formData.gender,
         village_mandal: formData.village_mandal.trim() || null,
@@ -390,9 +396,16 @@ export const EmployeeReferralsPage = () => {
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Mobile Number *</label>
               <input
                 type="tel"
+                inputMode="numeric"
+                maxLength={10}
                 required
                 value={formData.mobile_number}
-                onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value })}
+                onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const text = e.clipboardData?.getData('text') || '';
+                  setFormData({ ...formData, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                }}
                 placeholder="e.g. 9876543210"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-purple-500 focus:outline-none font-mono"
               />

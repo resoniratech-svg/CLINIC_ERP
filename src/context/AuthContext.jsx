@@ -21,6 +21,25 @@ export const AuthProvider = ({ children }) => {
   });
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    // Proactive security cleanup on mount: Ensure no sensitive credentials/passwords exist in browser storage
+    try {
+      localStorage.removeItem('password');
+      localStorage.removeItem('user_password');
+      localStorage.removeItem('credentials');
+      localStorage.removeItem('auth_password');
+      localStorage.removeItem('remember_me');
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('password');
+        sessionStorage.removeItem('user_password');
+        sessionStorage.removeItem('credentials');
+        sessionStorage.removeItem('auth_password');
+      }
+    } catch (e) {
+      // Ignore storage access errors
+    }
+  }, []);
+
   const login = async (username, password, rememberMe = false) => {
     setLoading(true);
     try {
@@ -48,6 +67,11 @@ export const AuthProvider = ({ children }) => {
           localStorage.removeItem('clinic_token');
           localStorage.removeItem('clinic_user');
         }
+        try {
+          localStorage.removeItem('password');
+          localStorage.removeItem('user_password');
+          localStorage.removeItem('credentials');
+        } catch (e) {}
         return { success: true, user: userData };
       } else {
         throw new Error(response.message || 'Login failed');
@@ -69,6 +93,8 @@ export const AuthProvider = ({ children }) => {
       localStorage.removeItem('clinic_user');
       localStorage.removeItem('username');
       localStorage.removeItem('password');
+      localStorage.removeItem('user_password');
+      localStorage.removeItem('credentials');
       localStorage.removeItem('remember_me');
       try {
         if (typeof sessionStorage !== 'undefined') {

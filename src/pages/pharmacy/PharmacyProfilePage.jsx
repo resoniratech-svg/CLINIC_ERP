@@ -85,8 +85,8 @@ export const PharmacyProfilePage = () => {
       return;
     }
 
-    if (cleanMobile && !/^\d{10,15}$/.test(cleanMobile)) {
-      showToast('Invalid mobile number format. Must be between 10 and 15 digits', 'warning');
+    if (cleanMobile && !/^[0-9]{10}$/.test(cleanMobile)) {
+      showToast('Mobile number must be exactly 10 digits', 'warning');
       return;
     }
 
@@ -322,9 +322,16 @@ export const PharmacyProfilePage = () => {
               <div className="relative">
                 <Phone className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
-                  type="text"
+                  type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={contactForm.mobile_number}
-                  onChange={(e) => setContactForm({ ...contactForm, mobile_number: e.target.value })}
+                  onChange={(e) => setContactForm({ ...contactForm, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                  onPaste={(e) => {
+                    e.preventDefault();
+                    const text = e.clipboardData?.getData('text') || '';
+                    setContactForm({ ...contactForm, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                  }}
                   placeholder="e.g. 9876543210"
                   className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:ring-2 focus:ring-blue-500 focus:bg-white focus:outline-hidden"
                 />

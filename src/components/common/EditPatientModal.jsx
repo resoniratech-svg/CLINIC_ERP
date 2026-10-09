@@ -176,9 +176,15 @@ export const EditPatientModal = ({
               <Phone className="w-3.5 h-3.5 absolute left-3 top-3 text-slate-400" />
               <input
                 type="tel"
+                inputMode="numeric"
                 maxLength={10}
                 value={formData.mobile_number}
-                onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '') })}
+                onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const text = e.clipboardData?.getData('text') || '';
+                  setFormData({ ...formData, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                }}
                 placeholder="10-digit mobile number"
                 className={`w-full pl-9 pr-3 py-2 text-xs rounded-xl border bg-white focus:ring-2 focus:outline-none font-mono font-medium ${
                   errors.mobile_number ? 'border-red-400 focus:ring-red-400' : 'border-slate-300 focus:ring-blue-500'

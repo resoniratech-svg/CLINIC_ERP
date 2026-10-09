@@ -107,11 +107,17 @@ export const InboundCallsPage = () => {
       return;
     }
 
+    const cleanMobile = leadForm.mobile_number.trim().replace(/\D/g, '');
+    if (!/^[0-9]{10}$/.test(cleanMobile)) {
+      showToast('Mobile number must be exactly 10 digits', 'error');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const payload = {
         lead_name: leadForm.lead_name.trim(),
-        mobile_number: leadForm.mobile_number.trim(),
+        mobile_number: cleanMobile,
         age: leadForm.age ? parseInt(leadForm.age) : null,
         gender: leadForm.gender,
         village: leadForm.village.trim() || null,
@@ -396,10 +402,17 @@ export const InboundCallsPage = () => {
                 </label>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   required
                   placeholder="10-digit number"
                   value={leadForm.mobile_number}
                   onChange={(e) => setLeadForm({ ...leadForm, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                  onPaste={(e) => {
+                    e.preventDefault();
+                    const text = e.clipboardData?.getData('text') || '';
+                    setLeadForm({ ...leadForm, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                  }}
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>

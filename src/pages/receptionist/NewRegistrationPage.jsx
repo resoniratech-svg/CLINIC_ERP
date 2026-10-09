@@ -375,6 +375,12 @@ export const NewRegistrationPage = () => {
       return;
     }
 
+    const cleanRegMobile = formData.mobile_number.trim().replace(/\D/g, '');
+    if (!/^[0-9]{10}$/.test(cleanRegMobile)) {
+      showToast('Mobile number must be exactly 10 digits', 'error');
+      return;
+    }
+
     const rawPatientFeeNum = parseFloat(patientFee);
     if (patientFee === '' || isNaN(rawPatientFeeNum) || rawPatientFeeNum < 0) {
       showToast('Please enter a valid non-negative consultation fee', 'warning');
@@ -526,9 +532,16 @@ export const NewRegistrationPage = () => {
               <div className="relative">
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   required
                   value={formData.mobile_number}
-                  onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value })}
+                  onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                  onPaste={(e) => {
+                    e.preventDefault();
+                    const text = e.clipboardData?.getData('text') || '';
+                    setFormData({ ...formData, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                  }}
                   onBlur={checkExistingMobile}
                   placeholder="e.g. 9876543210"
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-mono font-bold"

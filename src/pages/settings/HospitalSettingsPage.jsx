@@ -74,6 +74,13 @@ export const HospitalSettingsPage = () => {
 
   const handleUpdateSettings = async (e) => {
     e.preventDefault();
+    if (settings.hospital_phone) {
+      const cleanPhone = String(settings.hospital_phone).trim().replace(/\D/g, '');
+      if (cleanPhone && !/^[0-9]{10}$/.test(cleanPhone)) {
+        showToast('Official Contact Phone must be exactly 10 digits', 'warning');
+        return;
+      }
+    }
     setSavingSettings(true);
     try {
       const res = await settingsApi.updateHospitalSettings(settings);
@@ -218,9 +225,16 @@ export const HospitalSettingsPage = () => {
                   <div>
                     <label className="block font-semibold text-slate-700 mb-1">Official Contact Phone</label>
                     <input
-                      type="text"
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={10}
                       value={settings.hospital_phone || ''}
-                      onChange={(e) => setSettings({ ...settings, hospital_phone: e.target.value })}
+                      onChange={(e) => setSettings({ ...settings, hospital_phone: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                      onPaste={(e) => {
+                        e.preventDefault();
+                        const text = e.clipboardData?.getData('text') || '';
+                        setSettings({ ...settings, hospital_phone: text.replace(/\D/g, '').slice(0, 10) });
+                      }}
                       className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     />
                   </div>

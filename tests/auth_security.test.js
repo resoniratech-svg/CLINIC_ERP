@@ -105,6 +105,16 @@ describe('Clinic ERP - Authentication Security & Credential Isolation Suite', ()
     assert.match(content, /sessionStorage\.clear\(\)/, 'Logout must clear sessionStorage');
   });
 
+  test('7b. AuthContext and LoginPage proactively purge legacy passwords from storage on mount', () => {
+    const authContextPath = path.join(srcDir, 'context/AuthContext.jsx');
+    const authContent = fs.readFileSync(authContextPath, 'utf8');
+    assert.match(authContent, /localStorage\.removeItem\(['"]password['"]\)/, 'AuthContext must clean up legacy password');
+
+    const loginPagePath = path.join(srcDir, 'pages/auth/LoginPage.jsx');
+    const loginContent = fs.readFileSync(loginPagePath, 'utf8');
+    assert.match(loginContent, /localStorage\.removeItem\(['"]password['"]\)/, 'LoginPage must clean up legacy password on mount');
+  });
+
   // 4. Modal Password and Reset Fields
   test('8. ChangePasswordModal initializes all input fields to empty strings', () => {
     const modalPath = path.join(srcDir, 'pages/auth/ChangePasswordModal.jsx');

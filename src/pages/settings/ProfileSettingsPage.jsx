@@ -155,9 +155,9 @@ export const ProfileSettingsPage = () => {
     }
 
     if (editForm.mobile_number.trim()) {
-      const cleanDigits = editForm.mobile_number.replace(/[\s\-()+]/g, '');
-      if (cleanDigits.length < 7 || cleanDigits.length > 15 || !/^\d+$/.test(cleanDigits)) {
-        showToast('Invalid mobile number format. Must be 7 to 15 digits', 'warning');
+      const cleanDigits = editForm.mobile_number.replace(/\D/g, '');
+      if (!/^[0-9]{10}$/.test(cleanDigits)) {
+        showToast('Mobile number must be exactly 10 digits', 'warning');
         return;
       }
     }
@@ -471,8 +471,15 @@ export const ProfileSettingsPage = () => {
                 </label>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={editForm.mobile_number}
-                  onChange={(e) => setEditForm({ ...editForm, mobile_number: e.target.value })}
+                  onChange={(e) => setEditForm({ ...editForm, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                  onPaste={(e) => {
+                    e.preventDefault();
+                    const text = e.clipboardData?.getData('text') || '';
+                    setEditForm({ ...editForm, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                  }}
                   placeholder="e.g. 9876543210"
                   className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none font-medium text-slate-900"
                 />

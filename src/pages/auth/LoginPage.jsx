@@ -63,6 +63,25 @@ export const LoginPage = () => {
   };
 
   useEffect(() => {
+    // Security cleanup: purge any legacy stored passwords or credentials from browser storage on load
+    try {
+      localStorage.removeItem('password');
+      localStorage.removeItem('user_password');
+      localStorage.removeItem('credentials');
+      localStorage.removeItem('auth_password');
+      localStorage.removeItem('remember_me');
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('password');
+        sessionStorage.removeItem('user_password');
+        sessionStorage.removeItem('credentials');
+        sessionStorage.removeItem('auth_password');
+      }
+    } catch (e) {
+      // Ignore storage access errors in sandboxed/restricted environments
+    }
+  }, []);
+
+  useEffect(() => {
     if (token && user) {
       routeUser(user);
     }
@@ -74,10 +93,17 @@ export const LoginPage = () => {
       showToast('Please enter both username and password', 'warning');
       return;
     }
+    const trimmedUser = username.trim();
+
+    // Only apply the 10-digit rule when the value is numeric
+    if (/^\d+$/.test(trimmedUser) && trimmedUser.length !== 10) {
+      showToast('Mobile number must be exactly 10 digits', 'error');
+      return;
+    }
 
     setLoading(true);
     try {
-      const res = await login(username, password, rememberMe);
+      const res = await login(trimmedUser, password, rememberMe);
       if (res.success) {
         setUsername('');
         setPassword('');
@@ -362,7 +388,18 @@ export const LoginPage = () => {
                     required
                     autoComplete="username"
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (/^\d+$/.test(val) && val.length > 10) return;
+                      setUsername(val);
+                    }}
+                    onPaste={(e) => {
+                      const pasted = e.clipboardData?.getData('text') || '';
+                      if (/^\d+$/.test(pasted.trim())) {
+                        e.preventDefault();
+                        setUsername(pasted.trim().slice(0, 10));
+                      }
+                    }}
                     placeholder="Enter username or mobile"
                     className="w-full h-11 pl-10 pr-4 bg-slate-50/70 border border-slate-200 hover:border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/15 transition-all"
                   />

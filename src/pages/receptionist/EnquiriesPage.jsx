@@ -72,7 +72,7 @@ export const EnquiriesPage = () => {
 
     const cleanMobile = formData.mobile.trim();
     if (!cleanMobile || !/^[0-9]{10}$/.test(cleanMobile)) {
-      showToast('Please enter a valid 10-digit mobile number', 'warning');
+      showToast('Mobile number must be exactly 10 digits', 'warning');
       return;
     }
 
@@ -320,10 +320,16 @@ export const EnquiriesPage = () => {
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">Mobile Number (10 Digits) *</label>
               <input
                 type="tel"
+                inputMode="numeric"
                 required
-                maxLength="10"
+                maxLength={10}
                 value={formData.mobile}
-                onChange={(e) => setFormData({ ...formData, mobile: e.target.value.replace(/[^0-9]/g, '') })}
+                onChange={(e) => setFormData({ ...formData, mobile: e.target.value.replace(/[^0-9]/g, '').slice(0, 10) })}
+                onPaste={(e) => {
+                  e.preventDefault();
+                  const text = e.clipboardData?.getData('text') || '';
+                  setFormData({ ...formData, mobile: text.replace(/[^0-9]/g, '').slice(0, 10) });
+                }}
                 placeholder="e.g. 9876543210"
                 className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-sky-500 focus:outline-none font-mono font-bold"
               />

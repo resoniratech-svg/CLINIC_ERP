@@ -73,8 +73,9 @@ export const cashApi = {
 export const crmApi = {
   getFollowups: (params) => axiosClient.get('/crm/followups', { params }),
   createFollowup: (data) => axiosClient.post('/crm/followups', data),
-  getAcqPatients: (params) => axiosClient.get('/pro/acq', { params }),
+  getAcqPatients: (params) => axiosClient.get('/crm/acq', { params }).catch(() => axiosClient.get('/pro/acq', { params })),
   createAcqPatient: (data) => axiosClient.post('/crm/acq', data),
+  getOcNrPatients: (params) => axiosClient.get('/crm/ocnr', { params }).catch(() => axiosClient.get('/pro/ocnr', { params })),
   markOcNrPatient: (data) => axiosClient.post('/crm/ocnr', data),
   createReferral: (data) => axiosClient.post('/crm/referrals', data),
 };

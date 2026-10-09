@@ -77,8 +77,8 @@ export const PROProfilePage = () => {
       return;
     }
 
-    if (cleanMobile && !/^\d{10,15}$/.test(cleanMobile)) {
-      showToast('Invalid mobile number format. Must be between 10 and 15 digits', 'warning');
+    if (cleanMobile && !/^[0-9]{10}$/.test(cleanMobile)) {
+      showToast('Mobile number must be exactly 10 digits', 'warning');
       return;
     }
 
@@ -346,10 +346,17 @@ export const PROProfilePage = () => {
                 <label className="text-xs font-bold text-slate-700">Mobile Number</label>
                 <input
                   type="tel"
+                  inputMode="numeric"
+                  maxLength={10}
                   value={contactForm.mobile_number}
-                  onChange={e => setContactForm({ ...contactForm, mobile_number: e.target.value })}
+                  onChange={e => setContactForm({ ...contactForm, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+                  onPaste={e => {
+                    e.preventDefault();
+                    const text = e.clipboardData?.getData('text') || '';
+                    setContactForm({ ...contactForm, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+                  }}
                   placeholder="e.g. 9876543210"
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-[#1565C0] outline-none"
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:border-[#1565C0] outline-none font-mono"
                 />
               </div>
 

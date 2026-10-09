@@ -54,8 +54,8 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
     }
 
     const cleanMobile = formData.mobile_number.replace(/\D/g, '');
-    if (cleanMobile.length < 10) {
-      showToast('Please enter a valid 10-digit mobile number', 'warning');
+    if (cleanMobile.length !== 10) {
+      showToast('Mobile number must be exactly 10 digits', 'error');
       return;
     }
 
@@ -150,9 +150,16 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
             </label>
             <input
               type="tel"
+              inputMode="numeric"
+              maxLength={10}
               required
               value={formData.mobile_number}
               onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').slice(0, 10) })}
+              onPaste={(e) => {
+                e.preventDefault();
+                const text = e.clipboardData?.getData('text') || '';
+                setFormData({ ...formData, mobile_number: text.replace(/\D/g, '').slice(0, 10) });
+              }}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="e.g. 9876543210"
             />
