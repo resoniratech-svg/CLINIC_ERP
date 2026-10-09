@@ -3,6 +3,11 @@ const { formatResponse } = require('../utils/helpers');
 const { resolveOrCreateLocation } = require('../utils/locationResolver');
 const { validateDoctorAvailability, generateDoctorSlots } = require('../utils/doctorScheduleHelper');
 
+// Helper to get today's date in IST (Asia/Kolkata)
+function getTodayIST() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date());
+}
+
 // Helper to resolve doctor_id for current user
 async function resolveDoctorId(userId) {
   const res = await db.query(`SELECT doctor_id FROM doctors WHERE user_id = $1`, [userId]);
@@ -22,7 +27,7 @@ async function getDashboard(req, res) {
     }
 
     const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayIST();
 
     // Appointments Counts today
     const apptsRes = await db.query(`
@@ -35,21 +40,33 @@ async function getDashboard(req, res) {
       WHERE ($1::integer IS NULL OR doctor_id = $1) AND appointment_date = $2
     `, [doctorFilterId, today]);
 
-    // Recommended Follow-ups Count today
-    const followupsRes = await db.query(`
-      SELECT COUNT(*) as recommended_followups
-      FROM consultations
-      WHERE ($1::integer IS NULL OR doctor_id = $1) AND followup_recommended = true AND DATE(created_at) = $2
+    // Upcoming Assigned Appointments Count (from today onward)
+    const upcomingRes = await db.query(`
+      SELECT COUNT(*) as upcoming_assigned
+      FROM appointments
+      WHERE ($1::integer IS NULL OR doctor_id = $1)
+        AND appointment_date >= $2::date
+        AND status NOT IN ('cancelled', 'completed', 'doctor_completed', 'pro_completed', 'dispensed')
     `, [doctorFilterId, today]);
 
-    // Read-only My Follow-up View (recent recommendations history)
+    // Recommended Follow-ups Count today (including transferred patients)
+    const followupsRes = await db.query(`
+      SELECT COUNT(*) as recommended_followups
+      FROM consultations c
+      JOIN appointments a ON c.appointment_id = a.appointment_id
+      WHERE ($1::integer IS NULL OR c.doctor_id = $1 OR a.doctor_id = $1)
+        AND c.followup_recommended = true
+        AND (c.followup_recommended_date = $2::date OR DATE(c.created_at) = $2::date)
+    `, [doctorFilterId, today]);
+
+    // Read-only My Follow-up View (recent recommendations history, including transferred patients)
     const followupHistoryRes = await db.query(`
       SELECT c.consultation_id, c.appointment_id, c.patient_id, p.full_name as patient_name,
              c.followup_recommended_date, c.followup_instructions, c.created_at, a.status as appointment_status
       FROM consultations c
       JOIN patients p ON c.patient_id = p.patient_id
       JOIN appointments a ON c.appointment_id = a.appointment_id
-      WHERE ($1::integer IS NULL OR c.doctor_id = $1) AND c.followup_recommended = true
+      WHERE ($1::integer IS NULL OR c.doctor_id = $1 OR a.doctor_id = $1) AND c.followup_recommended = true
       ORDER BY c.created_at DESC LIMIT 10
     `, [doctorFilterId]);
 
@@ -98,6 +115,7 @@ async function getDashboard(req, res) {
       waiting: parseInt(stats.waiting || 0),
       in_consultation: parseInt(stats.in_consultation || 0),
       completed_today: parseInt(stats.completed_today || 0),
+      upcoming_assigned: parseInt(upcomingRes.rows[0]?.upcoming_assigned || 0),
       recommended_followups: parseInt(followupsRes.rows[0].recommended_followups || 0),
       my_followup_view: followupHistoryRes.rows,
       target_summary: {
@@ -139,7 +157,7 @@ async function getTodayAppointments(req, res) {
     const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
 
     const { type, status, date } = req.query;
-    const targetDate = date || new Date().toISOString().split('T')[0];
+    const targetDate = date || getTodayIST();
 
     let query = `
       SELECT a.appointment_id, a.appointment_id as token_number, a.patient_id,
@@ -188,7 +206,7 @@ async function getUpcomingAppointments(req, res) {
     const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
 
     const { type, days = 60 } = req.query;
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayIST();
     const maxDays = Math.min(parseInt(days) || 60, 180); // cap at 180 days
     const endDate = new Date(Date.now() + maxDays * 86400000).toISOString().split('T')[0];
 
@@ -235,7 +253,7 @@ async function getPatientQueue(req, res) {
     const userId = req.user.user_id;
     const docId = await resolveDoctorId(userId);
     const doctorFilterId = docId || (req.query.doctor_id ? parseInt(req.query.doctor_id) : null);
-    const today = new Date().toISOString().split('T')[0];
+    const today = getTodayIST();
 
     const result = await db.query(`
       SELECT a.appointment_id, a.appointment_id as token_number, a.patient_id,
