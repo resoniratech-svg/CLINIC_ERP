@@ -1,17 +1,19 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { doctorsApi } from '../../api';
 import { Badge } from '../../components/common/Badge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
 import { DoctorTransferModal } from './DoctorTransferModal';
+import { DoctorReactivationModal } from './DoctorReactivationModal';
 import { useToast } from '../../context/ToastContext';
-import { Stethoscope, UserMinus, Search, Clock, Calendar, DollarSign, Award } from 'lucide-react';
+import { Stethoscope, UserMinus, UserCheck, Search, Clock, Calendar, DollarSign, Award } from 'lucide-react';
 
 export const DoctorsListPage = () => {
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedDoctorForTransfer, setSelectedDoctorForTransfer] = useState(null);
+  const [selectedDoctorForReactivation, setSelectedDoctorForReactivation] = useState(null);
 
   const { showToast } = useToast();
 
@@ -130,7 +132,13 @@ export const DoctorsListPage = () => {
                           <span>Resign & Transfer</span>
                         </button>
                       ) : (
-                        <span className="text-slate-400 text-[11px] italic">Inactive (Transferred)</span>
+                        <button
+                          onClick={() => setSelectedDoctorForReactivation(doc)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-xl transition-colors cursor-pointer border border-emerald-200"
+                        >
+                          <UserCheck className="w-3.5 h-3.5" />
+                          <span>Reactivate</span>
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -147,6 +155,13 @@ export const DoctorsListPage = () => {
         sourceDoctor={selectedDoctorForTransfer}
         activeDoctors={doctors.filter((d) => d.status === 'active')}
         onTransferSuccess={fetchDoctors}
+      />
+
+      <DoctorReactivationModal
+        isOpen={!!selectedDoctorForReactivation}
+        onClose={() => setSelectedDoctorForReactivation(null)}
+        doctor={selectedDoctorForReactivation}
+        onReactivationSuccess={fetchDoctors}
       />
     </div>
   );

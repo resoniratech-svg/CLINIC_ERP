@@ -39,6 +39,8 @@ export const doctorsApi = {
   getDoctors: (params) => axiosClient.get('/doctors', { params }),
   getDoctorSummary: (id) => axiosClient.get(`/doctors/${id}/summary`),
   transferResponsibilities: (id, data) => axiosClient.post(`/doctors/${id}/transfer`, data),
+  getDoctorReactivationPreview: (id) => axiosClient.get(`/doctors/${id}/reactivation-preview`),
+  reactivateDoctor: (id, data) => axiosClient.post(`/doctors/${id}/reactivate`, data),
 };
 
 export const targetsApi = {
