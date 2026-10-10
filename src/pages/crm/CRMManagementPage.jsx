@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { crmApi, usersApi, receptionistApi } from '../../api';
 import { Badge } from '../../components/common/Badge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -6,13 +7,16 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { Modal } from '../../components/common/Modal';
 import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
 import { useToast } from '../../context/ToastContext';
-import { Layers, Plus, Calendar, Phone, CheckCircle2, ShieldAlert, Search, ChevronDown, X, User } from 'lucide-react';
+import { getTodayDateString, toLocalDateString } from '../../utils/dateUtils';
+import { Layers, Plus, Calendar, Phone, CheckCircle2, ShieldAlert, Search, ChevronDown, X, User, RotateCcw } from 'lucide-react';
 
 export const CRMManagementPage = () => {
+  const [searchParams] = useSearchParams();
   const [followups, setFollowups] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [categoryFilter, setCategoryFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState(searchParams.get('category') || '');
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
+  const [dateFilter, setDateFilter] = useState(searchParams.get('date') || '');
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [eligibleStaff, setEligibleStaff] = useState([]);
@@ -73,6 +77,24 @@ export const CRMManagementPage = () => {
     fetchFollowups();
     fetchStaff();
   }, [categoryFilter, statusFilter]);
+
+  useEffect(() => {
+    const cat = searchParams.get('category');
+    if (cat !== null) setCategoryFilter(cat);
+    const stat = searchParams.get('status');
+    if (stat !== null) setStatusFilter(stat);
+    const d = searchParams.get('date');
+    if (d !== null) setDateFilter(d);
+  }, [searchParams]);
+
+  const displayedFollowups = followups.filter((f) => {
+    if (dateFilter === 'today') {
+      const today = getTodayDateString();
+      const fDate = toLocalDateString(f.due_date);
+      if (fDate && fDate !== today) return false;
+    }
+    return true;
+  });
 
   const handleCreateTask = async (e) => {
     e.preventDefault();
@@ -159,12 +181,40 @@ export const CRMManagementPage = () => {
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
         </select>
+
+        <button
+          type="button"
+          onClick={() => setDateFilter(dateFilter === 'today' ? '' : 'today')}
+          className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+            dateFilter === 'today'
+              ? 'bg-blue-600 text-white border-blue-600'
+              : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+          }`}
+        >
+          {dateFilter === 'today' ? 'Due Today ✓' : 'Due Today'}
+        </button>
+
+        {(categoryFilter || statusFilter || dateFilter) && (
+          <button
+            type="button"
+            onClick={() => {
+              setCategoryFilter('');
+              setStatusFilter('');
+              setDateFilter('');
+            }}
+            title="Clear all filters"
+            className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span>Clear Filters</span>
+          </button>
+        )}
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-200 shadow-2xs overflow-hidden">
         {loading ? (
           <LoadingSpinner label="Loading CRM patient queue..." />
-        ) : followups.length === 0 ? (
+        ) : displayedFollowups.length === 0 ? (
           <EmptyState
             title="No CRM follow-ups found"
             description="All scheduled patient tasks are up to date. Schedule a new task above."
@@ -183,7 +233,7 @@ export const CRMManagementPage = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
-                {followups.map((f) => {
+                {displayedFollowups.map((f) => {
                   const categoryLabels = {
                     treatment: 'Treatment Progress',
                     appointment: 'Appointment Reminder',

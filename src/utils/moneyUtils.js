@@ -41,3 +41,21 @@ export function formatCurrency(val) {
     maximumFractionDigits: 2
   }).format(num);
 }
+
+/**
+ * Shared helper to determine if any line on an invoice has a discount > 0.
+ * Decides whether the Discount column and discount totals rows should be shown.
+ *
+ * @param {Array} lines - Array of invoice line items or discount values
+ * @returns {boolean} - true if at least one line has discount > 0
+ */
+export function hasDiscount(lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return false;
+  return lines.some((l) => {
+    if (l == null) return false;
+    const val = typeof l === 'object' ? (l.discount ?? l.discount_amount ?? 0) : l;
+    const num = parseFloat(val);
+    return !isNaN(num) && num > 0;
+  });
+}
+

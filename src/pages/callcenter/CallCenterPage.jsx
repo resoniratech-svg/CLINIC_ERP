@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { callCenterApi, receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { ExcelImportModal } from './ExcelImportModal';
 import { useToast } from '../../context/ToastContext';
-import { Headset, PhoneIncoming, PhoneOutgoing, Award, Search, Upload, Plus, UserCheck, CheckCircle2 } from 'lucide-react';
+import { getTodayDateString, toLocalDateString } from '../../utils/dateUtils';
+import { Headset, PhoneIncoming, PhoneOutgoing, Award, Search, Upload, Plus, UserCheck, CheckCircle2, Filter, RotateCcw } from 'lucide-react';
 
 export const CallCenterPage = () => {
-  const [activeTab, setActiveTab] = useState('leads');
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') || 'leads';
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [leads, setLeads] = useState([]);
   const [incentives, setIncentives] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -14,6 +18,10 @@ export const CallCenterPage = () => {
   // Search filter states
   const [leadsSearchTerm, setLeadsSearchTerm] = useState('');
   const [incentivesSearchTerm, setIncentivesSearchTerm] = useState('');
+
+  // Status & Date Filters from URL or user selection
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
+  const [dateFilter, setDateFilter] = useState(searchParams.get('date') || '');
 
   // Inbound search state
   const [inboundMobile, setInboundMobile] = useState('');
@@ -34,6 +42,17 @@ export const CallCenterPage = () => {
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
   const { showToast } = useToast();
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    if (tabParam && ['leads', 'inbound', 'incentives'].includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+    const statParam = searchParams.get('status');
+    if (statParam !== null) setStatusFilter(statParam);
+    const dateParam = searchParams.get('date');
+    if (dateParam !== null) setDateFilter(dateParam);
+  }, [searchParams]);
 
   const fetchLeads = async () => {
     setLoading(true);
@@ -121,6 +140,15 @@ export const CallCenterPage = () => {
     new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val || 0);
 
   const filteredLeads = leads.filter((l) => {
+    if (statusFilter && (l.status || '').toLowerCase() !== statusFilter.toLowerCase()) {
+      return false;
+    }
+    if (dateFilter === 'today') {
+      const today = getTodayDateString();
+      const leadDate = toLocalDateString(l.created_at || l.updated_at);
+      if (leadDate && leadDate !== today) return false;
+    }
+
     if (!leadsSearchTerm.trim()) return true;
     const q = leadsSearchTerm.toLowerCase();
     const name = (l.lead_name || '').toLowerCase();
@@ -191,17 +219,61 @@ export const CallCenterPage = () => {
         <div className="bg-white rounded-3xl border border-slate-200 shadow-2xs overflow-hidden">
           {/* Search Toolbar */}
           <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs bg-slate-50/50">
-            <div className="relative flex-1 max-w-md">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
-              <input
-                type="text"
-                value={leadsSearchTerm}
-                onChange={(e) => setLeadsSearchTerm(e.target.value)}
-                placeholder="Search leads by name, mobile, campaign, or executive..."
-                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
+            <div className="flex flex-wrap items-center gap-2 flex-1">
+              <div className="relative flex-1 min-w-[200px] max-w-md">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  value={leadsSearchTerm}
+                  onChange={(e) => setLeadsSearchTerm(e.target.value)}
+                  placeholder="Search leads by name, mobile, campaign, or executive..."
+                  className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Status Filter */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-blue-500 font-medium cursor-pointer"
+              >
+                <option value="">All Statuses</option>
+                <option value="new">New</option>
+                <option value="converted">Converted</option>
+                <option value="in_progress">In Progress</option>
+                <option value="lost">Lost</option>
+              </select>
+
+              {/* Date Filter */}
+              <button
+                type="button"
+                onClick={() => setDateFilter(dateFilter === 'today' ? '' : 'today')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer ${
+                  dateFilter === 'today'
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                {dateFilter === 'today' ? 'Created Today ✓' : 'Today'}
+              </button>
+
+              {(statusFilter || dateFilter) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter('');
+                    setDateFilter('');
+                  }}
+                  title="Clear all filters"
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Clear</span>
+                </button>
+              )}
             </div>
-            <div className="text-slate-500 text-xs font-semibold">
+
+            <div className="text-slate-500 text-xs font-semibold shrink-0">
               Showing <span className="font-bold text-slate-800">{filteredLeads.length}</span> of {leads.length} leads
             </div>
           </div>

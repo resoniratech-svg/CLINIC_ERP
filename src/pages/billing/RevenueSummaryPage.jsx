@@ -1,16 +1,40 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { billingApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { DollarSign, Calendar, TrendingUp, AlertCircle, ArrowUpRight } from 'lucide-react';
+import { DollarSign, Calendar, TrendingUp, AlertCircle, ArrowUpRight, RotateCcw } from 'lucide-react';
 
 export const RevenueSummaryPage = () => {
+  const [searchParams] = useSearchParams();
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const dateParam = searchParams.get('date');
+  const initialStartDate = dateParam === 'today' ? todayStr : (searchParams.get('start_date') || searchParams.get('startDate') || todayStr);
+  const initialEndDate = dateParam === 'today' ? todayStr : (searchParams.get('end_date') || searchParams.get('endDate') || todayStr);
+
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
-  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(initialStartDate);
+  const [endDate, setEndDate] = useState(initialEndDate);
+  const [selectedMode, setSelectedMode] = useState(searchParams.get('mode') || '');
 
   const { showToast } = useToast();
+
+  useEffect(() => {
+    const d = searchParams.get('date');
+    if (d === 'today') {
+      setStartDate(todayStr);
+      setEndDate(todayStr);
+    } else {
+      const s = searchParams.get('start_date') || searchParams.get('startDate');
+      const e = searchParams.get('end_date') || searchParams.get('endDate');
+      if (s) setStartDate(s);
+      if (e) setEndDate(e);
+    }
+    const m = searchParams.get('mode');
+    if (m !== null) setSelectedMode(m);
+  }, [searchParams]);
 
   const fetchRevenue = async () => {
     setLoading(true);
@@ -100,36 +124,83 @@ export const RevenueSummaryPage = () => {
 
           {/* 5 Channel Breakdown Cards */}
           <div>
-            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
-              Payment Gateway Breakdown
-            </h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                Payment Gateway Breakdown
+              </h3>
+              {selectedMode && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedMode('')}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-blue-600 hover:text-blue-800 cursor-pointer"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Show All Gateways</span>
+                </button>
+              )}
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs text-center space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Cash</span>
+              <div
+                onClick={() => setSelectedMode(selectedMode === 'cash' ? '' : 'cash')}
+                className={`p-5 rounded-3xl border text-center space-y-1 transition-all cursor-pointer ${
+                  selectedMode === 'cash'
+                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs hover:border-slate-300'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Cash</span>
                 <span className="text-2xl font-black text-slate-900 font-mono block">{formatCurrency(breakdown.cash)}</span>
                 <span className="text-[10px] text-slate-400">Physical Register</span>
               </div>
 
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs text-center space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Card</span>
+              <div
+                onClick={() => setSelectedMode(selectedMode === 'card' ? '' : 'card')}
+                className={`p-5 rounded-3xl border text-center space-y-1 transition-all cursor-pointer ${
+                  selectedMode === 'card'
+                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs hover:border-slate-300'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Card</span>
                 <span className="text-2xl font-black text-slate-900 font-mono block">{formatCurrency(breakdown.card)}</span>
                 <span className="text-[10px] text-slate-400">POS Machine</span>
               </div>
 
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs text-center space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">UPI</span>
+              <div
+                onClick={() => setSelectedMode(selectedMode === 'upi' ? '' : 'upi')}
+                className={`p-5 rounded-3xl border text-center space-y-1 transition-all cursor-pointer ${
+                  selectedMode === 'upi'
+                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs hover:border-slate-300'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">UPI</span>
                 <span className="text-2xl font-black text-slate-900 font-mono block">{formatCurrency(breakdown.upi)}</span>
                 <span className="text-[10px] text-slate-400">QR / VPA</span>
               </div>
 
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs text-center space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Razorpay</span>
+              <div
+                onClick={() => setSelectedMode(selectedMode === 'razorpay' ? '' : 'razorpay')}
+                className={`p-5 rounded-3xl border text-center space-y-1 transition-all cursor-pointer ${
+                  selectedMode === 'razorpay'
+                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs hover:border-slate-300'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Razorpay</span>
                 <span className="text-2xl font-black text-slate-900 font-mono block">{formatCurrency(breakdown.razorpay)}</span>
                 <span className="text-[10px] text-slate-400">Online Link</span>
               </div>
 
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs text-center space-y-1">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Bajaj Pay</span>
+              <div
+                onClick={() => setSelectedMode(selectedMode === 'bajaj_pay' ? '' : 'bajaj_pay')}
+                className={`p-5 rounded-3xl border text-center space-y-1 transition-all cursor-pointer ${
+                  selectedMode === 'bajaj_pay'
+                    ? 'bg-blue-50/80 border-blue-500 ring-2 ring-blue-500/30 shadow-sm'
+                    : 'bg-white border-slate-200 shadow-2xs hover:border-slate-300'
+                }`}
+              >
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Bajaj Pay</span>
                 <span className="text-2xl font-black text-slate-900 font-mono block">{formatCurrency(breakdown.bajaj_pay)}</span>
                 <span className="text-[10px] text-slate-400">Healthcare EMI</span>
               </div>

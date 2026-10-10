@@ -173,6 +173,12 @@ export const CashLedgerPage = () => {
     if (tabParam && ['requests', 'deposits', 'expenses'].includes(tabParam)) {
       setActiveTab(tabParam);
     }
+    const dateParam = searchParams.get('date');
+    if (dateParam === 'today') {
+      setSelectedDate(new Date().toISOString().split('T')[0]);
+    } else if (dateParam) {
+      setSelectedDate(dateParam);
+    }
   }, [searchParams]);
 
   useEffect(() => {

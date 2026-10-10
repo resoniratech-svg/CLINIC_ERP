@@ -4,6 +4,7 @@ import { Modal } from '../../components/common/Modal';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
+import { hasDiscount } from '../../utils/moneyUtils';
 import {
   Printer,
   CheckCircle2,
@@ -197,65 +198,94 @@ const InvoiceReceiptCard = ({
       </div>
 
       {/* 3. Itemized Financial Table */}
-      <div className="border border-slate-200 rounded-xl overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="bg-slate-100/70 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-              <th className="py-2 px-3">#</th>
-              <th className="py-2 px-3">Service / Fee Description</th>
-              <th className="py-2 px-3 text-right">Standard Fee</th>
-              <th className="py-2 px-3 text-right">Discount</th>
-              <th className="py-2 px-3 text-right">Net Payable</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 text-xs">
-            <tr>
-              <td className="py-2.5 px-3 font-mono text-slate-400">01</td>
-              <td className="py-2.5 px-3">
-                <div className="font-bold text-slate-800">
-                  OPD Doctor Consultation & Clinical Assessment
-                </div>
-                <div className="text-[10px] text-slate-400">
-                  Includes standard 30-day follow-up consultation entitlement
-                </div>
-              </td>
-              <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(baseFee)}</td>
-              <td className="py-2.5 px-3 text-right font-mono text-red-600">
-                {discount > 0 ? `-₹${discount.toFixed(2)}` : '—'}
-              </td>
-              <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
-                {formatCurrency(finalAmount)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+      {(() => {
+        const lineItems = [
+          {
+            description: 'OPD Doctor Consultation & Clinical Assessment',
+            standardFee: baseFee,
+            discount: discount,
+            netPayable: finalAmount
+          }
+        ];
+        const showDiscountCol = hasDiscount(lineItems);
 
-        {/* Financial Totals Strip */}
-        <div className="p-2.5 bg-slate-50 border-t border-slate-200 space-y-1 text-xs">
-          <div className="flex justify-between text-slate-600">
-            <span>Total Consultation Amount:</span>
-            <span className="font-mono font-semibold text-slate-900">{formatCurrency(finalAmount)}</span>
+        return (
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-100/70 border-b border-slate-200 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                  <th className="py-2 px-3">#</th>
+                  <th className="py-2 px-3">Service / Fee Description</th>
+                  <th className="py-2 px-3 text-right">Standard Fee</th>
+                  {showDiscountCol && <th className="py-2 px-3 text-right">Discount</th>}
+                  <th className="py-2 px-3 text-right">Net Payable</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-xs">
+                <tr>
+                  <td className="py-2.5 px-3 font-mono text-slate-400">01</td>
+                  <td className="py-2.5 px-3">
+                    <div className="font-bold text-slate-800">
+                      OPD Doctor Consultation & Clinical Assessment
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      Includes standard 30-day follow-up consultation entitlement
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-3 text-right font-mono text-slate-600">{formatCurrency(baseFee)}</td>
+                  {showDiscountCol && (
+                    <td className="py-2.5 px-3 text-right font-mono text-red-600">
+                      {discount > 0 ? `-₹${discount.toFixed(2)}` : '—'}
+                    </td>
+                  )}
+                  <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
+                    {formatCurrency(finalAmount)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            {/* Financial Totals Strip */}
+            <div className="p-2.5 bg-slate-50 border-t border-slate-200 space-y-1 text-xs">
+              {discount > 0 && (
+                <div className="flex justify-between text-slate-600">
+                  <span>Standard Fee Total:</span>
+                  <span className="font-mono font-semibold text-slate-900">{formatCurrency(baseFee)}</span>
+                </div>
+              )}
+              {discount > 0 && (
+                <div className="flex justify-between text-emerald-700 font-medium">
+                  <span>Discount / Concession:</span>
+                  <span className="font-mono font-bold">- {formatCurrency(discount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-slate-600">
+                <span>Total Consultation Amount:</span>
+                <span className="font-mono font-semibold text-slate-900">{formatCurrency(finalAmount)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span className="flex items-center gap-1">
+                  <span>Paid via</span>
+                  <span className="uppercase font-bold text-slate-800">
+                    {currentInvoice?.payment_method || 'CASH'}
+                  </span>
+                  <span>:</span>
+                </span>
+                <span className="font-mono font-bold text-emerald-700">{formatCurrency(paidAmount)}</span>
+              </div>
+              <div className="flex justify-between pt-1 border-t border-slate-200">
+                <span className={`font-bold ${dueAmount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
+                  Outstanding Balance (Due):
+                </span>
+                <span className={`font-mono font-bold ${dueAmount > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+                  DUE : {formatCurrency(dueAmount)}
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="flex justify-between text-slate-600">
-            <span className="flex items-center gap-1">
-              <span>Paid via</span>
-              <span className="uppercase font-bold text-slate-800">
-                {currentInvoice?.payment_method || 'CASH'}
-              </span>
-              <span>:</span>
-            </span>
-            <span className="font-mono font-bold text-emerald-700">{formatCurrency(paidAmount)}</span>
-          </div>
-          <div className="flex justify-between pt-1 border-t border-slate-200">
-            <span className={`font-bold ${dueAmount > 0 ? 'text-red-600' : 'text-slate-700'}`}>
-              Outstanding Balance (Due):
-            </span>
-            <span className={`font-mono font-bold ${dueAmount > 0 ? 'text-red-600' : 'text-emerald-700'}`}>
-              DUE : {formatCurrency(dueAmount)}
-            </span>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
+
 
       {/* 4. Terms & Conditions Section */}
       <div className="p-2.5 bg-slate-50/70 border border-slate-200 rounded-xl space-y-1 text-[9px] leading-relaxed text-slate-600">

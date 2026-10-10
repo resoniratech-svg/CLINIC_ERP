@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { receptionistApi, doctorsApi } from '../../api';
 import { Badge } from '../../components/common/Badge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -170,19 +171,37 @@ const SearchableDoctorSelect = ({ doctors, value, onChange }) => {
 };
 
 export const AppointmentsPage = () => {
+  const [searchParams] = useSearchParams();
   const [appointments, setAppointments] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [loading, setLoading] = useState(true);
 
   // Exact Day-by-Day From - To Date Filters
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const dateParam = searchParams.get('date');
+  const initialFromDate = dateParam === 'today' ? getTodayDateString() : (searchParams.get('fromDate') || '');
+  const initialToDate = dateParam === 'today' ? getTodayDateString() : (searchParams.get('toDate') || '');
+  const [fromDate, setFromDate] = useState(initialFromDate);
+  const [toDate, setToDate] = useState(initialToDate);
 
   const [doctorFilter, setDoctorFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '');
+  const [typeFilter, setTypeFilter] = useState(searchParams.get('type') || '');
   const [searchTerm, setSearchTerm] = useState('');
 
   const { showToast } = useToast();
+
+  useEffect(() => {
+    const d = searchParams.get('date');
+    if (d === 'today') {
+      const today = getTodayDateString();
+      setFromDate(today);
+      setToDate(today);
+    }
+    const t = searchParams.get('type');
+    if (t) setTypeFilter(t);
+    const s = searchParams.get('status');
+    if (s) setStatusFilter(s);
+  }, [searchParams]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -227,6 +246,7 @@ export const AppointmentsPage = () => {
   const handleResetDates = () => {
     setFromDate('');
     setToDate('');
+    setTypeFilter('');
   };
 
   // Day-accurate filtering
@@ -236,6 +256,16 @@ export const AppointmentsPage = () => {
 
     if (fromDate && itemDateStr && itemDateStr < fromDate) return false;
     if (toDate && itemDateStr && itemDateStr > toDate) return false;
+
+    if (typeFilter) {
+      const apptType = (a.appointment_type || 'new').toLowerCase();
+      const targetType = typeFilter.toLowerCase();
+      if (targetType === 'walkin' || targetType === 'walk-in') {
+        if (!apptType.includes('walk') && apptType !== 'new') return false;
+      } else if (!apptType.includes(targetType)) {
+        return false;
+      }
+    }
 
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
@@ -341,6 +371,16 @@ export const AppointmentsPage = () => {
               value={doctorFilter}
               onChange={(val) => setDoctorFilter(val)}
             />
+
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white text-slate-700 focus:ring-2 focus:ring-blue-500 font-medium cursor-pointer"
+            >
+              <option value="">All Types</option>
+              <option value="new">New Consultation / Walk-in</option>
+              <option value="follow_up">Follow-up</option>
+            </select>
 
             <select
               value={statusFilter}

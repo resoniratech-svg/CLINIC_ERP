@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { Badge } from '../../components/common/Badge';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -6,16 +7,39 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { Modal } from '../../components/common/Modal';
 import { useToast } from '../../context/ToastContext';
 import { toLocalDateString, getTodayDateString, formatDisplayDate } from '../../utils/dateUtils';
-import { Users, Search, Eye, Calendar, RotateCcw, Stethoscope, Clock, Phone, AlertCircle, CheckCircle2, DollarSign } from 'lucide-react';
+import { Users, Search, Eye, Calendar, RotateCcw, Stethoscope, Clock, Phone, AlertCircle, CheckCircle2, DollarSign, Filter } from 'lucide-react';
 
 export const PatientsMonitoringPage = () => {
+  const [searchParams] = useSearchParams();
+  const dateParam = searchParams.get('date');
+  const typeParam = searchParams.get('type') || searchParams.get('patient_type');
+  const today = getTodayDateString();
+
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
 
   // From - To Exact Date Filters
-  const [fromDate, setFromDate] = useState('');
-  const [toDate, setToDate] = useState('');
+  const [fromDate, setFromDate] = useState(dateParam === 'today' ? today : (searchParams.get('from') || ''));
+  const [toDate, setToDate] = useState(dateParam === 'today' ? today : (searchParams.get('to') || ''));
+  const [patientTypeFilter, setPatientTypeFilter] = useState(typeParam || '');
+
+  useEffect(() => {
+    const dParam = searchParams.get('date');
+    const tParam = searchParams.get('type') || searchParams.get('patient_type');
+    const td = getTodayDateString();
+    if (dParam === 'today') {
+      setFromDate(td);
+      setToDate(td);
+    } else {
+      if (searchParams.get('from')) setFromDate(searchParams.get('from'));
+      if (searchParams.get('to')) setToDate(searchParams.get('to'));
+    }
+    if (tParam !== null && tParam !== undefined) {
+      setPatientTypeFilter(tParam);
+    }
+  }, [searchParams]);
+
 
   // Patient overview modal
   const [selectedPatientId, setSelectedPatientId] = useState(null);
@@ -71,6 +95,7 @@ export const PatientsMonitoringPage = () => {
   const handleResetDates = () => {
     setFromDate('');
     setToDate('');
+    setPatientTypeFilter('');
   };
 
   // Day-accurate filtering based on registration date / created_at
@@ -80,6 +105,7 @@ export const PatientsMonitoringPage = () => {
 
     if (fromDate && itemDateStr && itemDateStr < fromDate) return false;
     if (toDate && itemDateStr && itemDateStr > toDate) return false;
+    if (patientTypeFilter && (p.patient_type || '').toLowerCase() !== patientTypeFilter.toLowerCase()) return false;
     return true;
   });
 
@@ -145,7 +171,20 @@ export const PatientsMonitoringPage = () => {
             Today
           </button>
 
-          {(fromDate || toDate) && (
+          <div className="flex items-center gap-1.5">
+            <label className="text-[11px] font-bold text-slate-500 uppercase">Type</label>
+            <select
+              value={patientTypeFilter}
+              onChange={(e) => setPatientTypeFilter(e.target.value)}
+              className="px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+            >
+              <option value="">All Types</option>
+              <option value="new">New Patients</option>
+              <option value="renewal">Renewal</option>
+            </select>
+          </div>
+
+          {(fromDate || toDate || patientTypeFilter) && (
             <button
               type="button"
               onClick={handleResetDates}
@@ -156,6 +195,7 @@ export const PatientsMonitoringPage = () => {
             </button>
           )}
         </div>
+
 
         <div className="text-xs font-medium text-slate-500">
           Showing <span className="font-bold text-blue-700 font-mono">{filteredPatients.length}</span> of{' '}

@@ -1,4 +1,5 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { pharmacyApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { EmptyState } from '../../components/common/EmptyState';
@@ -7,11 +8,27 @@ import { useToast } from '../../context/ToastContext';
 import { Package, AlertTriangle, Clock, Plus, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
 export const StockMonitoringPage = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filterParam = searchParams.get('filter');
+  const lowStockParam = searchParams.get('low_stock');
+  const expiringParam = searchParams.get('expiring');
+
+  const initialLowStock = filterParam === 'low_stock' || lowStockParam === 'true';
+  const initialExpiring = filterParam === 'expiring' || expiringParam === 'true';
+
   const [stock, setStock] = useState([]);
   const [medicines, setMedicines] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [lowStockFilter, setLowStockFilter] = useState(false);
-  const [expiringFilter, setExpiringFilter] = useState(false);
+  const [lowStockFilter, setLowStockFilter] = useState(initialLowStock);
+  const [expiringFilter, setExpiringFilter] = useState(initialExpiring);
+
+  useEffect(() => {
+    const isLow = searchParams.get('filter') === 'low_stock' || searchParams.get('low_stock') === 'true';
+    const isExp = searchParams.get('filter') === 'expiring' || searchParams.get('expiring') === 'true';
+    if (isLow !== lowStockFilter) setLowStockFilter(isLow);
+    if (isExp !== expiringFilter) setExpiringFilter(isExp);
+  }, [searchParams]);
+
 
   const [isStockModalOpen, setIsStockModalOpen] = useState(false);
   const [stockForm, setStockForm] = useState({

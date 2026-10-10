@@ -16,7 +16,7 @@ import {
 import { proApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
-import { formatCurrency, roundMoney, safeSubtract } from '../../utils/moneyUtils';
+import { formatCurrency, roundMoney, safeSubtract, hasDiscount } from '../../utils/moneyUtils';
 
 export const PROInvoiceModal = ({ billId, initialBill, isOpen, onClose }) => {
   const { showToast } = useToast();
@@ -195,30 +195,68 @@ export const PROInvoiceModal = ({ billId, initialBill, isOpen, onClose }) => {
               </div>
 
               {/* 3. Itemized Bill Breakdown */}
-              <div className="border border-slate-200 rounded-xl overflow-hidden">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="bg-slate-100/90 text-slate-600 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
-                    <tr>
-                      <th className="py-2.5 px-3">#</th>
-                      <th className="py-2.5 px-3">Charge Category</th>
-                      <th className="py-2.5 px-3">Description</th>
-                      <th className="py-2.5 px-3 text-right">Amount (₹)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {(bill.items || []).map((item, idx) => (
-                      <tr key={item.id || idx} className="hover:bg-slate-50/50">
-                        <td className="py-2.5 px-3 text-slate-400 font-mono">{idx + 1}</td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-800">{item.charge_type || 'Treatment'}</td>
-                        <td className="py-2.5 px-3 text-slate-600">{item.description || 'Treatment Service'}</td>
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
-                          {formatCurrency(item.amount)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {(() => {
+                const billDiscount = parseFloat(bill.discount_amount || 0);
+                const itemsHaveDiscount = hasDiscount(bill.items || []);
+                const showDiscountCol = itemsHaveDiscount || (bill.items?.length === 1 && billDiscount > 0);
+
+                return (
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-100/90 text-slate-600 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider">
+                        <tr>
+                          <th className="py-2.5 px-3">#</th>
+                          <th className="py-2.5 px-3">Charge Category</th>
+                          <th className="py-2.5 px-3">Description</th>
+                          <th className="py-2.5 px-3 text-right">Standard Fee</th>
+                          {showDiscountCol && <th className="py-2.5 px-3 text-right">Discount</th>}
+                          {showDiscountCol && <th className="py-2.5 px-3 text-right">Net Payable</th>}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(bill.items || []).map((item, idx) => {
+                          const itemDiscount = parseFloat(
+                            item.discount || item.discount_amount || (bill.items.length === 1 ? billDiscount : 0)
+                          );
+                          const itemStandard = parseFloat(item.standard_fee || item.unit_price || item.amount || 0);
+                          const itemNet = Math.max(0, itemStandard - itemDiscount);
+
+                          if (!showDiscountCol) {
+                            return (
+                              <tr key={item.id || idx} className="hover:bg-slate-50/50">
+                                <td className="py-2.5 px-3 text-slate-400 font-mono">{idx + 1}</td>
+                                <td className="py-2.5 px-3 font-semibold text-slate-800">{item.charge_type || 'Treatment'}</td>
+                                <td className="py-2.5 px-3 text-slate-600">{item.description || 'Treatment Service'}</td>
+                                <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
+                                  {formatCurrency(item.amount)}
+                                </td>
+                              </tr>
+                            );
+                          }
+
+                          return (
+                            <tr key={item.id || idx} className="hover:bg-slate-50/50">
+                              <td className="py-2.5 px-3 text-slate-400 font-mono">{idx + 1}</td>
+                              <td className="py-2.5 px-3 font-semibold text-slate-800">{item.charge_type || 'Treatment'}</td>
+                              <td className="py-2.5 px-3 text-slate-600">{item.description || 'Treatment Service'}</td>
+                              <td className="py-2.5 px-3 text-right font-mono text-slate-700">
+                                {formatCurrency(itemStandard)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono text-red-600">
+                                {itemDiscount > 0 ? `-₹${itemDiscount.toFixed(2)}` : '—'}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
+                                {formatCurrency(itemDiscount > 0 ? itemNet : itemStandard)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+
 
               {/* 4. Financial Calculations Grid */}
               <div className="flex flex-col sm:flex-row justify-between items-start gap-4 p-4 bg-slate-50 rounded-xl border border-slate-200">

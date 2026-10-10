@@ -1,16 +1,28 @@
-﻿import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { targetsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useToast } from '../../context/ToastContext';
 import { Target, TrendingUp, DollarSign, Award, CheckCircle2, AlertCircle } from 'lucide-react';
 
 export const TargetManagementPage = () => {
+  const [searchParams] = useSearchParams();
+  const paramMonth = searchParams.get('month');
+  const paramYear = searchParams.get('year');
+
   const [targetData, setTargetData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  const [month, setMonth] = useState(new Date().getMonth() + 1);
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [month, setMonth] = useState(paramMonth ? parseInt(paramMonth, 10) : new Date().getMonth() + 1);
+  const [year, setYear] = useState(paramYear ? parseInt(paramYear, 10) : new Date().getFullYear());
+
+  useEffect(() => {
+    const m = searchParams.get('month');
+    const y = searchParams.get('year');
+    if (m) setMonth(parseInt(m, 10));
+    if (y) setYear(parseInt(y, 10));
+  }, [searchParams]);
 
   const [form, setForm] = useState({
     enquiry_target: 200000,
