@@ -1,3 +1,4 @@
+/* global URLSearchParams */
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
@@ -432,21 +433,24 @@ export const PROPatientOverviewPage = () => {
       <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-200 pb-1">
         {[
           { id: 'clinical', label: 'Doctor Clinical Info', icon: Stethoscope },
-          { id: 'prescription', label: `Prescription (${prescription?.items?.length || 0})`, icon: Pill },
-          { id: 'billing_review', label: 'Prescription & Treatment Plan', icon: Edit3 },
-          { id: 'packages', label: `Treatment Plans & Packages (${(treatment_plans?.length || 0) + (crm?.packages?.length || 0)})`, icon: Package },
+          {
+            id: 'billing_review',
+            label: `Prescriptions & Treatments (${(prescription?.items?.length || 0) + (treatment_plans?.length || 0)})`,
+            icon: Edit3,
+          },
           { id: 'financials', label: `Billing & Dues (${financials?.bills?.length || 0})`, icon: Receipt },
           { id: 'history', label: 'Patient Journey & History', icon: History },
           { id: 'crm', label: 'CRM & Calls', icon: PhoneCall },
           { id: 'checklist', label: 'Completion Checklist', icon: CheckCircle },
         ].map(tab => {
           const Icon = tab.icon;
+          const isTabActive = activeTab === tab.id || (tab.id === 'billing_review' && (activeTab === 'prescription' || activeTab === 'packages'));
           return (
             <button
               key={tab.id}
               onClick={() => { setActiveTab(tab.id); if (tab.id === 'billing_review') initBillingReviewOnce(); }}
               className={`flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-xl transition cursor-pointer whitespace-nowrap ${
-                activeTab === tab.id
+                isTabActive
                   ? 'bg-[#D32F2F] text-white shadow-xs shadow-red-500/20'
                   : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
               }`}
@@ -529,52 +533,8 @@ export const PROPatientOverviewPage = () => {
         </div>
       )}
 
-      {/* TAB CONTENT 2: Prescription Review & Modifications */}
-      {activeTab === 'prescription' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-black text-[#1565C0] flex items-center gap-2">
-              <Pill className="w-4 h-4 text-[#1565C0]" />
-              <span>Doctor Prescription Review</span>
-            </h2>
-            {prescription?.prescription_id && (
-              <Link
-                to={`/pro/prescriptions/${prescription.prescription_id}`}
-                className="text-xs text-[#1565C0] font-bold hover:underline flex items-center gap-1"
-              >
-                <span>Full Prescription Editor</span>
-                <ExternalLink className="w-3 h-3" />
-              </Link>
-            )}
-          </div>
-
-          {!prescription || !prescription.items || prescription.items.length === 0 ? (
-            <p className="text-xs text-slate-400 py-4 text-center">No prescription items recorded.</p>
-          ) : (
-            <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden">
-              {prescription.items.map(item => (
-                <div key={item.id} className="p-3 flex items-center justify-between flex-wrap gap-2 text-xs">
-                  <div>
-                    <div className="font-bold text-slate-900">{getMedicineName(item)}</div>
-                    <div className="text-[11px] text-slate-500">
-                      Dosage: {item.dosage || '1 tab'} • Frequency: {item.frequency || '1/day'} • Route: {item.route || 'oral'}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 text-right">
-                    <div>
-                      <div className="font-bold text-[#1565C0]">{item.duration_days || 5} Days</div>
-                      <div className="text-[10px] text-slate-400">Qty: {item.quantity || 1}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* TAB CONTENT 2b: Prescription & Treatment Plan (Unified Billing Review) */}
-      {activeTab === 'billing_review' && (() => {
+      {/* MERGED TAB: Prescriptions, Treatment Plans & Packages (Unified Review & Billing) */}
+      {['billing_review', 'prescription', 'packages'].includes(activeTab) && (() => {
         const rxItems = prescription?.items || [];
         const tpItems = treatment_plans || [];
         const totalItems = rxItems.length + tpItems.length;
@@ -638,6 +598,7 @@ export const PROPatientOverviewPage = () => {
         const handleGenerateBill = () => {
           const selectedRx = rxItems.filter(item => selectedBillingIds.has(`rx-${item.id}`));
           const selectedTp = tpItems.filter(tp => selectedBillingIds.has(`tp-${tp.treatment_id}`));
+          // oxlint-disable-next-line no-undef
           const params = new URLSearchParams();
           params.set('patient_id', patient.patient_id);
           if (consultation?.doctor_id) params.set('doctor_id', consultation.doctor_id);
@@ -682,328 +643,306 @@ export const PROPatientOverviewPage = () => {
         };
 
         return (
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
-            {/* Header: Exactly ONE Generate Bill button */}
-            <div className="flex items-center justify-between p-5 border-b border-slate-100">
-              <div>
-                <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                  <Edit3 className="w-4 h-4 text-[#D32F2F]" />
-                  <span>Prescription &amp; Treatment Plan</span>
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Select the items to include in billing. Edit details before generating the bill.
-                </p>
-              </div>
-              <button
-                onClick={handleGenerateBill}
-                disabled={!anySelected}
-                className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer shrink-0 ${
-                  anySelected ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                }`}
-              >
-                <Receipt className="w-3.5 h-3.5" />
-                <span>Generate Bill →</span>
-              </button>
-            </div>
-
-            {/* Toolbar: count + Select All / Clear */}
-            {totalItems > 0 && (
-              <div className="flex items-center justify-between px-5 py-2.5 bg-slate-50/60 border-b border-slate-100 text-[11px] font-bold">
-                <span className="text-slate-600">
-                  <span className="text-[#1565C0]">{totalSelected}</span>
-                  <span className="text-slate-400"> of {totalItems} selected</span>
-                </span>
-                <div className="flex gap-3">
-                  <button onClick={selectAll} className="text-[#1565C0] hover:underline cursor-pointer">Select All</button>
-                  <span className="text-slate-300">|</span>
-                  <button onClick={selectNone} className="text-slate-400 hover:text-slate-700 hover:underline cursor-pointer">Clear</button>
+          <div className="space-y-6">
+            <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs">
+              {/* Header: Exactly ONE Generate Bill button */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-5 border-b border-slate-100 gap-3">
+                <div>
+                  <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Edit3 className="w-4 h-4 text-[#D32F2F]" />
+                    <span>Prescription &amp; Treatment Plan</span>
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Select doctor-prescribed medicines and treatments to include in billing. Edit details before generating the bill.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  {prescription?.prescription_id && (
+                    <Link
+                      to={`/pro/prescriptions/${prescription.prescription_id}`}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-[#1565C0] rounded-xl font-bold text-xs transition border border-blue-200/60"
+                      title="Open dedicated prescription editor"
+                    >
+                      <Pill className="w-3.5 h-3.5 text-[#1565C0]" />
+                      <span>Prescription Editor</span>
+                      <ExternalLink className="w-3 h-3 text-[#1565C0]" />
+                    </Link>
+                  )}
+                  <button
+                    onClick={handleGenerateBill}
+                    disabled={!anySelected}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs shadow-xs transition cursor-pointer shrink-0 ${
+                      anySelected ? 'btn-brand-gradient text-white' : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <Receipt className="w-3.5 h-3.5" />
+                    <span>Generate Bill →</span>
+                  </button>
                 </div>
               </div>
-            )}
 
-            {/* Unified flat item list — ALL items always visible, selection state controls check only */}
-            {totalItems === 0 ? (
-              <div className="p-10 text-center">
-                <Pill className="w-8 h-8 text-slate-200 mx-auto mb-2" />
-                <p className="text-xs text-slate-400 font-medium">No prescription medicines or treatment plans recorded for this patient.</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {unifiedItems.map(item => {
-                  const key = item.id;
-                  const isSelected = selectedBillingIds.has(key);
-                  const isEditing = editingItemKey === key;
-                  const edits = billingItemEdits[key] || {};
-                  const isRx = item.sourceType === 'prescription';
-                  const rxData = isRx ? item.data : null;
-                  const tpData = !isRx ? item.data : null;
+              {/* Toolbar: count + Select All / Clear */}
+              {totalItems > 0 && (
+                <div className="flex items-center justify-between px-5 py-2.5 bg-slate-50/60 border-b border-slate-100 text-[11px] font-bold">
+                  <span className="text-slate-600">
+                    <span className="text-[#1565C0]">{totalSelected}</span>
+                    <span className="text-slate-400"> of {totalItems} selected</span>
+                  </span>
+                  <div className="flex gap-3">
+                    <button onClick={selectAll} className="text-[#1565C0] hover:underline cursor-pointer">Select All</button>
+                    <span className="text-slate-300">|</span>
+                    <button onClick={selectNone} className="text-slate-400 hover:text-slate-700 hover:underline cursor-pointer">Clear</button>
+                  </div>
+                </div>
+              )}
 
-                  return (
-                    <div key={key}>
-                      {/* Main row */}
-                      <div className="px-5 py-3.5 flex items-center gap-3">
-                        {/* Checkbox */}
-                        <button
-                          onClick={() => toggleItem(key)}
-                          className="shrink-0 cursor-pointer"
-                          title={isSelected ? 'Uncheck to exclude from bill' : 'Check to include in bill'}
-                        >
-                          {isSelected
-                            ? <CheckSquare className="w-4 h-4 text-[#1565C0]" />
-                            : <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
-                          }
-                        </button>
+              {/* Unified flat item list — ALL items always visible, selection state controls check only */}
+              {totalItems === 0 ? (
+                <div className="p-10 text-center">
+                  <Pill className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+                  <p className="text-xs text-slate-400 font-medium">No prescription medicines or treatment plans recorded for this patient.</p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {unifiedItems.map(item => {
+                    const key = item.id;
+                    const isSelected = selectedBillingIds.has(key);
+                    const isEditing = editingItemKey === key;
+                    const edits = billingItemEdits[key] || {};
+                    const isRx = item.sourceType === 'prescription';
+                    const rxData = isRx ? item.data : null;
+                    const tpData = !isRx ? item.data : null;
 
-                        {/* Type badge */}
-                        <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide border ${item.badgeClass}`}>
-                          {item.badgeLabel}
-                        </span>
+                    return (
+                      <div key={key}>
+                        {/* Main row */}
+                        <div className="px-5 py-3.5 flex items-center gap-3">
+                          {/* Checkbox */}
+                          <button
+                            onClick={() => toggleItem(key)}
+                            className="shrink-0 cursor-pointer"
+                            title={isSelected ? 'Uncheck to exclude from bill' : 'Check to include in bill'}
+                          >
+                            {isSelected
+                              ? <CheckSquare className="w-4 h-4 text-[#1565C0]" />
+                              : <Square className="w-4 h-4 text-slate-300 hover:text-slate-500" />
+                            }
+                          </button>
 
-                        {/* Item details */}
-                        <div className="flex-1 min-w-0">
-                          <div className="font-bold text-slate-900 text-xs">
-                            {item.name}
+                          {/* Type badge */}
+                          <span className={`shrink-0 px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase tracking-wide border ${item.badgeClass}`}>
+                            {item.badgeLabel}
+                          </span>
+
+                          {/* Item details */}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-bold text-slate-900 text-xs">
+                              {item.name}
+                            </div>
+                            {isRx ? (
+                              <div className="text-[11px] text-slate-400 mt-0.5">
+                                {edits.dosage || rxData.dosage || '—'} &nbsp;•&nbsp; {edits.frequency || rxData.frequency || '—'} &nbsp;•&nbsp; {edits.duration_days || rxData.duration_days || '—'} days &nbsp;•&nbsp; Qty: {edits.quantity || rxData.quantity || 1}
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
+                                {tpData.treatment_type || 'Treatment'} &nbsp;•&nbsp; {edits.duration || tpData.duration || 'N/A'} {edits.duration_unit || tpData.duration_unit || 'days'}
+                                {edits.amount ? ` • ₹${edits.amount}` : ''}
+                                {tpData.instructions && (
+                                  <span className="block text-slate-500 text-[10px] italic mt-0.5">
+                                    Dr. Note: {tpData.instructions}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          {isRx ? (
-                            <div className="text-[11px] text-slate-400 mt-0.5">
-                              {edits.dosage || rxData.dosage || '—'} &nbsp;•&nbsp; {edits.frequency || rxData.frequency || '—'} &nbsp;•&nbsp; {edits.duration_days || rxData.duration_days || '—'} days &nbsp;•&nbsp; Qty: {edits.quantity || rxData.quantity || 1}
-                            </div>
-                          ) : (
-                            <div className="text-[11px] text-slate-400 mt-0.5 capitalize">
-                              {tpData.treatment_type || 'Treatment'} &nbsp;•&nbsp; {edits.duration || tpData.duration || 'N/A'} {edits.duration_unit || tpData.duration_unit || 'days'}
-                              {edits.amount ? ` • ₹${edits.amount}` : ''}
-                            </div>
-                          )}
+
+                          {/* Edit button — always visible, not conditional on checkbox */}
+                          <button
+                            onClick={() => toggleEditPanel(key)}
+                            className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
+                              isEditing
+                                ? 'bg-slate-200 border-slate-300 text-slate-700'
+                                : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                            }`}
+                          >
+                            <Edit3 className="w-3 h-3" />
+                            {isEditing ? 'Close' : 'Edit'}
+                          </button>
                         </div>
 
-                        {/* Edit button — always visible, not conditional on checkbox */}
-                        <button
-                          onClick={() => toggleEditPanel(key)}
-                          className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-lg border text-[11px] font-bold transition cursor-pointer ${
-                            isEditing
-                              ? 'bg-slate-200 border-slate-300 text-slate-700'
-                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                          }`}
-                        >
-                          <Edit3 className="w-3 h-3" />
-                          {isEditing ? 'Close' : 'Edit'}
-                        </button>
+                        {/* Inline Edit panel — expands below row, does NOT affect checkbox */}
+                        {isEditing && isRx && (
+                          <div className="mx-5 mb-3 p-4 bg-blue-50/60 border border-blue-100 rounded-xl">
+                            <div className="text-[10px] font-black text-[#1565C0] uppercase tracking-wide mb-3">
+                              Edit Prescription Details
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-[11px]">
+                              <div className="col-span-2 md:col-span-2">
+                                <label className="block text-slate-500 font-medium mb-1">Medicine Name</label>
+                                <input
+                                  type="text"
+                                  value={edits.medicine_name ?? getMedicineName(rxData)}
+                                  onChange={e => updateEdit(key, 'medicine_name', e.target.value)}
+                                  placeholder="Medicine name"
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-slate-500 font-medium mb-1">Dosage</label>
+                                <input
+                                  type="text"
+                                  value={edits.dosage ?? rxData.dosage ?? ''}
+                                  onChange={e => updateEdit(key, 'dosage', e.target.value)}
+                                  placeholder="e.g. 1 tab"
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-slate-500 font-medium mb-1">Frequency</label>
+                                <input
+                                  type="text"
+                                  value={edits.frequency ?? rxData.frequency ?? ''}
+                                  onChange={e => updateEdit(key, 'frequency', e.target.value)}
+                                  placeholder="e.g. 3 times/day"
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-slate-500 font-medium mb-1">Duration (days)</label>
+                                <input
+                                  type="number" min="1"
+                                  value={edits.duration_days ?? rxData.duration_days ?? ''}
+                                  onChange={e => updateEdit(key, 'duration_days', e.target.value)}
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                              <div className="col-span-2 md:col-span-1">
+                                <label className="block text-slate-500 font-medium mb-1">Quantity</label>
+                                <input
+                                  type="number" min="1"
+                                  value={edits.quantity ?? rxData.quantity ?? 1}
+                                  onChange={e => updateEdit(key, 'quantity', parseInt(e.target.value) || 1)}
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-2 text-[10px] text-blue-400">
+                              ✓ Changes are saved automatically. Selection state is not affected by editing.
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Inline Edit panel for Treatment Plan */}
+                        {isEditing && !isRx && (
+                          <div className="mx-5 mb-3 p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl">
+                            <div className="text-[10px] font-black text-emerald-700 uppercase tracking-wide mb-3">
+                              Edit Treatment Plan Details
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-[11px]">
+                              <div>
+                                <label className="block text-slate-500 font-medium mb-1">Duration</label>
+                                <input
+                                  type="number" min="1"
+                                  value={edits.duration ?? tpData.duration ?? ''}
+                                  onChange={e => updateEdit(key, 'duration', e.target.value)}
+                                  placeholder="e.g. 7"
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-slate-500 font-medium mb-1">Unit</label>
+                                <select
+                                  value={edits.duration_unit ?? tpData.duration_unit ?? 'days'}
+                                  onChange={e => updateEdit(key, 'duration_unit', e.target.value)}
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
+                                >
+                                  <option value="days">Days</option>
+                                  <option value="weeks">Weeks</option>
+                                  <option value="months">Months</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-slate-500 font-medium mb-1">Billing Amount (₹)</label>
+                                <input
+                                  type="number" min="0" step="1"
+                                  value={edits.amount ?? ''}
+                                  onChange={e => updateEdit(key, 'amount', e.target.value)}
+                                  placeholder="0"
+                                  className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
+                                />
+                              </div>
+                            </div>
+                            <div className="mt-2 text-[10px] text-emerald-500">
+                              ✓ Changes are saved automatically. Selection state is not affected by editing.
+                            </div>
+                          </div>
+                        )}
                       </div>
+                    );
+                  })}
+                </div>
+              )}
 
-                      {/* Inline Edit panel — expands below row, does NOT affect checkbox */}
-                      {isEditing && isRx && (
-                        <div className="mx-5 mb-3 p-4 bg-blue-50/60 border border-blue-100 rounded-xl">
-                          <div className="text-[10px] font-black text-[#1565C0] uppercase tracking-wide mb-3">
-                            Edit Prescription Details
-                          </div>
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-[11px]">
-                            <div className="col-span-2 md:col-span-2">
-                              <label className="block text-slate-500 font-medium mb-1">Medicine Name</label>
-                              <input
-                                type="text"
-                                value={edits.medicine_name ?? getMedicineName(rxData)}
-                                onChange={e => updateEdit(key, 'medicine_name', e.target.value)}
-                                placeholder="Medicine name"
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-slate-500 font-medium mb-1">Dosage</label>
-                              <input
-                                type="text"
-                                value={edits.dosage ?? rxData.dosage ?? ''}
-                                onChange={e => updateEdit(key, 'dosage', e.target.value)}
-                                placeholder="e.g. 1 tab"
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-slate-500 font-medium mb-1">Frequency</label>
-                              <input
-                                type="text"
-                                value={edits.frequency ?? rxData.frequency ?? ''}
-                                onChange={e => updateEdit(key, 'frequency', e.target.value)}
-                                placeholder="e.g. 3 times/day"
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-slate-500 font-medium mb-1">Duration (days)</label>
-                              <input
-                                type="number" min="1"
-                                value={edits.duration_days ?? rxData.duration_days ?? ''}
-                                onChange={e => updateEdit(key, 'duration_days', e.target.value)}
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                            <div className="col-span-2 md:col-span-1">
-                              <label className="block text-slate-500 font-medium mb-1">Quantity</label>
-                              <input
-                                type="number" min="1"
-                                value={edits.quantity ?? rxData.quantity ?? 1}
-                                onChange={e => updateEdit(key, 'quantity', parseInt(e.target.value) || 1)}
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-[#1565C0] text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                          </div>
-                          <div className="mt-2 text-[10px] text-blue-400">
-                            ✓ Changes are saved automatically. Selection state is not affected by editing.
-                          </div>
-                        </div>
-                      )}
+              {/* Footer — status count only, no duplicate button */}
+              {totalItems > 0 && (
+                <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/40">
+                  <span className="text-[11px] text-slate-400">
+                    {totalSelected} of {totalItems} item{totalItems !== 1 ? 's' : ''} selected for billing
+                  </span>
+                </div>
+              )}
+            </div>
 
-                      {/* Inline Edit panel for Treatment Plan */}
-                      {isEditing && !isRx && (
-                        <div className="mx-5 mb-3 p-4 bg-emerald-50/60 border border-emerald-100 rounded-xl">
-                          <div className="text-[10px] font-black text-emerald-700 uppercase tracking-wide mb-3">
-                            Edit Treatment Plan Details
-                          </div>
-                          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-[11px]">
-                            <div>
-                              <label className="block text-slate-500 font-medium mb-1">Duration</label>
-                              <input
-                                type="number" min="1"
-                                value={edits.duration ?? tpData.duration ?? ''}
-                                onChange={e => updateEdit(key, 'duration', e.target.value)}
-                                placeholder="e.g. 7"
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-slate-500 font-medium mb-1">Unit</label>
-                              <select
-                                value={edits.duration_unit ?? tpData.duration_unit ?? 'days'}
-                                onChange={e => updateEdit(key, 'duration_unit', e.target.value)}
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
-                              >
-                                <option value="days">Days</option>
-                                <option value="weeks">Weeks</option>
-                                <option value="months">Months</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-slate-500 font-medium mb-1">Billing Amount (₹)</label>
-                              <input
-                                type="number" min="0" step="1"
-                                value={edits.amount ?? ''}
-                                onChange={e => updateEdit(key, 'amount', e.target.value)}
-                                placeholder="0"
-                                className="w-full px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-emerald-500 text-slate-800 bg-white text-[11px]"
-                              />
-                            </div>
-                          </div>
-                          <div className="mt-2 text-[10px] text-emerald-500">
-                            ✓ Changes are saved automatically. Selection state is not affected by editing.
-                          </div>
-                        </div>
-                      )}
+            {/* Section: Enrolled CRM Packages */}
+            <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                    <Package className="w-4 h-4 text-[#1565C0]" />
+                    <span>Enrolled Health Packages ({crm?.packages?.length || 0})</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Long-term treatment plans and packages active for this patient.
+                  </p>
+                </div>
+                <Link
+                  to="/pro/packages"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-[#1565C0] hover:bg-blue-100 rounded-xl text-xs font-bold transition border border-blue-200/60"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Enroll Package</span>
+                </Link>
+              </div>
+
+              {!crm?.packages || crm.packages.length === 0 ? (
+                <p className="text-xs text-slate-400 py-3 text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                  No package enrolled for this patient yet.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {crm.packages.map(pkg => (
+                    <div key={pkg.package_id} className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/50 space-y-2 text-xs">
+                      <div className="flex justify-between items-start">
+                        <span className="font-bold text-slate-900">{pkg.package_name}</span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-[#1565C0] border border-blue-200/60 capitalize">
+                          {pkg.status}
+                        </span>
+                      </div>
+                      <div className="text-slate-500 text-[11px]">
+                        {pkg.package_type?.toUpperCase()} • {pkg.from_date} to {pkg.to_date}
+                      </div>
+                      <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-bold">
+                        <span className="text-slate-600">Final Amount:</span>
+                        <span className="text-[#D32F2F]">{formatCurrency(pkg.final_amount)}</span>
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {/* Footer — status count only, no duplicate button */}
-            {totalItems > 0 && (
-              <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/40">
-                <span className="text-[11px] text-slate-400">
-                  {totalSelected} of {totalItems} item{totalItems !== 1 ? 's' : ''} selected for billing
-                </span>
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}
-
-      {/* TAB CONTENT 3: Treatment Plans & Packages */}
-      {activeTab === 'packages' && (
-        <div className="space-y-6">
-          {/* Section A: Prescribed Treatment Plans from Doctor */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-black text-[#1565C0] flex items-center gap-2">
-                <Stethoscope className="w-4 h-4 text-[#1565C0]" />
-                <span>Doctor Prescribed Treatment Plans ({treatment_plans?.length || 0})</span>
-              </h2>
-            </div>
-
-            {!treatment_plans || treatment_plans.length === 0 ? (
-              <p className="text-xs text-slate-400 py-3 text-center">No treatment plans recorded by doctor for this patient.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {treatment_plans.map(tp => (
-                  <div key={tp.treatment_id} className="p-4 rounded-xl border border-blue-100 bg-blue-50/30 space-y-2 text-xs">
-                    <div className="flex justify-between items-start">
-                      <span className="font-black text-slate-900 text-sm">{tp.treatment_name}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-[#1565C0] border border-blue-200 uppercase">
-                        {tp.treatment_type || 'Treatment'}
-                      </span>
-                    </div>
-                    <div className="text-slate-600 text-[11px] font-medium">
-                      Duration: <strong>{tp.duration || 'N/A'} {tp.duration_unit || 'days'}</strong>
-                    </div>
-                    {tp.instructions && (
-                      <p className="text-slate-500 text-[11px] italic bg-white/80 p-2 rounded-lg border border-slate-100">
-                        Instructions: {tp.instructions}
-                      </p>
-                    )}
-                    <div className="pt-2 border-t border-blue-100/60 flex justify-end">
-                      <Link
-                        to={`/pro/billing/new?patient_id=${patient.patient_id}&doctor_id=${tp.doctor_id || consultation?.doctor_id || ''}&treatment_name=${encodeURIComponent(tp.treatment_name)}&treatment_type=${encodeURIComponent(tp.treatment_type || 'Treatment')}`}
-                        className="px-3 py-1.5 btn-brand-gradient text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5"
-                      >
-                        <Receipt className="w-3.5 h-3.5" />
-                        <span>Create Bill for this Treatment</span>
-                      </Link>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Section B: Enrolled CRM Packages */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-black text-[#1565C0] flex items-center gap-2">
-                <Package className="w-4 h-4 text-[#1565C0]" />
-                <span>Enrolled Packages ({crm?.packages?.length || 0})</span>
-              </h2>
-              <Link
-                to="/pro/packages"
-                className="flex items-center gap-1 px-3 py-1 bg-blue-50 text-[#1565C0] hover:bg-blue-100 rounded-xl text-xs font-bold transition border border-blue-200/60"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Enroll Package</span>
-              </Link>
-            </div>
-
-            {!crm?.packages || crm.packages.length === 0 ? (
-              <p className="text-xs text-slate-400 py-3 text-center">No package enrolled for this patient yet.</p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {crm.packages.map(pkg => (
-                  <div key={pkg.package_id} className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/50 space-y-2 text-xs">
-                    <div className="flex justify-between items-start">
-                      <span className="font-bold text-slate-900">{pkg.package_name}</span>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-[#1565C0] border border-blue-200/60 capitalize">
-                        {pkg.status}
-                      </span>
-                    </div>
-                    <div className="text-slate-500 text-[11px]">
-                      {pkg.package_type?.toUpperCase()} • {pkg.from_date} to {pkg.to_date}
-                    </div>
-                    <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-bold">
-                      <span className="text-slate-600">Final Amount:</span>
-                      <span className="text-[#D32F2F]">{formatCurrency(pkg.final_amount)}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* TAB CONTENT 4: Financials & Dues */}
       {activeTab === 'financials' && (
