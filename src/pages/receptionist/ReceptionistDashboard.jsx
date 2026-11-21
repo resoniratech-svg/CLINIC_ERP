@@ -133,8 +133,11 @@ export const ReceptionistDashboard = () => {
         </h3>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
           {/* New Patients */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/patients"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-blue-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-blue-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">New Patients</span>
               <UserPlus className="w-4 h-4 text-blue-600" />
             </div>
@@ -142,11 +145,14 @@ export const ReceptionistDashboard = () => {
               {data?.new_patients_today || 0}
             </div>
             <span className="text-[11px] text-blue-700 font-semibold">Registered today</span>
-          </div>
+          </Link>
 
           {/* Appointments */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/appointments"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-indigo-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-indigo-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">Appointments</span>
               <Calendar className="w-4 h-4 text-indigo-600" />
             </div>
@@ -154,10 +160,13 @@ export const ReceptionistDashboard = () => {
               {data?.appointments_today || 0}
             </div>
             <span className="text-[11px] text-indigo-700 font-semibold">Scheduled for today</span>
-          </div>
+          </Link>
 
           {/* Waiting Patients */}
-          <div className="bg-white p-5 rounded-3xl border border-amber-200 shadow-2xs space-y-1 bg-amber-50/30">
+          <Link
+            to="/receptionist/check-in"
+            className="bg-white p-5 rounded-3xl border border-amber-200 shadow-2xs space-y-1 bg-amber-50/30 hover:shadow-md hover:border-amber-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
             <div className="flex items-center justify-between text-amber-800">
               <span className="text-[11px] font-bold uppercase tracking-wider">Waiting Patients</span>
               <Clock className="w-4 h-4 text-amber-600 animate-pulse" />
@@ -165,11 +174,14 @@ export const ReceptionistDashboard = () => {
             <div className="text-3xl font-black text-amber-900 font-mono">
               {data?.waiting_patients || 0}
             </div>
-            <span className="text-[11px] text-amber-700 font-semibold">Checked-in & in waiting queue</span>
-          </div>
+            <span className="text-[11px] text-amber-700 font-semibold">Checked-in &amp; in waiting queue</span>
+          </Link>
 
           {/* Consultation Revenue */}
-          <div className="bg-white p-5 rounded-3xl border border-emerald-200 shadow-2xs space-y-1 bg-emerald-50/30">
+          <Link
+            to="/receptionist/billing"
+            className="bg-white p-5 rounded-3xl border border-emerald-200 shadow-2xs space-y-1 bg-emerald-50/30 hover:shadow-md hover:border-emerald-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
             <div className="flex items-center justify-between text-emerald-800">
               <span className="text-[11px] font-bold uppercase tracking-wider">Consultation Revenue</span>
               <DollarSign className="w-4 h-4 text-emerald-600" />
@@ -178,23 +190,29 @@ export const ReceptionistDashboard = () => {
               {formatCurrency(data?.consultation_revenue_today)}
             </div>
             <span className="text-[11px] text-emerald-700 font-semibold">Collected at front desk</span>
-          </div>
+          </Link>
 
           {/* Enquiries */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/enquiries"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-sky-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-sky-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">Enquiries Today</span>
               <HelpCircle className="w-4 h-4 text-sky-600" />
             </div>
             <div className="text-3xl font-black text-slate-900 font-mono">
               {data?.enquiries_today || 0}
             </div>
-            <span className="text-[11px] text-slate-500">Walk-ins & phone calls</span>
-          </div>
+            <span className="text-[11px] text-slate-500">Walk-ins &amp; phone calls</span>
+          </Link>
 
           {/* Pending Leads */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/leads"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-purple-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-purple-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">Executive Leads</span>
               <Users className="w-4 h-4 text-purple-600" />
             </div>
@@ -202,11 +220,14 @@ export const ReceptionistDashboard = () => {
               {data?.pending_leads || 0}
             </div>
             <span className="text-[11px] text-purple-700 font-semibold">Awaiting doctor assignment</span>
-          </div>
+          </Link>
 
           {/* Callbacks Today */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/crm"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-red-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-red-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">Callbacks Today</span>
               <PhoneCall className="w-4 h-4 text-red-600" />
             </div>
@@ -214,11 +235,14 @@ export const ReceptionistDashboard = () => {
               {data?.callbacks_today || 0}
             </div>
             <span className="text-[11px] text-red-700 font-semibold">Scheduled callback requests</span>
-          </div>
+          </Link>
 
           {/* Renewals */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/renewals"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-teal-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-teal-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">Renewals Due</span>
               <RotateCcw className="w-4 h-4 text-teal-600" />
             </div>
@@ -226,11 +250,14 @@ export const ReceptionistDashboard = () => {
               {data?.renewals_today || 0}
             </div>
             <span className="text-[11px] text-teal-700 font-semibold">Registration renewal batch</span>
-          </div>
+          </Link>
 
           {/* Due Patients */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/due-patients"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-amber-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-amber-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">Due Patients</span>
               <AlertCircle className="w-4 h-4 text-amber-600" />
             </div>
@@ -238,11 +265,14 @@ export const ReceptionistDashboard = () => {
               {data?.due_patients_count || 0}
             </div>
             <span className="text-[11px] text-slate-500">Outstanding fee balance</span>
-          </div>
+          </Link>
 
           {/* Follow-ups Today */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/crm"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-blue-300 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-blue-600 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">CRM Follow-ups</span>
               <CheckSquare className="w-4 h-4 text-blue-600" />
             </div>
@@ -250,11 +280,14 @@ export const ReceptionistDashboard = () => {
               {data?.followups_today || 0}
             </div>
             <span className="text-[11px] text-blue-700 font-semibold">Pending patient follow-ups</span>
-          </div>
+          </Link>
 
           {/* Pending Tasks */}
-          <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1">
-            <div className="flex items-center justify-between text-slate-400">
+          <Link
+            to="/receptionist/tasks"
+            className="bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs space-y-1 hover:shadow-md hover:border-slate-400 hover:scale-[1.01] transition-all cursor-pointer block group"
+          >
+            <div className="flex items-center justify-between text-slate-400 group-hover:text-slate-800 transition-colors">
               <span className="text-[11px] font-bold uppercase tracking-wider">My Pending Tasks</span>
               <CheckSquare className="w-4 h-4 text-slate-700" />
             </div>
@@ -262,7 +295,7 @@ export const ReceptionistDashboard = () => {
               {data?.pending_tasks_count || 0}
             </div>
             <span className="text-[11px] text-slate-500">Unresolved front-desk tasks</span>
-          </div>
+          </Link>
         </div>
       </div>
 
