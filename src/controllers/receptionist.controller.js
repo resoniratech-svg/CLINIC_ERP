@@ -1722,10 +1722,12 @@ async function createPatientReferral(req, res) {
 async function getPatientReferrals(req, res) {
   try {
     const result = await db.query(`
-      SELECT r.*, p.full_name as patient_name, p.mobile_number, rp.full_name as referring_patient_name
+      SELECT r.*, p.full_name as patient_name, p.mobile_number, p.registration_id as patient_registration_id,
+             rp.full_name as referring_patient_name, rp.registration_id as referring_registration_id,
+             rp.mobile_number as referring_patient_mobile
       FROM referrals r
       JOIN patients p ON r.patient_id = p.patient_id
-      LEFT JOIN patients rp ON r.referring_patient_id = rp.patient_id
+      LEFT JOIN patients rp ON (r.referring_patient_id = rp.patient_id OR (r.referral_type = 'patient' AND r.referred_by = rp.patient_id))
       WHERE r.referral_type = 'patient'
       ORDER BY r.id DESC
     `);
