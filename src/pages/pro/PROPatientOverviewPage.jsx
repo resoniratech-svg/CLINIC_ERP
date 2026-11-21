@@ -893,32 +893,28 @@ export const PROPatientOverviewPage = () => {
               )}
             </div>
 
-            {/* Section: Enrolled CRM Packages */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                    <Package className="w-4 h-4 text-[#1565C0]" />
-                    <span>Enrolled Health Packages ({crm?.packages?.length || 0})</span>
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Long-term treatment plans and packages active for this patient.
-                  </p>
+            {/* Section: Enrolled CRM Packages (Only shown when patient actually has active packages) */}
+            {crm?.packages && crm.packages.length > 0 && (
+              <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <Package className="w-4 h-4 text-[#1565C0]" />
+                      <span>Enrolled Health Packages ({crm.packages.length})</span>
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Active commercial health package enrolled for this patient.
+                    </p>
+                  </div>
+                  <Link
+                    to="/pro/packages"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-[#1565C0] hover:bg-blue-100 rounded-xl text-xs font-bold transition border border-blue-200/60"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Manage Packages</span>
+                  </Link>
                 </div>
-                <Link
-                  to="/pro/packages"
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-[#1565C0] hover:bg-blue-100 rounded-xl text-xs font-bold transition border border-blue-200/60"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Enroll Package</span>
-                </Link>
-              </div>
 
-              {!crm?.packages || crm.packages.length === 0 ? (
-                <p className="text-xs text-slate-400 py-3 text-center bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
-                  No package enrolled for this patient yet.
-                </p>
-              ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {crm.packages.map(pkg => (
                     <div key={pkg.package_id} className="p-4 rounded-xl border border-slate-200/80 bg-slate-50/50 space-y-2 text-xs">
@@ -938,8 +934,8 @@ export const PROPatientOverviewPage = () => {
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -953,13 +949,13 @@ export const PROPatientOverviewPage = () => {
               <div>
                 <h2 className="text-sm font-black text-slate-900 flex items-center gap-2">
                   <Receipt className="w-4 h-4 text-[#D32F2F]" />
-                  <span>Action Required: Treatment &amp; Package Billing</span>
+                  <span>Action Required: Treatment &amp; Procedure Billing</span>
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-[#1565C0] border border-blue-200">
                     PRO Responsibility
                   </span>
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Generate invoices &amp; record payments for Doctor-prescribed treatments, therapy packages, and authorized clinic procedures.
+                  Generate invoices &amp; record payments for Doctor-prescribed treatments and clinical procedures.
                 </p>
               </div>
               <Link
@@ -1616,8 +1612,10 @@ export const PROPatientOverviewPage = () => {
               },
               {
                 key: 'treatment_package_confirmed',
-                label: 'Treatment / Package Details Confirmed',
-                subtitle: `${(checklist?.metadata?.treatment_plans_count || treatment_plans?.length || 0)} Treatment Plan(s) / ${(checklist?.metadata?.packages_count || crm?.packages?.length || 0)} Package(s)`
+                label: 'Treatment Plan Details Confirmed',
+                subtitle: (crm?.packages?.length || 0) > 0
+                  ? `${(checklist?.metadata?.treatment_plans_count || treatment_plans?.length || 0)} Treatment Plan(s) / ${crm.packages.length} Package(s)`
+                  : `${(checklist?.metadata?.treatment_plans_count || treatment_plans?.length || 0)} Prescribed Treatment Plan(s)`
               },
               {
                 key: 'billing_completed',
