@@ -61,7 +61,8 @@ async function searchPatientsForCoupon(req, res) {
 
     const esc = escapeLike(q);
     const cleanDigits = q.replace(/\D/g, '');
-    const num = parseInt(q);
+    const num = parseInt(q, 10);
+    const isValidPatientId = !isNaN(num) && num > 0 && num <= 2147483647 && String(num) === q;
 
     const query = `
       SELECT patient_id, registration_id, registration_id as uhid, full_name, mobile_number, gender, patient_type, village, mandal
@@ -82,7 +83,7 @@ async function searchPatientsForCoupon(req, res) {
     `;
 
     const paddedReg = (cleanDigits && cleanDigits.length <= 6) ? `%REG-${cleanDigits.padStart(5, '0')}%` : '';
-    const parsedPatientId = (!isNaN(num) && String(num) === q) ? num : null;
+    const parsedPatientId = isValidPatientId ? num : null;
 
     const result = await db.query(query, [
       `%${esc}%`,

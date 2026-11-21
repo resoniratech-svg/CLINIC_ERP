@@ -138,7 +138,8 @@ async function searchPatientInbound(req, res) {
 
     const esc = escapeLike(rawSearch);
     const cleanDigits = rawSearch.replace(/\D/g, '');
-    const num = parseInt(rawSearch);
+    const num = parseInt(rawSearch, 10);
+    const isValidPatientId = !isNaN(num) && num > 0 && num <= 2147483647 && String(num) === rawSearch;
     const paddedReg = (cleanDigits && cleanDigits.length <= 6) ? `%REG-${cleanDigits.padStart(5, '0')}%` : '';
 
     const patientRes = await db.query(
@@ -157,7 +158,7 @@ async function searchPatientInbound(req, res) {
          END,
          patient_id DESC
        LIMIT 10`,
-      [`%${esc}%`, paddedReg, (!isNaN(num) && String(num) === rawSearch) ? num : null, rawSearch, `${esc}%`]
+      [`%${esc}%`, paddedReg, isValidPatientId ? num : null, rawSearch, `${esc}%`]
     );
 
     if (patientRes.rows.length > 0) {
@@ -167,15 +168,17 @@ async function searchPatientInbound(req, res) {
       const apptsRes = await db.query(
         `SELECT appointment_id, appointment_date, appointment_time, status FROM appointments WHERE patient_id = $1 ORDER BY appointment_date DESC LIMIT 5`,
         [patient.patient_id]
-      );
+      ).catch(() => ({ rows: [] }));
+
       const leadsRes = await db.query(
         `SELECT lead_id, lead_name, status, created_at FROM leads WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 5`,
         [patient.patient_id]
-      );
+      ).catch(() => ({ rows: [] }));
+
       const callsRes = await db.query(
         `SELECT call_id, interaction_type, call_purpose, call_status, created_at FROM call_records WHERE patient_id = $1 ORDER BY created_at DESC LIMIT 5`,
         [patient.patient_id]
-      );
+      ).catch(() => ({ rows: [] }));
 
       return res.json(formatResponse(true, {
         is_existing: true,

@@ -3196,7 +3196,8 @@ async function searchPatients(req, res) {
     if (rawSearch && rawSearch !== '%') {
       const esc = escapeLike(rawSearch);
       const cleanDigits = rawSearch.replace(/\D/g, '');
-      const num = parseInt(rawSearch);
+      const num = parseInt(rawSearch, 10);
+      const isValidPatientId = !isNaN(num) && num > 0 && num <= 2147483647 && String(num) === rawSearch;
 
       const orClauses = [
         `pt.full_name ILIKE $${params.length + 1}`,
@@ -3206,7 +3207,7 @@ async function searchPatients(req, res) {
       ];
       params.push(`%${esc}%`);
 
-      if (!isNaN(num) && String(num) === rawSearch) {
+      if (isValidPatientId) {
         params.push(num);
         orClauses.push(`pt.patient_id = $${params.length}`);
       }
