@@ -38,6 +38,7 @@ describe('Pharmacy Module End-to-End Business Rules Verification', () => {
       DELETE FROM referrals;
       DELETE FROM crm_followups;
       DELETE FROM leads;
+      DELETE FROM doctor_transfer_items;
       DELETE FROM appointments;
       DELETE FROM patients WHERE patient_id != 1;
     `);
@@ -1090,5 +1091,21 @@ describe('Pharmacy Module End-to-End Business Rules Verification', () => {
       SET full_name = $1, mobile_number = $2, email = $3
       WHERE username = 'peter_pharmacy'
     `, [origFullName, origMobile, origEmail]);
+  });
+
+  test('Rule 27: Pharmacy patient search by name, phone, registration_id executes without DISTINCT ORDER BY 500 error', async () => {
+    const res = await request(app)
+      .get('/api/v1/pharmacy/patients/search?search=ram')
+      .set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(Array.isArray(res.body.data)).toBe(true);
+
+    const resPhone = await request(app)
+      .get('/api/v1/pharmacy/patients/search?search=5373737373')
+      .set('Authorization', `Bearer ${pharmacyToken}`);
+    expect(resPhone.status).toBe(200);
+    expect(resPhone.body.success).toBe(true);
+    expect(Array.isArray(resPhone.body.data)).toBe(true);
   });
 });

@@ -3164,10 +3164,9 @@ async function searchPatients(req, res) {
     const { patient_id, registration_id, name, mobile, prescription_id, search, q } = req.query;
 
     let query = `
-      SELECT DISTINCT pt.patient_id, COALESCE(pt.registration_id, CAST(pt.patient_id AS TEXT)) as registration_id,
+      SELECT pt.patient_id, COALESCE(pt.registration_id, CAST(pt.patient_id AS TEXT)) as registration_id,
              pt.full_name, pt.mobile_number, pt.age, pt.gender, pt.address, pt.village, pt.mandal, pt.patient_type
       FROM patients pt
-      LEFT JOIN prescriptions p ON pt.patient_id = p.patient_id
       WHERE 1=1
     `;
     const params = [];
@@ -3190,7 +3189,7 @@ async function searchPatients(req, res) {
     }
     if (prescription_id) {
       params.push(parseInt(prescription_id));
-      query += ` AND p.id = $${params.length}`;
+      query += ` AND EXISTS (SELECT 1 FROM prescriptions p WHERE p.patient_id = pt.patient_id AND p.id = $${params.length})`;
     }
     const rawSearch = (search || q || '').trim();
     if (rawSearch && rawSearch !== '%') {
