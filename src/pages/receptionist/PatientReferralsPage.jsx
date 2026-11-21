@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { receptionistApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -6,7 +6,7 @@ import { Modal } from '../../components/common/Modal';
 import { AutocompleteSearch, HighlightMatch } from '../../components/common/AutocompleteSearch';
 import { VillageMandalSelect } from '../../components/common/VillageMandalSelect';
 import { useToast } from '../../context/ToastContext';
-import { HeartHandshake, Plus, Search, CheckCircle2, UserPlus, Users, ChevronDown, X } from 'lucide-react';
+import { HeartHandshake, Plus } from 'lucide-react';
 
 export const PatientReferralsPage = () => {
   const navigate = useNavigate();
@@ -80,7 +80,6 @@ export const PatientReferralsPage = () => {
         showToast('Patient referral recorded! Generated referral ID and routed to Unit Target.', 'success');
         setIsModalOpen(false);
         setSelectedReferringPt(null);
-        setSearchPtTerm('');
         setFormData({
           patient_name: '',
           mobile_number: '',
@@ -144,14 +143,15 @@ export const PatientReferralsPage = () => {
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {referrals.map((ref) => {
-                  const referrerObj = allPatients.find((p) => String(p.patient_id) === String(ref.referring_patient_id));
                   const referrerName =
                     ref.referring_patient_name ||
                     ref.referrer_name ||
-                    referrerObj?.full_name ||
-                    referrerObj?.patient_name ||
                     'Registered Patient';
-                  const referrerId = referrerObj?.registration_id || ref.referrer_reg_id || `ID: #${ref.referring_patient_id}`;
+                  const referrerId =
+                    ref.referring_registration_id ||
+                    ref.referring_patient_registration_id ||
+                    ref.referrer_reg_id ||
+                    (ref.referring_patient_id ? `ID: #${ref.referring_patient_id}` : '—');
 
                   return (
                     <tr key={ref.id} className="hover:bg-slate-50/80 transition-colors">
