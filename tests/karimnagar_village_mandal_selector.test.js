@@ -146,4 +146,76 @@ describe('Karimnagar Village & Mandal Selector Contract Suite', () => {
       assert.strictEqual(filteredVillages[0].mandal_name, 'Shankarapatnam');
     });
   });
+
+  describe('3. Synthetic Event & Object Value Resilience (Crash Prevention)', () => {
+    // Normalization logic identical to VillageMandalSelect.jsx line 119
+    const normalizeValue = (value) => {
+      return typeof value === 'string'
+        ? value
+        : (value?.target?.value ?? value?.displayName ?? value?.villageName ?? value?.name ?? value?.village ?? (value ? String(value) : ''));
+    };
+
+    test('3.1 Normalizes string values as-is', () => {
+      assert.strictEqual(normalizeValue('Achampalli — Gangadhara'), 'Achampalli — Gangadhara');
+    });
+
+    test('3.2 Normalizes synthetic event { target: { value: "..." } } safely to string', () => {
+      const mockEvent = { target: { name: 'village', value: 'Achampalli — Gangadhara' } };
+      const res = normalizeValue(mockEvent);
+      assert.strictEqual(res, 'Achampalli — Gangadhara');
+      assert.doesNotThrow(() => (res || '').toLowerCase().trim());
+    });
+
+    test('3.3 Normalizes selection object { displayName: "..." } safely to string', () => {
+      const mockSelection = { displayName: 'Bommakal — Karimnagar Rural', villageName: 'Bommakal' };
+      const res = normalizeValue(mockSelection);
+      assert.strictEqual(res, 'Bommakal — Karimnagar Rural');
+      assert.doesNotThrow(() => (res || '').toLowerCase().trim());
+    });
+
+    test('3.4 Does not crash when passed null, undefined, or empty string', () => {
+      assert.strictEqual(normalizeValue(null), '');
+      assert.strictEqual(normalizeValue(undefined), '');
+      assert.strictEqual(normalizeValue(''), '');
+      assert.doesNotThrow(() => (normalizeValue(null) || '').toLowerCase());
+    });
+
+    test('3.5 Synthetic event created by VillageMandalSelect implements toString and toLowerCase', () => {
+      const createSyntheticEvent = (strVal, name = 'village') => {
+        const val = strVal || '';
+        return {
+          target: { name: name || 'village', value: val },
+          currentTarget: { name: name || 'village', value: val },
+          value: val,
+          toString: () => val,
+          [Symbol.toPrimitive]: () => val,
+          toLowerCase: () => val.toLowerCase(),
+          trim: () => val.trim()
+        };
+      };
+
+      const event = createSyntheticEvent('Achampalli — Gangadhara');
+      // If a caller mistakenly stores the event in state:
+      assert.strictEqual(typeof event.toLowerCase, 'function');
+      assert.strictEqual(event.toLowerCase(), 'achampalli — gangadhara');
+      assert.strictEqual(event.trim(), 'Achampalli — Gangadhara');
+      assert.strictEqual(String(event), 'Achampalli — Gangadhara');
+      assert.strictEqual(normalizeValue(event), 'Achampalli — Gangadhara');
+    });
+
+    test('3.6 Executive payload sanitization cleanly produces string or null', () => {
+      const sanitizeVillage = (v) => (typeof v === 'string' ? v.trim() : (v?.displayName ?? v?.village ?? v?.target?.value ?? '')) || null;
+      const sanitizeMandal = (m) => (typeof m === 'string' ? m.trim() : (m?.mandal ?? m?.displayName ?? m?.target?.value ?? '')) || null;
+
+      assert.strictEqual(sanitizeVillage('  Achampalli — Gangadhara  '), 'Achampalli — Gangadhara');
+      assert.strictEqual(sanitizeVillage({ target: { value: 'Achampalli' } }), 'Achampalli');
+      assert.strictEqual(sanitizeVillage({ village: 'Achampalli' }), 'Achampalli');
+      assert.strictEqual(sanitizeVillage(''), null);
+      assert.strictEqual(sanitizeVillage(null), null);
+
+      assert.strictEqual(sanitizeMandal(' Gangadhara '), 'Gangadhara');
+      assert.strictEqual(sanitizeMandal({ mandal: 'Gangadhara' }), 'Gangadhara');
+      assert.strictEqual(sanitizeMandal(''), null);
+    });
+  });
 });

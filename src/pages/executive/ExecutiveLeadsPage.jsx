@@ -124,8 +124,8 @@ export const ExecutiveLeadsPage = () => {
         mobile_number: cleanMobile,
         age: newLeadForm.age ? parseInt(newLeadForm.age) : null,
         gender: newLeadForm.gender,
-        village: newLeadForm.village.trim() || null,
-        mandal: newLeadForm.mandal.trim() || null,
+        village: (typeof newLeadForm.village === 'string' ? newLeadForm.village.trim() : (newLeadForm.village?.displayName ?? newLeadForm.village?.village ?? '')) || null,
+        mandal: (typeof newLeadForm.mandal === 'string' ? newLeadForm.mandal.trim() : (newLeadForm.mandal?.mandal ?? '')) || null,
         status: newLeadForm.status || 'new',
         requirement: newLeadForm.requirement.trim() || null,
         source: newLeadForm.lead_source === 'outbound' ? 'Outbound Call' : 'Inbound Call',
@@ -503,12 +503,17 @@ export const ExecutiveLeadsPage = () => {
                 labelClassName="block text-[10px] font-bold uppercase tracking-wider text-slate-700 mb-1"
                 placeholder="e.g. Subhash Nagar or type new"
                 value={newLeadForm.village}
-                onChange={(val) => setNewLeadForm({ ...newLeadForm, village: val })}
-                onSelect={({ village, mandal }) => {
+                onChange={(e, val) => {
+                  const str = typeof e === 'string' ? e : (val ?? e?.target?.value ?? '');
+                  setNewLeadForm(prev => ({ ...prev, village: str }));
+                }}
+                onSelect={(sel) => {
+                  const v = sel?.village || sel?.villageName || sel?.displayName || '';
+                  const m = sel?.mandal || sel?.mandalName || '';
                   setNewLeadForm(prev => ({
                     ...prev,
-                    village: village || prev.village,
-                    mandal: mandal || prev.mandal
+                    village: v || prev.village,
+                    mandal: m || prev.mandal
                   }));
                 }}
                 inputClassName="bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"

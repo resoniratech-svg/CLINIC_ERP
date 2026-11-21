@@ -116,12 +116,16 @@ export const InboundCallsPage = () => {
 
     setSubmitting(true);
     try {
+      const villageStr = typeof leadForm.village === 'string'
+        ? leadForm.village.trim()
+        : (leadForm.village?.displayName ?? leadForm.village?.village ?? leadForm.village?.target?.value ?? '');
+
       const payload = {
         lead_name: leadForm.lead_name.trim(),
         mobile_number: cleanMobile,
         age: leadForm.age ? parseInt(leadForm.age) : null,
         gender: leadForm.gender,
-        village: leadForm.village.trim() || null,
+        village: villageStr || null,
         requirement: leadForm.requirement.trim() || null,
         source: 'Inbound Call',
         lead_source: 'inbound',
@@ -455,12 +459,17 @@ export const InboundCallsPage = () => {
                   labelClassName="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5"
                   placeholder="e.g. Subhash Nagar or type new"
                   value={leadForm.village}
-                  onChange={(val) => setLeadForm({ ...leadForm, village: val })}
-                  onSelect={({ village, mandal }) => {
+                  onChange={(e, val) => {
+                    const str = typeof e === 'string' ? e : (val ?? e?.target?.value ?? '');
+                    setLeadForm(prev => ({ ...prev, village: str }));
+                  }}
+                  onSelect={(sel) => {
+                    const v = sel?.village || sel?.villageName || sel?.displayName || '';
+                    const m = sel?.mandal || sel?.mandalName || '';
                     setLeadForm(prev => ({
                       ...prev,
-                      village: village || prev.village,
-                      mandal: mandal || prev.mandal
+                      village: v || prev.village,
+                      mandal: m || prev.mandal
                     }));
                   }}
                   inputClassName="bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"

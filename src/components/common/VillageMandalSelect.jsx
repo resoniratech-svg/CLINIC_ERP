@@ -115,10 +115,28 @@ export const VillageMandalSelect = ({
     };
   }, [isOpen]);
 
+  // Defensively ensure stringValue is always a string even if an object or event was passed
+  const stringValue = typeof value === 'string'
+    ? value
+    : (value?.target?.value ?? value?.displayName ?? value?.villageName ?? value?.name ?? value?.village ?? (value ? String(value) : ''));
+
+  const createSyntheticEvent = (strVal) => {
+    const val = strVal || '';
+    return {
+      target: { name: name || 'village', value: val },
+      currentTarget: { name: name || 'village', value: val },
+      value: val,
+      toString: () => val,
+      [Symbol.toPrimitive]: () => val,
+      toLowerCase: () => val.toLowerCase(),
+      trim: () => val.trim()
+    };
+  };
+
   // Parse new location if user enters comma or two-part string
   const parsedNewLocation = useMemo(() => {
-    if (!value || typeof value !== 'string') return null;
-    const raw = value.trim();
+    if (!stringValue || typeof stringValue !== 'string') return null;
+    const raw = stringValue.trim();
     if (!raw) return null;
 
     let vPart = null;
@@ -156,11 +174,11 @@ export const VillageMandalSelect = ({
       }
     }
     return null;
-  }, [value, activeVillages]);
+  }, [stringValue, activeVillages]);
 
   // Filter existing villages and mandals based on input
   const { filteredVillages, filteredMandals } = useMemo(() => {
-    const q = (value || '').toLowerCase().trim();
+    const q = (stringValue || '').toLowerCase().trim();
     if (!q) {
       return {
         filteredVillages: activeVillages.slice(0, 30),
@@ -199,7 +217,7 @@ export const VillageMandalSelect = ({
       filteredVillages: matchedVillages.slice(0, 40),
       filteredMandals: matchedMandals.slice(0, 15)
     };
-  }, [activeVillages, activeMandals, value]);
+  }, [activeVillages, activeMandals, stringValue]);
 
   const handleSelectVillage = (village) => {
     const vName = village.name;
@@ -209,16 +227,18 @@ export const VillageMandalSelect = ({
     if (typeof onSelect === 'function') {
       onSelect({
         type: 'village',
-        villageId: village.id,
+        village: vName,
         villageName: vName,
-        mandalId: village.mandal_id,
+        mandal: mName,
         mandalName: mName,
+        villageId: village.id,
+        mandalId: village.mandal_id,
         displayName: display,
         isNew: false
       });
     }
     if (typeof onChange === 'function') {
-      onChange({ target: { name, value: display } }, display);
+      onChange(createSyntheticEvent(display), display);
     }
     setIsOpen(false);
   };
@@ -229,16 +249,18 @@ export const VillageMandalSelect = ({
     if (typeof onSelect === 'function') {
       onSelect({
         type: 'mandal',
-        villageId: null,
+        village: null,
         villageName: null,
-        mandalId: mandal.id,
+        mandal: mName,
         mandalName: mName,
+        villageId: null,
+        mandalId: mandal.id,
         displayName: mName,
         isNew: false
       });
     }
     if (typeof onChange === 'function') {
-      onChange({ target: { name, value: mName } }, mName);
+      onChange(createSyntheticEvent(mName), mName);
     }
     setIsOpen(false);
   };
@@ -250,16 +272,18 @@ export const VillageMandalSelect = ({
     if (typeof onSelect === 'function') {
       onSelect({
         type: 'new_location',
-        villageId: null,
+        village: parsedNewLocation.village,
         villageName: parsedNewLocation.village,
-        mandalId: null,
+        mandal: parsedNewLocation.mandal,
         mandalName: parsedNewLocation.mandal,
+        villageId: null,
+        mandalId: null,
         displayName: display,
         isNew: true
       });
     }
     if (typeof onChange === 'function') {
-      onChange({ target: { name, value: display } }, display);
+      onChange(createSyntheticEvent(display), display);
     }
     setIsOpen(false);
   };
@@ -269,16 +293,18 @@ export const VillageMandalSelect = ({
     if (typeof onSelect === 'function') {
       onSelect({
         type: null,
-        villageId: null,
+        village: null,
         villageName: null,
-        mandalId: null,
+        mandal: null,
         mandalName: null,
+        villageId: null,
+        mandalId: null,
         displayName: '',
         isNew: false
       });
     }
     if (typeof onChange === 'function') {
-      onChange({ target: { name, value: '' } }, '');
+      onChange(createSyntheticEvent(''), '');
     }
     if (inputRef.current) {
       inputRef.current.focus();
@@ -300,7 +326,7 @@ export const VillageMandalSelect = ({
           ref={inputRef}
           type="text"
           name={name}
-          value={value || ''}
+          value={stringValue}
           required={required}
           disabled={disabled}
           autoComplete="off"
@@ -311,7 +337,7 @@ export const VillageMandalSelect = ({
           onChange={(e) => {
             const val = e.target.value;
             if (typeof onChange === 'function') {
-              onChange(e, val);
+              onChange(createSyntheticEvent(val), val);
             }
             updateDropdownPosition();
             setIsOpen(true);
@@ -329,7 +355,7 @@ export const VillageMandalSelect = ({
 
         {/* Right action icons */}
         <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-          {value && !disabled && (
+          {stringValue && !disabled && (
             <button
               type="button"
               onClick={handleClear}

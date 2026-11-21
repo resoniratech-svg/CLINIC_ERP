@@ -63,13 +63,20 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
     setSaving(true);
     try {
       if (isOutbound) {
+        const villageStr = typeof formData.village === 'string'
+          ? formData.village.trim()
+          : (formData.village?.displayName ?? formData.village?.village ?? formData.village?.target?.value ?? '');
+        const mandalStr = typeof formData.mandal === 'string'
+          ? formData.mandal.trim()
+          : (formData.mandal?.displayName ?? formData.mandal?.mandal ?? formData.mandal?.target?.value ?? '');
+
         const payload = {
           patient_name: formData.lead_name.trim(),
           mobile_number: cleanMobile,
           age: formData.age ? parseInt(formData.age) : null,
           gender: formData.gender,
-          village: formData.village.trim() || null,
-          mandal: formData.mandal.trim() || null,
+          village: villageStr || null,
+          mandal: mandalStr || null,
           problem: formData.requirement.trim() || null,
           campaign: formData.campaign.trim() || null,
           status: formData.status,
@@ -84,12 +91,16 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
           showToast('Failed to update outbound lead', 'error');
         }
       } else {
+        const villageStr = typeof formData.village === 'string'
+          ? formData.village.trim()
+          : (formData.village?.displayName ?? formData.village?.village ?? formData.village?.target?.value ?? '');
+
         const payload = {
           lead_name: formData.lead_name.trim(),
           mobile_number: cleanMobile,
           age: formData.age ? parseInt(formData.age) : null,
           gender: formData.gender,
-          village: formData.village.trim() || null,
+          village: villageStr || null,
           campaign: formData.campaign.trim() || null,
           requirement: formData.requirement.trim() || null,
           source: lead.source || 'Inbound Call',
@@ -223,12 +234,17 @@ export const EditLeadModal = ({ isOpen, onClose, lead, onLeadUpdated, isOutbound
               labelClassName="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1"
               placeholder="e.g. Gandhi Nagar or type new"
               value={formData.village}
-              onChange={(val) => setFormData({ ...formData, village: val })}
-              onSelect={({ village, mandal }) => {
+              onChange={(e, val) => {
+                const str = typeof e === 'string' ? e : (val ?? e?.target?.value ?? '');
+                setFormData(prev => ({ ...prev, village: str }));
+              }}
+              onSelect={(sel) => {
+                const v = sel?.village || sel?.villageName || sel?.displayName || '';
+                const m = sel?.mandal || sel?.mandalName || '';
                 setFormData(prev => ({
                   ...prev,
-                  village: village || prev.village,
-                  mandal: mandal || prev.mandal
+                  village: v || prev.village,
+                  mandal: m || prev.mandal
                 }));
               }}
               inputClassName="bg-slate-50 border border-slate-300 rounded-xl text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
