@@ -33,7 +33,7 @@ export const PROPaymentsPage = () => {
   const path = location.pathname;
   const initialTab = path.includes('/due-collection')
     ? 'due-collection'
-    : path.includes('/refunds')
+    : (path.includes('/refunds') || path.includes('/refund-history'))
     ? 'refunds'
     : path.includes('/history')
     ? 'history'

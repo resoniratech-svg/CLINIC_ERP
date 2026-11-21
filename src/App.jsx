@@ -360,10 +360,14 @@ export default function App() {
             <Route path="billing/paid" element={<PROBillingPage />} />
             <Route path="billing/partial-due" element={<PROBillingPage />} />
             <Route path="billing/history" element={<PROBillingPage />} />
+            <Route path="billing/reports" element={<PROBillingPage />} />
+            <Route path="billing/operational-reports" element={<Navigate to="/pro/billing/reports" replace />} />
             <Route path="payments" element={<Navigate to="/pro/payments/today" replace />} />
             <Route path="payments/today" element={<PROPaymentsPage />} />
             <Route path="payments/due-collection" element={<PROPaymentsPage />} />
             <Route path="payments/history" element={<PROPaymentsPage />} />
+            <Route path="payments/refunds" element={<PROPaymentsPage />} />
+            <Route path="payments/refund-history" element={<Navigate to="/pro/payments/refunds" replace />} />
             <Route path="accountant" element={<Navigate to="/pro/accountant/daily-summary" replace />} />
             <Route path="accountant/daily-summary" element={<PROAccountantPage />} />
             <Route path="accountant/opening-balance" element={<PROAccountantPage />} />

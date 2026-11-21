@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useLocation, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import {
   Receipt,
@@ -19,7 +19,11 @@ import {
   Ticket,
   Package,
   Lock,
-  Info
+  Info,
+  Search,
+  X,
+  ChevronDown,
+  User
 } from 'lucide-react';
 import { proApi, settingsApi, couponsApi } from '../../api';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
@@ -45,7 +49,7 @@ const PROBillingPageContent = () => {
     ? 'paid'
     : path.includes('/partial-due')
     ? 'partial-due'
-    : path.includes('/reports')
+    : (path.includes('/reports') || path.includes('/operational-reports'))
     ? 'reports'
     : 'history';
 
@@ -58,7 +62,15 @@ const PROBillingPageContent = () => {
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState(null);
 
-  // Patient live lookup state
+  // Patient live lookup & searchable selector state
+  const [patientSearchTerm, setPatientSearchTerm] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [isSearchingPatients, setIsSearchingPatients] = useState(false);
+  const [isSelectorOpen, setIsSelectorOpen] = useState(false);
+  const dropdownRef = useRef(null);
+  const searchInputRef = useRef(null);
+  const latestSearchIdRef = useRef(0);
+
   const [patientLookup, setPatientLookup] = useState({
     loading: false,
     patient: null,
@@ -136,19 +148,40 @@ const PROBillingPageContent = () => {
       return;
     }
 
-    const pId = parseInt(idToVerify, 10);
-    if (isNaN(pId) || pId <= 0) {
-      setPatientLookup({ loading: false, patient: null, error: `Invalid Patient ID "${idToVerify}"` });
-      setAvailablePackages([]);
-      setPrescribedTreatments([]);
-      setConsultingDoctor(null);
-      setPatientCoupons([]);
-      setSelectedCoupon(null);
-      return;
-    }
-
     setPatientLookup({ loading: true, patient: null, error: null });
     setLoadingPackages(true);
+
+    let pId = parseInt(idToVerify, 10);
+    // If idToVerify is not a pure integer (e.g. REG-00002 or patient name/phone), resolve via searchPatients
+    if (isNaN(pId) || pId <= 0 || String(idToVerify).trim().toUpperCase().startsWith('REG')) {
+      try {
+        const sRes = await proApi.searchPatients({ search: String(idToVerify).trim(), limit: 5 });
+        if (sRes?.success && sRes.data?.length > 0) {
+          pId = sRes.data[0].patient_id;
+          setForm(prev => ({ ...prev, patient_id: String(pId) }));
+          setPatientSearchTerm(`${sRes.data[0].full_name || sRes.data[0].patient_name} • ID: ${sRes.data[0].patient_id}`);
+        } else {
+          setPatientLookup({ loading: false, patient: null, error: `Patient "${idToVerify}" not found` });
+          setAvailablePackages([]);
+          setPrescribedTreatments([]);
+          setConsultingDoctor(null);
+          setPatientCoupons([]);
+          setSelectedCoupon(null);
+          setLoadingPackages(false);
+          return;
+        }
+      } catch {
+        setPatientLookup({ loading: false, patient: null, error: `Patient "${idToVerify}" search failed` });
+        setAvailablePackages([]);
+        setPrescribedTreatments([]);
+        setConsultingDoctor(null);
+        setPatientCoupons([]);
+        setSelectedCoupon(null);
+        setLoadingPackages(false);
+        return;
+      }
+    }
+
     try {
       const res = await proApi.getPatientOverview(pId);
       if (res?.success && res.data?.patient) {
@@ -157,6 +190,7 @@ const PROBillingPageContent = () => {
           patient: res.data.patient,
           error: null
         });
+        setPatientSearchTerm(`${res.data.patient.full_name || res.data.patient.patient_name} • ID: ${res.data.patient.patient_id}`);
 
         // Track doctor's prescribed treatment plans
         const tps = res.data.treatment_plans || [];
@@ -240,6 +274,59 @@ const PROBillingPageContent = () => {
       setLoadingPackages(false);
     }
   }, [applyPackage]);
+
+  // Load patients from backend API for live search suggestions
+  const loadPatients = useCallback(async (query = '') => {
+    const searchId = ++latestSearchIdRef.current;
+    setIsSearchingPatients(true);
+    try {
+      const res = await proApi.searchPatients({ search: (query || '').trim(), limit: 25 });
+      if (searchId === latestSearchIdRef.current) {
+        if (res?.success) {
+          setSearchResults(res.data || []);
+        } else {
+          setSearchResults([]);
+        }
+      }
+    } catch {
+      if (searchId === latestSearchIdRef.current) {
+        setSearchResults([]);
+      }
+    } finally {
+      if (searchId === latestSearchIdRef.current) {
+        setIsSearchingPatients(false);
+      }
+    }
+  }, []);
+
+  // Debounce search input when dropdown is open
+  useEffect(() => {
+    if (!isSelectorOpen) return;
+    const timer = setTimeout(() => {
+      loadPatients(patientSearchTerm);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [patientSearchTerm, isSelectorOpen, loadPatients]);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setIsSelectorOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSelectPatient = (pt) => {
+    setSelectedPlanIds([]);
+    setSelectedCoupon(null);
+    setForm(prev => ({ ...prev, patient_id: String(pt.patient_id) }));
+    setPatientSearchTerm(`${pt.full_name || pt.patient_name} • ID: ${pt.patient_id}`);
+    setIsSelectorOpen(false);
+    verifyPatient(pt.patient_id);
+  };
 
   // Handle URL query parameters (e.g. from Patient Overview, Treatment Plans, or Packages)
   useEffect(() => {
@@ -336,6 +423,7 @@ const PROBillingPageContent = () => {
           package_id: qPackageId ? String(qPackageId).trim() : prev.package_id,
           items: billingItems.length > 0 ? billingItems : prev.items
         }));
+        setPatientSearchTerm(`Patient #${cleanPatientId}`);
         verifyPatient(cleanPatientId, qDoctorId ? String(qDoctorId).trim() : null, qPackageId ? String(qPackageId).trim() : null);
 
         // Pre-select treatment plan IDs so the sidebar shows them checked
@@ -568,9 +656,13 @@ const PROBillingPageContent = () => {
     e.preventDefault();
     setServerError(null);
 
-    const pId = parseInt(form.patient_id);
+    let pId = parseInt(form.patient_id, 10);
+    if ((!pId || isNaN(pId)) && patientLookup.patient?.patient_id) {
+      pId = patientLookup.patient.patient_id;
+      setForm(prev => ({ ...prev, patient_id: String(pId) }));
+    }
     if (!pId || isNaN(pId)) {
-      showToast('Valid numeric Patient ID is required', 'error');
+      showToast('Valid numeric Patient ID is required. Please select or verify a patient.', 'error');
       return;
     }
 
@@ -708,13 +800,29 @@ const PROBillingPageContent = () => {
               <span>Refresh</span>
             </button>
           )}
-          <button
-            onClick={() => handleTabChange('new')}
-            className="flex items-center gap-1.5 px-4 py-2 btn-brand-gradient font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>+ Create New Bill</span>
-          </button>
+          {activeTab === 'new' ? (
+            <button
+              type="button"
+              onClick={() => {
+                const formEl = document.getElementById('pro-billing-form');
+                if (formEl) formEl.requestSubmit();
+              }}
+              disabled={submitting || isDiscountOverSubtotal || patientLookup.loading || (patientLookup.error && !!form.patient_id) || isPackageAlreadyBilled}
+              className="flex items-center gap-1.5 px-4 py-2 btn-brand-gradient font-bold text-xs rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50"
+              title="Save & Generate Bill"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>{submitting ? 'Creating Bill...' : '+ Save & Generate Bill'}</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => handleTabChange('new')}
+              className="flex items-center gap-1.5 px-4 py-2 btn-brand-gradient font-bold text-xs rounded-xl shadow-xs transition cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Create New Bill</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -748,7 +856,7 @@ const PROBillingPageContent = () => {
 
       {/* VIEW 1: New Bill Form */}
       {activeTab === 'new' && (
-        <form onSubmit={handleCreateBill} className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-6">
+        <form id="pro-billing-form" onSubmit={handleCreateBill} className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-6">
           <div className="border-b border-slate-100 pb-4">
             <h2 className="text-base font-black text-[#1565C0] flex items-center gap-2">
               <span className="w-1.5 h-4 rounded-full bg-[#D32F2F]"></span>
@@ -760,10 +868,16 @@ const PROBillingPageContent = () => {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
+            <div className="space-y-1 relative" ref={dropdownRef}>
               <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-bold text-slate-700">
-                  Patient ID <span className="text-red-500">*</span>
+                <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                  <span>Patient Search &amp; ID</span>
+                  <span className="text-red-500">*</span>
+                  {patientLookup.patient && (
+                    <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5">
+                      <CheckCircle className="w-3 h-3" /> Verified ID #{patientLookup.patient.patient_id}
+                    </span>
+                  )}
                 </label>
                 {form.patient_id && (
                   <button
@@ -771,38 +885,140 @@ const PROBillingPageContent = () => {
                     onClick={() => verifyPatient(form.patient_id)}
                     className="text-[10px] font-bold text-[#1565C0] hover:underline cursor-pointer"
                   >
-                    Verify
+                    Re-verify
                   </button>
                 )}
               </div>
-              <input
-                type="number"
-                required
-                value={form.patient_id}
-                onChange={e => {
-                  setForm({ ...form, patient_id: e.target.value });
-                  if (!e.target.value) {
-                    setPatientLookup({ loading: false, patient: null, error: null });
-                    setAvailablePackages([]);
-                  }
-                }}
-                onBlur={e => {
-                  if (e.target.value) verifyPatient(e.target.value);
-                }}
-                placeholder="Enter numeric Patient ID..."
-                className={`w-full px-3 py-2 text-xs rounded-xl border outline-none font-mono ${
-                  patientLookup.error
-                    ? 'border-red-400 bg-red-50/20 focus:border-red-500'
-                    : patientLookup.patient
-                    ? 'border-emerald-400 bg-emerald-50/20 focus:border-emerald-500'
-                    : 'border-slate-200 focus:border-[#1565C0] focus:ring-2 focus:ring-[#1565C0]/20'
-                }`}
-              />
 
-              {patientLookup.loading && (
-                <div className="flex items-center gap-1.5 text-[11px] text-[#1565C0] mt-1.5 font-medium">
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                  <span>Verifying patient in database...</span>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                  <Search className="w-3.5 h-3.5 text-[#1565C0]" />
+                </div>
+
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  required
+                  value={patientSearchTerm || form.patient_id}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setPatientSearchTerm(val);
+                    setForm(prev => ({ ...prev, patient_id: val }));
+                    setIsSelectorOpen(true);
+                    if (!val) {
+                      setPatientLookup({ loading: false, patient: null, error: null });
+                      setAvailablePackages([]);
+                      setPrescribedTreatments([]);
+                      setSearchResults([]);
+                    }
+                  }}
+                  onFocus={() => {
+                    setIsSelectorOpen(true);
+                    loadPatients(patientSearchTerm);
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      setIsSelectorOpen(false);
+                      const val = patientSearchTerm || form.patient_id;
+                      if (val) verifyPatient(val);
+                    }
+                  }}
+                  onBlur={() => {
+                    const val = form.patient_id || patientSearchTerm;
+                    if (val && !patientLookup.patient && !isSelectorOpen) {
+                      verifyPatient(val);
+                    }
+                  }}
+                  placeholder="Search by ID (e.g. 4), REG No, or Name..."
+                  className={`w-full pl-9 pr-16 py-2 text-xs rounded-xl border bg-white outline-none transition font-medium ${
+                    patientLookup.error
+                      ? 'border-red-400 bg-red-50/20 focus:border-red-500'
+                      : patientLookup.patient
+                      ? 'border-emerald-400 bg-emerald-50/10 focus:border-emerald-500'
+                      : 'border-slate-200 focus:border-[#1565C0] focus:ring-2 focus:ring-[#1565C0]/20'
+                  }`}
+                />
+
+                <div className="absolute inset-y-0 right-0 pr-2.5 flex items-center gap-1">
+                  {patientLookup.loading || isSearchingPatients ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#1565C0]" />
+                  ) : (patientSearchTerm || form.patient_id) ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPatientSearchTerm('');
+                        setForm(prev => ({ ...prev, patient_id: '' }));
+                        setPatientLookup({ loading: false, patient: null, error: null });
+                        setAvailablePackages([]);
+                        setPrescribedTreatments([]);
+                        setSearchResults([]);
+                        setIsSelectorOpen(false);
+                        searchInputRef.current?.focus();
+                      }}
+                      className="p-1 hover:bg-slate-100 rounded-full text-slate-400 hover:text-red-500 transition cursor-pointer"
+                      title="Clear search"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!isSelectorOpen) {
+                        setIsSelectorOpen(true);
+                        loadPatients(patientSearchTerm);
+                        searchInputRef.current?.focus();
+                      } else {
+                        setIsSelectorOpen(false);
+                      }
+                    }}
+                    className="p-1 hover:bg-slate-100 rounded-full text-slate-400 transition cursor-pointer"
+                  >
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isSelectorOpen ? 'rotate-180 text-[#1565C0]' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Results Dropdown */}
+              {isSelectorOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1.5 bg-white rounded-xl border border-slate-200 shadow-2xl z-50 overflow-hidden flex flex-col max-h-60">
+                  <div className="overflow-y-auto flex-1 divide-y divide-slate-100">
+                    {isSearchingPatients ? (
+                      <div className="p-3 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#1565C0]" />
+                        <span>Searching database...</span>
+                      </div>
+                    ) : searchResults.length === 0 ? (
+                      <div className="p-3 text-center text-xs text-slate-400">
+                        {patientSearchTerm ? `No patients matching "${patientSearchTerm}"` : 'Type patient ID, name, or phone to search...'}
+                      </div>
+                    ) : (
+                      searchResults.map(pt => (
+                        <button
+                          key={pt.patient_id}
+                          type="button"
+                          onClick={() => handleSelectPatient(pt)}
+                          className="w-full text-left p-2.5 hover:bg-blue-50/70 transition flex items-center justify-between gap-2 text-xs cursor-pointer"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-slate-900 truncate flex items-center gap-1.5">
+                              <User className="w-3 h-3 text-[#1565C0] shrink-0" />
+                              <span>{pt.full_name || pt.patient_name}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono flex items-center gap-2 mt-0.5">
+                              <span>ID: #{pt.patient_id}</span>
+                              {pt.registration_id && <span>• {pt.registration_id}</span>}
+                              {pt.mobile_number && <span>• {pt.mobile_number}</span>}
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-bold text-[#1565C0] bg-blue-50 px-2 py-0.5 rounded-md shrink-0 border border-blue-200/60">
+                            Select
+                          </span>
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -819,7 +1035,7 @@ const PROBillingPageContent = () => {
               )}
 
               {patientLookup.error && (
-                <div className="mt-1.5 p-2 bg-red-50 rounded-lg border border-red-200 text-[11px] text-red-800 flex items-center gap-1.5">
+                <div className="mt-1.5 p-2 bg-red-50 rounded-lg border border-red-200 text-[11px] text-red-800 flex items-center gap-1.5 font-bold">
                   <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
                   <span>{patientLookup.error}</span>
                 </div>
