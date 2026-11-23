@@ -30,6 +30,7 @@ export const LoginPage = () => {
   const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
   const [isMustChangeOpen, setIsMustChangeOpen] = useState(false);
   const [pendingUser, setPendingUser] = useState(null);
+  const [isInputUnlocked, setIsInputUnlocked] = useState(false);
 
   const { login, user, token, updateUser } = useAuth();
   const { showToast } = useToast();
@@ -65,12 +66,14 @@ export const LoginPage = () => {
   useEffect(() => {
     // Security cleanup: purge any legacy stored passwords or credentials from browser storage on load
     try {
+      localStorage.removeItem('username');
       localStorage.removeItem('password');
       localStorage.removeItem('user_password');
       localStorage.removeItem('credentials');
       localStorage.removeItem('auth_password');
       localStorage.removeItem('remember_me');
       if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.removeItem('username');
         sessionStorage.removeItem('password');
         sessionStorage.removeItem('user_password');
         sessionStorage.removeItem('credentials');
@@ -79,6 +82,38 @@ export const LoginPage = () => {
     } catch (e) {
       // Ignore storage access errors in sandboxed/restricted environments
     }
+
+    // Force strictly empty input fields on initial load (anti-autofill guard)
+    setUsername('');
+    setPassword('');
+    setRememberMe(false);
+
+    const clearInputs = () => {
+      const uInput = document.getElementById('username');
+      const pInput = document.getElementById('password');
+      if (uInput && uInput.value) {
+        uInput.value = '';
+      }
+      if (pInput && pInput.value) {
+        pInput.value = '';
+      }
+      setUsername('');
+      setPassword('');
+    };
+
+    clearInputs();
+    const t1 = setTimeout(clearInputs, 50);
+    const t2 = setTimeout(clearInputs, 150);
+    const t3 = setTimeout(() => {
+      clearInputs();
+      setIsInputUnlocked(true);
+    }, 300);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+    };
   }, []);
 
   useEffect(() => {
@@ -369,7 +404,19 @@ export const LoginPage = () => {
             </div>
 
             {/* Login Form */}
-            <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <form
+              onSubmit={handleSubmit}
+              autoComplete="off"
+              data-lpignore="true"
+              data-form-type="other"
+              className="mt-6 space-y-4"
+            >
+              {/* Decoy fields to neutralize aggressive browser credential managers */}
+              <div style={{ display: 'none', opacity: 0, position: 'absolute', left: '-9999px' }} aria-hidden="true">
+                <input type="text" name="fake_username_guard" tabIndex="-1" autoComplete="off" />
+                <input type="password" name="fake_password_guard" tabIndex="-1" autoComplete="new-password" />
+              </div>
+
               <div>
                 <label
                   htmlFor="username"
@@ -386,7 +433,13 @@ export const LoginPage = () => {
                     name="username"
                     type="text"
                     required
-                    autoComplete="username"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    spellCheck="false"
+                    readOnly={!isInputUnlocked}
+                    onFocus={() => setIsInputUnlocked(true)}
                     value={username}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -422,7 +475,10 @@ export const LoginPage = () => {
                     name="password"
                     type={showPassword ? 'text' : 'password'}
                     required
-                    autoComplete="current-password"
+                    autoComplete="new-password"
+                    data-lpignore="true"
+                    readOnly={!isInputUnlocked}
+                    onFocus={() => setIsInputUnlocked(true)}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Enter password"

@@ -68,9 +68,9 @@ describe('Clinic ERP - Authentication Security & Credential Isolation Suite', ()
     assert.match(content, /placeholder=['"]Enter username or mobile['"]/, 'Username placeholder must be helpful guide text');
     assert.match(content, /placeholder=['"]Enter password['"]/, 'Password placeholder must be helpful guide text');
 
-    // Autocomplete standards
-    assert.match(content, /autoComplete=['"]username['"]/, 'Username input must specify autoComplete="username"');
-    assert.match(content, /autoComplete=['"]current-password['"]/, 'Password input must specify autoComplete="current-password"');
+    // Autocomplete standards to strictly prevent auto-fill / credential injection
+    assert.match(content, /autoComplete=['"]off['"]/, 'Username input must specify autoComplete="off" to prevent credential autofill');
+    assert.match(content, /autoComplete=['"]new-password['"]/, 'Password input must specify autoComplete="new-password" to prevent password manager autofill');
 
     // Form field accessibility & linkage
     assert.match(content, /id=['"]username['"]/, 'Username input must have id="username"');
