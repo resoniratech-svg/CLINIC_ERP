@@ -199,9 +199,12 @@ export const LoginPage = () => {
         {/* Top Branding Header */}
         <div className="relative z-10 flex justify-center">
           <img
-            src="/assets/we_care.png"
+            src="/assets/wecare_logo_cropped.png"
             alt="WeCare Homeopathy"
-            className="h-48 xl:h-56 2xl:h-64 w-auto object-contain drop-shadow-[0_0_35px_rgba(255,255,255,0.5)] drop-shadow-[0_14px_28px_rgba(0,0,0,0.5)] transition-all"
+            className="h-44 xl:h-52 2xl:h-60 w-auto object-contain transition-all"
+            style={{
+              filter: 'drop-shadow(0 0 25px rgba(255, 255, 255, 0.6)) drop-shadow(0 8px 18px rgba(0, 0, 0, 0.45))',
+            }}
           />
         </div>
 
@@ -360,11 +363,11 @@ export const LoginPage = () => {
         {/* Authentication Card Container */}
         <div className="relative z-10 w-full max-w-[415px] min-w-0 mx-auto">
           {/* Mobile Top Branding */}
-          <div className="lg:hidden text-center mb-5">
+          <div className="lg:hidden text-center mb-4">
             <img
-              src="/assets/wecare_logo.png"
+              src="/assets/wecare_logo_cropped.png"
               alt="WeCare Homeopathy"
-              className="h-14 w-auto object-contain mx-auto mb-2"
+              className="h-16 w-auto object-contain mx-auto mb-1.5 drop-shadow-xs"
             />
             <h1 className="text-base font-bold text-slate-800 tracking-tight">
               WeCare Homeopathy Clinic ERP
@@ -373,18 +376,18 @@ export const LoginPage = () => {
           </div>
 
           {/* Refined Authentication Card */}
-          <div className="bg-white rounded-[28px] border border-slate-100 shadow-[0_20px_50px_-10px_rgba(26,54,93,0.1),0_4px_12px_rgba(0,0,0,0.02)] p-7 sm:p-9 transition-all">
+          <div className="bg-white rounded-[28px] border border-slate-100 shadow-[0_20px_50px_-10px_rgba(26,54,93,0.1),0_4px_12px_rgba(0,0,0,0.02)] p-6 sm:p-8 pt-5 sm:pt-6 transition-all">
             {/* Header: Logo, Badge & Hierarchy */}
             <div className="flex flex-col items-center text-center">
-              <div className="hidden lg:block mb-3.5">
+              <div className="hidden lg:block mb-2">
                 <img
-                  src="/assets/wecare_logo.png"
+                  src="/assets/wecare_logo_cropped.png"
                   alt="WeCare Homeopathy"
-                  className="h-20 w-auto object-contain drop-shadow-2xs"
+                  className="h-24 sm:h-26 w-auto object-contain drop-shadow-xs"
                 />
               </div>
 
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold mb-3">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold mb-2.5">
                 <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
                 <span>Hospital ERP Portal</span>
               </div>
@@ -397,7 +400,7 @@ export const LoginPage = () => {
               </p>
 
               {/* Security Indicator */}
-              <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-medium mt-2.5">
+              <div className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-emerald-50 border border-emerald-200/80 text-emerald-700 text-xs font-medium mt-2">
                 <Lock className="w-3 h-3 text-emerald-600" />
                 <span>Secure clinic access</span>
               </div>
